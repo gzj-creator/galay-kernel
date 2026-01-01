@@ -3,6 +3,8 @@
 #ifdef USE_EPOLL
 
 #include "Awaitable.h"
+#include "galay-kernel/async/AioFile.h"
+#include "galay-kernel/common/Log.h"
 #include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -156,66 +158,44 @@ int EpollScheduler::addClose(int fd)
 
 int EpollScheduler::addFileRead(IOController* controller)
 {
-    FileReadAwaitable* awaitable = static_cast<FileReadAwaitable*>(controller->m_awaitable);
+    // AioCommitAwaitable 已经在 await_suspend 中提交了 AIO
+    // 这里只需要注册 eventfd 到 epoll 等待完成通知
+    galay::async::AioCommitAwaitable* awaitable =
+        static_cast<galay::async::AioCommitAwaitable*>(controller->m_awaitable);
 
-    // 准备 libaio 控制块
-    struct iocb cb;
-    struct iocb* cbs[1] = { &cb };
-
-    io_prep_pread(&cb, awaitable->m_handle.fd, awaitable->m_buffer,
-                  awaitable->m_length, awaitable->m_offset);
-    io_set_eventfd(&cb, awaitable->m_event_fd);
-    cb.data = controller;
-
-    // 提交 AIO 请求
-    int ret = io_submit(awaitable->m_aio_ctx, 1, cbs);
-    if (ret < 0) {
-        awaitable->m_result = std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(-ret)));
-        return OK;
-    }
+    LogDebug("[EpollScheduler::addFileRead] controller={}, event_fd={}", (void*)controller, awaitable->m_event_fd);
 
     // 将 eventfd 注册到 epoll
     struct epoll_event ev;
     ev.events = EPOLLIN | EPOLLET;
     ev.data.ptr = controller;
 
-    ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, awaitable->m_event_fd, &ev);
+    int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, awaitable->m_event_fd, &ev);
+    LogDebug("[EpollScheduler::addFileRead] epoll_ctl ADD returned: {}, errno={}", ret, errno);
     if (ret == -1 && errno == EEXIST) {
         ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, awaitable->m_event_fd, &ev);
+        LogDebug("[EpollScheduler::addFileRead] epoll_ctl MOD returned: {}", ret);
     }
-    return ret < 0 ? ret : 0;
+    return ret < 0 ? ret : OK;
 }
 
 int EpollScheduler::addFileWrite(IOController* controller)
 {
-    FileWriteAwaitable* awaitable = static_cast<FileWriteAwaitable*>(controller->m_awaitable);
+    // 与 addFileRead 相同，只注册 eventfd
+    galay::async::AioCommitAwaitable* awaitable =
+        static_cast<galay::async::AioCommitAwaitable*>(controller->m_awaitable);
 
-    // 准备 libaio 控制块
-    struct iocb cb;
-    struct iocb* cbs[1] = { &cb };
+    LogDebug("[EpollScheduler::addFileWrite] controller={}, event_fd={}", (void*)controller, awaitable->m_event_fd);
 
-    io_prep_pwrite(&cb, awaitable->m_handle.fd, const_cast<char*>(awaitable->m_buffer),
-                   awaitable->m_length, awaitable->m_offset);
-    io_set_eventfd(&cb, awaitable->m_event_fd);
-    cb.data = controller;
-
-    // 提交 AIO 请求
-    int ret = io_submit(awaitable->m_aio_ctx, 1, cbs);
-    if (ret < 0) {
-        awaitable->m_result = std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(-ret)));
-        return OK;
-    }
-
-    // 将 eventfd 注册到 epoll
     struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLET;
+    ev.events = EPOLLIN | EPOLLET;  // eventfd 是读事件
     ev.data.ptr = controller;
 
-    ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, awaitable->m_event_fd, &ev);
+    int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, awaitable->m_event_fd, &ev);
     if (ret == -1 && errno == EEXIST) {
         ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, awaitable->m_event_fd, &ev);
     }
-    return ret < 0 ? ret : 0;
+    return ret < 0 ? ret : OK;
 }
 
 int EpollScheduler::remove(int fd)
@@ -412,12 +392,18 @@ bool EpollScheduler::handleConnect(IOController* controller)
 
 void EpollScheduler::handleFileRead(IOController* controller)
 {
-    FileReadAwaitable* awaitable = static_cast<FileReadAwaitable*>(controller->m_awaitable);
+    LogDebug("[EpollScheduler::handleFileRead] controller={}, type={}", (void*)controller, (int)controller->m_type);
+
+    // 直接转换为 AioCommitAwaitable 指针
+    galay::async::AioCommitAwaitable* awaitable =
+        static_cast<galay::async::AioCommitAwaitable*>(controller->m_awaitable);
 
     // 读取 eventfd 获取完成的事件数量
     uint64_t finish_count = 0;
     int ret = read(awaitable->m_event_fd, &finish_count, sizeof(finish_count));
+    LogDebug("[EpollScheduler::handleFileRead] read eventfd returned: {}, finish_count={}", ret, finish_count);
     if (ret < 0) {
+        LogError("[EpollScheduler::handleFileRead] read eventfd failed: {}", strerror(errno));
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return;  // 尚未就绪，等待下次通知
         }
@@ -430,65 +416,29 @@ void EpollScheduler::handleFileRead(IOController* controller)
     // 批量收割 AIO 事件
     std::vector<struct io_event> aio_events(finish_count);
     int num = io_getevents(awaitable->m_aio_ctx, finish_count, finish_count, aio_events.data(), nullptr);
+    LogDebug("[EpollScheduler::handleFileRead] io_getevents returned: {}", num);
 
     if (num > 0) {
-        awaitable->m_finished_count += num;
-        // 处理最后一个事件的结果（单请求场景）
-        long res = aio_events[num - 1].res;
-        if (res > 0) {
-            Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
-            awaitable->m_result = std::move(bytes);
-        } else if (res == 0) {
-            awaitable->m_result = Bytes();
-        } else {
-            awaitable->m_result = std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(-res)));
+        // 收集所有结果
+        for (int i = 0; i < num; ++i) {
+            awaitable->m_results.push_back(aio_events[i].res);
+            LogDebug("[EpollScheduler::handleFileRead] aio result[{}]: {}", i, aio_events[i].res);
         }
     }
 
-    // 所有事件完成才唤醒协程
-    if (awaitable->m_finished_count >= awaitable->m_expect_count) {
+    // 检查是否所有事件都完成了
+    if (awaitable->m_results.size() >= awaitable->m_pending_count) {
         epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, awaitable->m_event_fd, nullptr);
+        awaitable->m_result = std::move(awaitable->m_results);
+        LogDebug("[EpollScheduler::handleFileRead] all {} events completed, waking up coroutine", awaitable->m_pending_count);
         awaitable->m_waker.wakeUp();
     }
 }
 
 void EpollScheduler::handleFileWrite(IOController* controller)
 {
-    FileWriteAwaitable* awaitable = static_cast<FileWriteAwaitable*>(controller->m_awaitable);
-
-    // 读取 eventfd 获取完成的事件数量
-    uint64_t finish_count = 0;
-    int ret = read(awaitable->m_event_fd, &finish_count, sizeof(finish_count));
-    if (ret < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return;  // 尚未就绪，等待下次通知
-        }
-        awaitable->m_result = std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(errno)));
-        epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, awaitable->m_event_fd, nullptr);
-        awaitable->m_waker.wakeUp();
-        return;
-    }
-
-    // 批量收割 AIO 事件
-    std::vector<struct io_event> aio_events(finish_count);
-    int num = io_getevents(awaitable->m_aio_ctx, finish_count, finish_count, aio_events.data(), nullptr);
-
-    if (num > 0) {
-        awaitable->m_finished_count += num;
-        // 处理最后一个事件的结果（单请求场景）
-        long res = aio_events[num - 1].res;
-        if (res >= 0) {
-            awaitable->m_result = static_cast<size_t>(res);
-        } else {
-            awaitable->m_result = std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(-res)));
-        }
-    }
-
-    // 所有事件完成才唤醒协程
-    if (awaitable->m_finished_count >= awaitable->m_expect_count) {
-        epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, awaitable->m_event_fd, nullptr);
-        awaitable->m_waker.wakeUp();
-    }
+    // 与 handleFileRead 相同的处理逻辑
+    handleFileRead(controller);
 }
 
 }

@@ -5,9 +5,16 @@
 #include <vector>
 #include <cstring>
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/KqueueScheduler.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/common/Log.h"
+
+#ifdef USE_KQUEUE
+#include "galay-kernel/kernel/KqueueScheduler.h"
+#elif defined(USE_IOURING)
+#include "galay-kernel/kernel/IOUringScheduler.h"
+#elif defined(USE_EPOLL)
+#include "galay-kernel/kernel/EpollScheduler.h"
+#endif
 
 using namespace galay::async;
 using namespace galay::kernel;
@@ -159,8 +166,20 @@ int main(int argc, char* argv[]) {
     std::cout << "Duration: " << config.duration << " seconds" << std::endl;
     std::cout << "========================" << std::endl;
 
-#ifdef USE_KQUEUE
+#if defined(USE_KQUEUE)
+    std::cout << "Using KqueueScheduler (macOS)" << std::endl;
     KqueueScheduler scheduler;
+#elif defined(USE_IOURING)
+    std::cout << "Using IOUringScheduler (Linux io_uring)" << std::endl;
+    IOUringScheduler scheduler;
+#elif defined(USE_EPOLL)
+    std::cout << "Using EpollScheduler (Linux epoll)" << std::endl;
+    EpollScheduler scheduler;
+#else
+    LogWarn("No supported IO backend available");
+    return 1;
+#endif
+
     scheduler.start();
 
     // 启动统计线程
@@ -188,9 +207,6 @@ int main(int argc, char* argv[]) {
     std::cout << "Total Data: " << (g_total_bytes.load() / 1024.0 / 1024.0) << " MB" << std::endl;
     std::cout << "Average QPS: " << (g_total_requests.load() / config.duration) << std::endl;
     std::cout << "Average Throughput: " << (g_total_bytes.load() / config.duration / 1024.0 / 1024.0) << " MB/s" << std::endl;
-#else
-    LogWarn("This benchmark requires kqueue (macOS)");
-#endif
 
     return 0;
 }

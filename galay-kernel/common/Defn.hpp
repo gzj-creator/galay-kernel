@@ -12,10 +12,13 @@
     #include <arpa/inet.h>
 
     // Choose I/O multiplexing mechanism based on kernel version
-    #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,5,0) && !defined(ENABLE_DEFAULT_USE_EPOLL)
-        #define USE_IOURING
-    #else
-        #define USE_EPOLL
+    // 如果 CMake 已经定义了 USE_EPOLL 或 USE_IOURING，则不再自动检测
+    #if !defined(USE_EPOLL) && !defined(USE_IOURING)
+        #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,5,0)
+            #define USE_IOURING
+        #else
+            #define USE_EPOLL
+        #endif
     #endif
 
     // Linux-specific handle structure

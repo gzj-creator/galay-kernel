@@ -30,6 +30,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # 设置安装目录为工作目录下的install
 set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR}/install)
 
+# 包含选项配置
+include(cmake/option.cmake)
+
 # 查找spdlog
 if(ENABLE_LOG)
     find_package(spdlog QUIET)
@@ -44,6 +47,9 @@ if(ENABLE_LOG)
     endif()
     add_compile_definitions(USE_LOG)
 endif()
+
+# 配置IO后端
+configure_io_backend()
 
 # 包含子目录
 add_subdirectory(galay-kernel)

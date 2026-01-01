@@ -1,7 +1,14 @@
 #include "Awaitable.h"
 #include "common/Defn.hpp"
 #include "kernel/Waker.h"
+
+#ifdef USE_EPOLL
+#include "EpollScheduler.h"
+#elif defined(USE_KQUEUE)
 #include "KqueueScheduler.h"
+#elif defined(USE_IOURING)
+#include "IOUringScheduler.h"
+#endif
 
 namespace galay::kernel
 {

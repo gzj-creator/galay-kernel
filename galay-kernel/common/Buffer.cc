@@ -1,4 +1,5 @@
 #include "Buffer.h"
+#include <stdexcept>
 
 namespace galay::kernel
 {

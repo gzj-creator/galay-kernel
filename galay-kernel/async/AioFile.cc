@@ -3,6 +3,7 @@
 #ifdef USE_EPOLL
 
 #include "galay-kernel/kernel/EpollScheduler.h"
+#include "galay-kernel/common/Log.h"
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/eventfd.h>
@@ -15,10 +16,14 @@ namespace galay::async
 
 // AioCommitAwaitable 实现
 
-AioCommitAwaitable::AioCommitAwaitable(EpollScheduler* scheduler, io_context_t aio_ctx, int event_fd, size_t pending_count)
+AioCommitAwaitable::AioCommitAwaitable(EpollScheduler* scheduler, IOController* controller,
+                                       io_context_t aio_ctx, int event_fd,
+                                       std::vector<struct iocb*>&& pending_ptrs, size_t pending_count)
     : m_scheduler(scheduler)
+    , m_controller(controller)
     , m_aio_ctx(aio_ctx)
     , m_event_fd(event_fd)
+    , m_pending_ptrs(std::move(pending_ptrs))
     , m_pending_count(pending_count)
 {
 }
@@ -28,18 +33,33 @@ bool AioCommitAwaitable::await_suspend(std::coroutine_handle<> handle)
     m_waker = Waker(handle);
 
     if (m_pending_count == 0) {
+        LogDebug("[AioCommit] pending_count=0, return immediately");
         m_result = std::vector<ssize_t>{};
         return false;
     }
 
-    // 将 eventfd 注册到 epoll
-    int ret = m_scheduler->addAioCommit(this);
+    LogDebug("[AioCommit] await_suspend: pending_count={}, aio_ctx={}, event_fd={}",
+             m_pending_count, (void*)m_aio_ctx, m_event_fd);
+
+    // 提交 AIO 请求
+    int ret = io_submit(m_aio_ctx, m_pending_count, m_pending_ptrs.data());
+    LogDebug("[AioCommit] io_submit returned: {}", ret);
     if (ret < 0) {
-        m_result = std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(-ret)));
+        LogError("[AioCommit] io_submit failed: {}", strerror(-ret));
+        m_result = std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(-ret)));
         return false;
     }
 
-    return true;  // 挂起，等待 epoll 事件
+    // 注册到 epoll 等待完成
+    m_controller->fillAwaitable(FILEREAD, this);
+    LogDebug("[AioCommit] calling addFileRead, controller={}", (void*)m_controller);
+    if (m_scheduler->addFileRead(m_controller) != OK) {
+        LogError("[AioCommit] addFileRead failed: {}", strerror(errno));
+        m_result = std::unexpected(IOError(kReadFailed, errno));
+        return false;
+    }
+    LogDebug("[AioCommit] addFileRead success, suspending coroutine");
+    return true;
 }
 
 std::expected<std::vector<ssize_t>, IOError> AioCommitAwaitable::await_resume()
@@ -174,22 +194,9 @@ AioCommitAwaitable AioFile::commit()
 
     size_t pending_count = m_pending_ptrs.size();
 
-    // 提交所有 AIO 请求
-    if (pending_count > 0) {
-        int ret = io_submit(m_aio_ctx, m_pending_ptrs.size(), m_pending_ptrs.data());
-        if (ret < 0) {
-            // 提交失败，清空并返回错误
-            clear();
-            AioCommitAwaitable awaitable(m_scheduler, m_aio_ctx, m_event_fd, 0);
-            awaitable.m_result = std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(-ret)));
-            return awaitable;
-        }
-    }
-
-    // 清空待提交列表
-    clear();
-
-    return AioCommitAwaitable(m_scheduler, m_aio_ctx, m_event_fd, pending_count);
+    // 移动 pending_ptrs 的所有权给 awaitable，避免生命周期问题
+    std::vector<struct iocb*> ptrs_copy = m_pending_ptrs;
+    return AioCommitAwaitable(m_scheduler, &m_controller, m_aio_ctx, m_event_fd, std::move(ptrs_copy), pending_count);
 }
 
 void AioFile::clear()

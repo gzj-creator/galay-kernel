@@ -118,7 +118,7 @@ int IOUringScheduler::addConnect(IOController* controller)
 
     io_uring_prep_connect(sqe, awaitable->m_handle.fd,
                           awaitable->m_host.sockAddr(),
-                          awaitable->m_host.addrLen());
+                          *awaitable->m_host.addrLen());
     io_uring_sqe_set_data(sqe, controller);
     io_uring_submit(&m_ring);
     return 0;

@@ -4,9 +4,16 @@
 #include <thread>
 #include <csignal>
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/KqueueScheduler.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/common/Log.h"
+
+#ifdef USE_KQUEUE
+#include "galay-kernel/kernel/KqueueScheduler.h"
+#elif defined(USE_IOURING)
+#include "galay-kernel/kernel/IOUringScheduler.h"
+#elif defined(USE_EPOLL)
+#include "galay-kernel/kernel/EpollScheduler.h"
+#endif
 
 using namespace galay::async;
 using namespace galay::kernel;
@@ -112,8 +119,20 @@ int main(int argc, char* argv[]) {
 
     LogInfo("Benchmark Server starting on port {}", port);
 
-#ifdef USE_KQUEUE
+#if defined(USE_KQUEUE)
+    LogInfo("Using KqueueScheduler (macOS)");
     KqueueScheduler scheduler;
+#elif defined(USE_IOURING)
+    LogInfo("Using IOUringScheduler (Linux io_uring)");
+    IOUringScheduler scheduler;
+#elif defined(USE_EPOLL)
+    LogInfo("Using EpollScheduler (Linux epoll)");
+    EpollScheduler scheduler;
+#else
+    LogWarn("No supported IO backend available");
+    return 1;
+#endif
+
     scheduler.start();
 
     TcpSocket listener(&scheduler);
@@ -164,9 +183,6 @@ int main(int argc, char* argv[]) {
 
     LogInfo("Server stopped. Total connections: {}, Total requests: {}",
             g_total_connections.load(), g_total_requests.load());
-#else
-    LogWarn("This benchmark requires kqueue (macOS)");
-#endif
 
     return 0;
 }

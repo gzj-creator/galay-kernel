@@ -25,6 +25,11 @@ if(ENABLE_LOG)
     target_link_libraries(galay-kernel PUBLIC spdlog::spdlog)
 endif()
 
+# 链接平台特定库
+if(PLATFORM_LIBS)
+    target_link_libraries(galay-kernel PUBLIC ${PLATFORM_LIBS})
+endif()
+
 # 设置库的编译选项
 target_compile_options(galay-kernel PRIVATE
     $<$<CXX_COMPILER_ID:GNU>:-Wall -Wextra -Wpedantic>
