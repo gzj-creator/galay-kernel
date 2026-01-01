@@ -204,6 +204,66 @@ int IOUringScheduler::addFileWrite(IOController* controller)
     return 0;
 }
 
+int IOUringScheduler::addRecvFrom(IOController* controller)
+{
+    RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    if (!sqe) {
+        return -EAGAIN;
+    }
+
+    // 使用 recvmsg 来接收 UDP 数据报和源地址
+    struct msghdr msg;
+    struct iovec iov;
+    sockaddr_storage addr;
+
+    std::memset(&msg, 0, sizeof(msg));
+    std::memset(&addr, 0, sizeof(addr));
+
+    iov.iov_base = awaitable->m_buffer;
+    iov.iov_len = awaitable->m_length;
+
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_name = &addr;
+    msg.msg_namelen = sizeof(addr);
+
+    io_uring_prep_recvmsg(sqe, awaitable->m_handle.fd, &msg, 0);
+    io_uring_sqe_set_data(sqe, controller);
+    io_uring_submit(&m_ring);
+    return 0;
+}
+
+int IOUringScheduler::addSendTo(IOController* controller)
+{
+    SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
+
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    if (!sqe) {
+        return -EAGAIN;
+    }
+
+    // 使用 sendmsg 来发送 UDP 数据报到指定地址
+    struct msghdr msg;
+    struct iovec iov;
+
+    std::memset(&msg, 0, sizeof(msg));
+
+    iov.iov_base = const_cast<char*>(awaitable->m_buffer);
+    iov.iov_len = awaitable->m_length;
+
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_name = const_cast<sockaddr*>(awaitable->m_to.sockAddr());
+    msg.msg_namelen = awaitable->m_to.addrLen();
+
+    io_uring_prep_sendmsg(sqe, awaitable->m_handle.fd, &msg, 0);
+    io_uring_sqe_set_data(sqe, controller);
+    io_uring_submit(&m_ring);
+    return 0;
+}
+
 int IOUringScheduler::remove(int fd)
 {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
@@ -339,6 +399,33 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
             awaitable->m_result = static_cast<size_t>(res);
         } else {
             awaitable->m_result = std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(-res)));
+        }
+        awaitable->m_waker.wakeUp();
+        break;
+    }
+    case RECVFROM:
+    {
+        RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+        if (res > 0) {
+            Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
+            awaitable->m_result = std::move(bytes);
+            // 注意：io_uring的recvmsg需要在awaitable中保存msghdr结构来获取源地址
+            // 这里需要从msghdr中提取地址信息
+        } else if (res == 0) {
+            awaitable->m_result = std::unexpected(IOError(kRecvFailed, 0));
+        } else {
+            awaitable->m_result = std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-res)));
+        }
+        awaitable->m_waker.wakeUp();
+        break;
+    }
+    case SENDTO:
+    {
+        SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
+        if (res >= 0) {
+            awaitable->m_result = static_cast<size_t>(res);
+        } else {
+            awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res)));
         }
         awaitable->m_waker.wakeUp();
         break;

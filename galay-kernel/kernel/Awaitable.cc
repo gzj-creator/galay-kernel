@@ -78,4 +78,22 @@ bool FileWriteAwaitable::await_suspend(std::coroutine_handle<> handle) {
     return true;
 }
 
+bool RecvFromAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_waker = Waker(handle);
+    m_controller->fillAwaitable(RECVFROM, this);
+    if(m_scheduler->addRecvFrom(m_controller) == OK) {
+        return false;
+    }
+    return true;
+}
+
+bool SendToAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_waker = Waker(handle);
+    m_controller->fillAwaitable(SENDTO, this);
+    if(m_scheduler->addSendTo(m_controller) == OK) {
+        return false;
+    }
+    return true;
+}
+
 }

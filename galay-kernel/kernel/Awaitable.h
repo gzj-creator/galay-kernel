@@ -281,6 +281,112 @@ struct CloseAwaitable {
 };
 
 /**
+ * @brief RecvFrom操作的可等待对象
+ *
+ * @details 用于异步接收UDP数据报。
+ * co_await后返回接收到的数据和发送方地址或错误。
+ *
+ * @note 由UdpSocket::recvfrom()创建
+ */
+struct RecvFromAwaitable {
+    /**
+     * @brief 构造函数
+     * @param scheduler IO调度器
+     * @param controller IO控制器
+     * @param handle socket句柄
+     * @param buffer 接收缓冲区
+     * @param length 缓冲区大小
+     * @param from 输出参数，接收发送方地址
+     */
+    RecvFromAwaitable(IOScheduler* scheduler, IOController* controller, GHandle handle, char* buffer, size_t length, Host* from)
+        : m_scheduler(scheduler), m_controller(controller), m_handle(handle), m_buffer(buffer), m_length(length), m_from(from) {}
+
+    /**
+     * @brief 检查是否可以立即返回
+     * @return 始终返回false
+     */
+    bool await_ready() { return false; }
+
+    /**
+     * @brief 挂起协程并注册IO事件
+     * @param handle 当前协程句柄
+     * @return true表示挂起，false表示立即完成
+     */
+    bool await_suspend(std::coroutine_handle<> handle);
+
+    /**
+     * @brief 恢复时获取结果
+     * @return 成功返回Bytes数据，失败返回IOError
+     */
+    std::expected<Bytes, IOError> await_resume() {
+        m_controller->removeAwaitable();
+        return std::move(m_result);
+    }
+
+    IOScheduler* m_scheduler;                  ///< IO调度器
+    IOController* m_controller;                ///< IO控制器
+    GHandle m_handle;                          ///< socket句柄
+    char* m_buffer;                            ///< 接收缓冲区
+    size_t m_length;                           ///< 缓冲区大小
+    Host* m_from;                              ///< 发送方地址输出
+    Waker m_waker;                             ///< 协程唤醒器
+    std::expected<Bytes, IOError> m_result;    ///< 操作结果
+};
+
+/**
+ * @brief SendTo操作的可等待对象
+ *
+ * @details 用于异步发送UDP数据报。
+ * co_await后返回实际发送的字节数或错误。
+ *
+ * @note 由UdpSocket::sendto()创建
+ */
+struct SendToAwaitable {
+    /**
+     * @brief 构造函数
+     * @param scheduler IO调度器
+     * @param controller IO控制器
+     * @param handle socket句柄
+     * @param buffer 发送数据
+     * @param length 数据长度
+     * @param to 目标地址
+     */
+    SendToAwaitable(IOScheduler* scheduler, IOController* controller, GHandle handle, const char* buffer, size_t length, const Host& to)
+        : m_scheduler(scheduler), m_controller(controller), m_handle(handle), m_buffer(buffer), m_length(length), m_to(to) {}
+
+    /**
+     * @brief 检查是否可以立即返回
+     * @return 始终返回false
+     */
+    bool await_ready() { return false; }
+
+    /**
+     * @brief 挂起协程并注册IO事件
+     * @param handle 当前协程句柄
+     * @return true表示挂起，false表示立即完成
+     */
+    bool await_suspend(std::coroutine_handle<> handle);
+
+    /**
+     * @brief 恢复时获取结果
+     * @return 成功返回发送字节数，失败返回IOError
+     */
+    std::expected<size_t, IOError> await_resume() {
+        m_controller->removeAwaitable();
+        return std::move(m_result);
+    }
+
+    IOScheduler* m_scheduler;                   ///< IO调度器
+    IOController* m_controller;                 ///< IO控制器
+    GHandle m_handle;                           ///< socket句柄
+    const char* m_buffer;                       ///< 发送数据
+    size_t m_length;                            ///< 数据长度
+    Host m_to;                                  ///< 目标地址
+    Waker m_waker;                              ///< 协程唤醒器
+    std::expected<size_t, IOError> m_result;    ///< 操作结果
+};
+
+/**
  * @brief 文件读取操作的可等待对象
  *
  * @details 用于异步读取文件数据。

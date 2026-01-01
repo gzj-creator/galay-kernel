@@ -73,6 +73,8 @@
         FILEREAD        = 6,
         FILEWRITE       = 7,
         FILEWATCH       = 8,
+        RECVFROM        = 9,
+        SENDTO          = 10,
     };
 
 #endif

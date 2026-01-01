@@ -179,6 +179,20 @@ public:
      * @return 1表示立即完成，0表示已注册等待，<0表示错误
      */
     virtual int addFileWrite(IOController* controller) = 0;
+
+    /**
+     * @brief 注册RecvFrom事件（UDP接收）
+     * @param controller IO控制器
+     * @return 1表示立即完成，0表示已注册等待，<0表示错误
+     */
+    virtual int addRecvFrom(IOController* controller) = 0;
+
+    /**
+     * @brief 注册SendTo事件（UDP发送）
+     * @param controller IO控制器
+     * @return 1表示立即完成，0表示已注册等待，<0表示错误
+     */
+    virtual int addSendTo(IOController* controller) = 0;
 };
 
 } // namespace galay::kernel

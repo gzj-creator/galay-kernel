@@ -58,6 +58,8 @@ public:
     int addClose(int fd) override;
     int addFileRead(IOController* event) override;
     int addFileWrite(IOController* event) override;
+    int addRecvFrom(IOController* event) override;
+    int addSendTo(IOController* event) override;
 
     // Remove events (only need fd)
     int remove(int fd);
@@ -92,6 +94,8 @@ private:
     bool handleSend(IOController* controller);
     bool handleFileRead(IOController* controller);
     bool handleFileWrite(IOController* controller);
+    bool handleRecvFrom(IOController* controller);
+    bool handleSendTo(IOController* controller);
 
     // Main event loop
     void eventLoop();

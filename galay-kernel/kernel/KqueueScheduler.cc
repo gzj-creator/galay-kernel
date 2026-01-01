@@ -302,6 +302,24 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         }
         break;
     }
+    case RECVFROM:
+    {
+        if (ev.filter == EVFILT_READ) {
+            handleRecvFrom(controller);
+            RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
+    case SENDTO:
+    {
+        if (ev.filter == EVFILT_WRITE) {
+            handleSendTo(controller);
+            SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
     default:
         break;
     }
@@ -423,6 +441,79 @@ bool KqueueScheduler::handleFileWrite(IOController* controller)
             return false;
         }
         awaitable->m_result = std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(errno)));
+        return true;
+    }
+}
+
+int KqueueScheduler::addRecvFrom(IOController* controller)
+{
+    if (handleRecvFrom(controller)) {
+        return OK;
+    }
+
+    RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+    struct kevent ev;
+    EV_SET(&ev, awaitable->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
+    return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
+}
+
+int KqueueScheduler::addSendTo(IOController* controller)
+{
+    if (handleSendTo(controller)) {
+        return OK;
+    }
+
+    SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
+    struct kevent ev;
+    EV_SET(&ev, awaitable->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
+    return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
+}
+
+bool KqueueScheduler::handleRecvFrom(IOController* controller)
+{
+    RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+    sockaddr_storage addr{};
+    socklen_t addr_len = sizeof(addr);
+
+    ssize_t recvBytes = recvfrom(awaitable->m_handle.fd, awaitable->m_buffer, awaitable->m_length,
+                                  0, reinterpret_cast<sockaddr*>(&addr), &addr_len);
+
+    if (recvBytes > 0) {
+        Bytes bytes = Bytes::fromCString(awaitable->m_buffer, recvBytes, recvBytes);
+        awaitable->m_result = std::move(bytes);
+        if (awaitable->m_from) {
+            *(awaitable->m_from) = Host::fromSockAddr(addr);
+        }
+        return true;
+    } else if (recvBytes == 0) {
+        // UDP socket不会返回0，这里保持一致性
+        awaitable->m_result = std::unexpected(IOError(kRecvFailed, 0));
+        return true;
+    } else {
+        if (static_cast<uint32_t>(errno) == EAGAIN || static_cast<uint32_t>(errno) == EWOULDBLOCK || static_cast<uint32_t>(errno) == EINTR) {
+            return false;
+        }
+        awaitable->m_result = std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno)));
+        return true;
+    }
+}
+
+bool KqueueScheduler::handleSendTo(IOController* controller)
+{
+    SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
+    const Host& to = awaitable->m_to;
+
+    ssize_t sentBytes = sendto(awaitable->m_handle.fd, awaitable->m_buffer, awaitable->m_length,
+                                0, to.sockAddr(), to.addrLen());
+
+    if (sentBytes >= 0) {
+        awaitable->m_result = static_cast<size_t>(sentBytes);
+        return true;
+    } else {
+        if (static_cast<uint32_t>(errno) == EAGAIN || static_cast<uint32_t>(errno) == EWOULDBLOCK || static_cast<uint32_t>(errno) == EINTR) {
+            return false;
+        }
+        awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
         return true;
     }
 }

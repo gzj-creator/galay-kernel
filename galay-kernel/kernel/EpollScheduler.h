@@ -60,6 +60,10 @@ public:
     int addFileRead(IOController* event) override;
     int addFileWrite(IOController* event) override;
 
+    // UDP IO
+    int addRecvFrom(IOController* event) override;
+    int addSendTo(IOController* event) override;
+
     int remove(int fd);
 
     void spawn(Coroutine coro) override;
@@ -86,6 +90,8 @@ private:
     bool handleSend(IOController* controller);
     void handleFileRead(IOController* controller);
     void handleFileWrite(IOController* controller);
+    bool handleRecvFrom(IOController* controller);
+    bool handleSendTo(IOController* controller);
 
     void eventLoop();
     void processPendingCoroutines();

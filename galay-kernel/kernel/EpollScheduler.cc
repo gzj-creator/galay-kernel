@@ -307,6 +307,24 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         }
         break;
     }
+    case RECVFROM:
+    {
+        if (ev.events & EPOLLIN) {
+            handleRecvFrom(controller);
+            RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
+    case SENDTO:
+    {
+        if (ev.events & EPOLLOUT) {
+            handleSendTo(controller);
+            SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
     default:
         break;
     }
@@ -439,6 +457,91 @@ void EpollScheduler::handleFileWrite(IOController* controller)
 {
     // 与 handleFileRead 相同的处理逻辑
     handleFileRead(controller);
+}
+
+int EpollScheduler::addRecvFrom(IOController* controller)
+{
+    if (handleRecvFrom(controller)) {
+        return OK;
+    }
+
+    RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.ptr = controller;
+
+    int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, awaitable->m_handle.fd, &ev);
+    if (ret == -1 && errno == ENOENT) {
+        ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, awaitable->m_handle.fd, &ev);
+    }
+    return ret;
+}
+
+int EpollScheduler::addSendTo(IOController* controller)
+{
+    if (handleSendTo(controller)) {
+        return OK;
+    }
+
+    SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
+    struct epoll_event ev;
+    ev.events = EPOLLOUT | EPOLLET;
+    ev.data.ptr = controller;
+
+    int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, awaitable->m_handle.fd, &ev);
+    if (ret == -1 && errno == ENOENT) {
+        ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, awaitable->m_handle.fd, &ev);
+    }
+    return ret;
+}
+
+bool EpollScheduler::handleRecvFrom(IOController* controller)
+{
+    RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+    sockaddr_storage addr{};
+    socklen_t addr_len = sizeof(addr);
+
+    ssize_t recvBytes = recvfrom(awaitable->m_handle.fd, awaitable->m_buffer, awaitable->m_length,
+                                  0, reinterpret_cast<sockaddr*>(&addr), &addr_len);
+
+    if (recvBytes > 0) {
+        Bytes bytes = Bytes::fromCString(awaitable->m_buffer, recvBytes, recvBytes);
+        awaitable->m_result = std::move(bytes);
+        if (awaitable->m_from) {
+            *(awaitable->m_from) = Host::fromSockAddr(addr);
+        }
+        return true;
+    } else if (recvBytes == 0) {
+        // UDP socket不会返回0，这里保持一致性
+        awaitable->m_result = std::unexpected(IOError(kRecvFailed, 0));
+        return true;
+    } else {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return false;
+        }
+        awaitable->m_result = std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno)));
+        return true;
+    }
+}
+
+bool EpollScheduler::handleSendTo(IOController* controller)
+{
+    SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
+    const Host& to = awaitable->m_to;
+
+    ssize_t sentBytes = sendto(awaitable->m_handle.fd, awaitable->m_buffer, awaitable->m_length,
+                                0, to.sockAddr(), to.addrLen());
+
+    if (sentBytes >= 0) {
+        awaitable->m_result = static_cast<size_t>(sentBytes);
+        return true;
+    } else {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return false;
+        }
+        awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
+        return true;
+    }
 }
 
 }
