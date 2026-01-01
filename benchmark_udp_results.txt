@@ -1,0 +1,29 @@
+[2026-01-01 15:50:15.449] [info] [benchmark_udp_socket.cc:227] UDP Socket Benchmark Test
+[2026-01-01 15:50:15.449] [info] [benchmark_udp_socket.cc:228] Configuration: 100 clients, 100 messages/client, 1024 bytes/message
+[2026-01-01 15:50:15.449] [info] [benchmark_udp_socket.cc:235] Using EpollScheduler (Linux)
+[2026-01-01 15:50:15.449] [info] [benchmark_udp_socket.cc:246] Scheduler started
+[2026-01-01 15:50:15.449] [info] [benchmark_udp_socket.cc:252] Server started
+[2026-01-01 15:50:15.449] [info] [benchmark_udp_socket.cc:40] UDP Benchmark Server starting...
+[2026-01-01 15:50:15.449] [info] [benchmark_udp_socket.cc:64] UDP Benchmark Server listening on 127.0.0.1:9090
+[2026-01-01 15:50:15.649] [info] [benchmark_udp_socket.cc:261] Starting 100 clients...
+[2026-01-01 15:50:15.650] [info] [benchmark_udp_socket.cc:267] Benchmark running for 10 seconds...
+[2026-01-01 15:50:26.151] [info] [benchmark_udp_socket.cc:275] Scheduler stopped
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:202] 
+========== UDP Benchmark Results ==========
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:203] Test Duration: 10.70 seconds
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:204] Concurrent Clients: 100
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:205] Messages per Client: 100
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:206] Message Size: 1024 bytes
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:207] 
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:208] Total Packets Sent: 20000
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:209] Total Packets Received: 20000
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:210] Packet Loss Rate: 0.00%
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:212] 
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:213] Total Data Sent: 19.53 MB
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:214] Total Data Received: 19.53 MB
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:215] 
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:216] Average Throughput:
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:217]   Sent: 1868.81 pkt/s (1.83 MB/s)
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:220]   Received: 1868.81 pkt/s (1.83 MB/s)
+[2026-01-01 15:50:26.152] [info] [benchmark_udp_socket.cc:223] ==========================================
+

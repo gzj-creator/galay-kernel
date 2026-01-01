@@ -5,7 +5,17 @@ add_executable(test_tcp_socket test_tcp_socket.cc)
 target_link_libraries(test_tcp_socket PRIVATE galay-kernel)
 target_include_directories(test_tcp_socket PRIVATE ${CMAKE_SOURCE_DIR})
 
+# UdpSocket测试
+add_executable(test_udp_socket test_udp_socket.cc)
+target_link_libraries(test_udp_socket PRIVATE galay-kernel)
+target_include_directories(test_udp_socket PRIVATE ${CMAKE_SOURCE_DIR})
+
 # File IO测试
 add_executable(test_file_io test_file_io.cc)
 target_link_libraries(test_file_io PRIVATE galay-kernel)
 target_include_directories(test_file_io PRIVATE ${CMAKE_SOURCE_DIR})
+
+# UdpSocket性能压测
+add_executable(benchmark_udp_socket benchmark_udp_socket.cc)
+target_link_libraries(benchmark_udp_socket PRIVATE galay-kernel)
+target_include_directories(benchmark_udp_socket PRIVATE ${CMAKE_SOURCE_DIR})
