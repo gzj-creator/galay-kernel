@@ -184,9 +184,15 @@ void KqueueScheduler::spawn(Coroutine coro)
 
 void KqueueScheduler::processPendingCoroutines()
 {
-    size_t count = m_coro_queue.try_dequeue_bulk(m_coro_buffer.data(), m_batch_size);
-    for (size_t i = 0; i < count; ++i) {
-       Scheduler::resume( m_coro_buffer[i]);
+    // 循环处理直到队列为空，因为resume可能会spawn新协程
+    while (true) {
+        size_t count = m_coro_queue.try_dequeue_bulk(m_coro_buffer.data(), m_batch_size);
+        if (count == 0) {
+            break;
+        }
+        for (size_t i = 0; i < count; ++i) {
+           Scheduler::resume( m_coro_buffer[i]);
+        }
     }
 }
 
