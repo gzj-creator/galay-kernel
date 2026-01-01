@@ -1,0 +1,17 @@
+@PACKAGE_INIT@
+
+set(GALAY_KERNEL_VERSION "@PROJECT_VERSION@")
+
+# 设置包含目录
+set_and_check(GALAY_KERNEL_INCLUDE_DIR "@PACKAGE_CMAKE_INSTALL_PREFIX@/include/galay-kernel")
+
+# 提供导入的目标
+include("${CMAKE_CURRENT_LIST_DIR}/galay-kernel-targets.cmake")
+
+# 设置别名以便于使用
+if(NOT TARGET galay-kernel::galay-kernel)
+    add_library(galay-kernel::galay-kernel ALIAS galay-kernel)
+endif()
+
+# 检查组件
+check_required_components(galay-kernel)

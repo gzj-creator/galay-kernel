@@ -1,0 +1,14 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+# 导出galay-kernel库，使其可以被其他仓库引用
+exports_files([
+    "galay-kernel/BUILD",
+])
+
+# 可以在这里定义一些聚合目标
+# 例如，构建所有库
+alias(
+    name = "all",
+    actual = "//galay-kernel:galay-kernel",
+    visibility = ["//visibility:public"],
+)

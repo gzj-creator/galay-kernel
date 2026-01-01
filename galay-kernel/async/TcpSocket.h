@@ -1,0 +1,306 @@
+/**
+ * @file TcpSocket.h
+ * @brief 异步TCP Socket封装
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 提供基于协程的异步TCP Socket操作，包括：
+ * - 服务端：create -> bind -> listen -> accept
+ * - 客户端：create -> connect -> send/recv
+ *
+ * @example
+ * @code
+ * // 服务端示例
+ * Coroutine server(IOScheduler* scheduler) {
+ *     TcpSocket listener(scheduler);
+ *     listener.create(IPType::IPV4);
+ *     listener.option().handleReuseAddr();
+ *     listener.option().handleNonBlock();
+ *     listener.bind(Host(IPType::IPV4, "0.0.0.0", 8080));
+ *     listener.listen(1024);
+ *
+ *     while (true) {
+ *         Host clientHost;
+ *         auto result = co_await listener.accept(&clientHost);
+ *         if (result) {
+ *             // 处理新连接
+ *         }
+ *     }
+ * }
+ *
+ * // 客户端示例
+ * Coroutine client(IOScheduler* scheduler) {
+ *     TcpSocket socket(scheduler);
+ *     socket.create(IPType::IPV4);
+ *     socket.option().handleNonBlock();
+ *
+ *     co_await socket.connect(Host(IPType::IPV4, "127.0.0.1", 8080));
+ *     co_await socket.send("Hello", 5);
+ *
+ *     char buffer[1024];
+ *     auto result = co_await socket.recv(buffer, sizeof(buffer));
+ *
+ *     co_await socket.close();
+ * }
+ * @endcode
+ */
+
+#ifndef GALAY_KERNEL_ASYNC_TCP_SOCKET_H
+#define GALAY_KERNEL_ASYNC_TCP_SOCKET_H
+
+#include "galay-kernel/common/Defn.hpp"
+#include "galay-kernel/common/Error.h"
+#include "galay-kernel/common/Bytes.h"
+#include "galay-kernel/common/Host.hpp"
+#include "galay-kernel/common/HandleOption.h"
+#include "galay-kernel/kernel/Scheduler.h"
+#include "galay-kernel/kernel/Awaitable.h"
+#include <expected>
+
+namespace galay::async
+{
+
+using namespace galay::kernel;
+
+/**
+ * @brief 异步TCP Socket类
+ *
+ * @details 封装底层socket操作，提供协程友好的异步IO接口。
+ * 内部包含：
+ * - GHandle: 底层socket句柄
+ * - IOScheduler*: IO调度器指针
+ * - IOController: IO事件控制器
+ *
+ * @note
+ * - 不可拷贝，仅支持移动语义
+ * - 析构时不会自动关闭socket，需显式调用close()
+ * - 所有异步操作需要在协程中使用co_await
+ *
+ * @see IOScheduler, HandleOption, Host
+ */
+class TcpSocket
+{
+public:
+    /**
+     * @brief 构造函数，创建未初始化的Socket
+     * @param scheduler IO调度器指针，不能为nullptr
+     * @note 构造后需调用create()创建底层socket
+     */
+    explicit TcpSocket(IOScheduler* scheduler);
+
+    /**
+     * @brief 从已有句柄构造Socket
+     * @param scheduler IO调度器指针，不能为nullptr
+     * @param handle 已有的socket句柄（如accept返回的句柄）
+     * @note 用于包装已存在的socket，如服务端accept得到的客户端连接
+     */
+    TcpSocket(IOScheduler* scheduler, GHandle handle);
+
+    /**
+     * @brief 析构函数
+     * @note 不会自动关闭socket，需显式调用close()
+     */
+    ~TcpSocket();
+
+    /// @brief 禁用拷贝构造
+    TcpSocket(const TcpSocket&) = delete;
+    /// @brief 禁用拷贝赋值
+    TcpSocket& operator=(const TcpSocket&) = delete;
+
+    /**
+     * @brief 移动构造函数
+     * @param other 被移动的对象，移动后other变为无效状态
+     */
+    TcpSocket(TcpSocket&& other) noexcept;
+
+    /**
+     * @brief 移动赋值运算符
+     * @param other 被移动的对象
+     * @return 当前对象的引用
+     */
+    TcpSocket& operator=(TcpSocket&& other) noexcept;
+
+    /**
+     * @brief 获取底层socket句柄
+     * @return GHandle 底层句柄，可用于底层操作
+     */
+    GHandle handle() const { return m_handle; }
+
+    /**
+     * @brief 获取IO控制器指针
+     * @return IOController* 内部IO控制器，用于高级操作
+     */
+    IOController* controller() { return &m_controller; }
+
+    /**
+     * @brief 检查socket是否有效
+     * @return true 如果socket已创建且未关闭
+     * @return false 如果socket未创建或已关闭
+     */
+    bool isValid() const { return m_handle.fd >= 0; }
+
+    /**
+     * @brief 创建底层socket
+     *
+     * @param type IP协议类型，默认IPv4
+     * @return std::expected<void, IOError> 成功返回void，失败返回IOError
+     *
+     * @note 必须在bind/connect之前调用
+     *
+     * @code
+     * TcpSocket socket(scheduler);
+     * auto result = socket.create(IPType::IPV4);
+     * if (!result) {
+     *     // 处理错误
+     * }
+     * @endcode
+     */
+    std::expected<void, IOError> create(IPType type = IPType::IPV4);
+
+    /**
+     * @brief 绑定本地地址
+     *
+     * @param host 要绑定的地址（IP和端口）
+     * @return std::expected<void, IOError> 成功返回void，失败返回IOError
+     *
+     * @note 服务端必须调用，客户端通常不需要
+     *
+     * @code
+     * socket.bind(Host(IPType::IPV4, "0.0.0.0", 8080));
+     * @endcode
+     */
+    std::expected<void, IOError> bind(const Host& host);
+
+    /**
+     * @brief 开始监听连接
+     *
+     * @param backlog 等待连接队列的最大长度，默认128
+     * @return std::expected<void, IOError> 成功返回void，失败返回IOError
+     *
+     * @note 仅服务端需要，必须在bind之后调用
+     */
+    std::expected<void, IOError> listen(int backlog = 128);
+
+    /**
+     * @brief 获取句柄选项配置器
+     *
+     * @return HandleOption 选项配置器对象
+     *
+     * @code
+     * socket.option().handleReuseAddr();  // 设置地址重用
+     * socket.option().handleNonBlock();   // 设置非阻塞
+     * @endcode
+     */
+    HandleOption option() { return HandleOption(m_handle); }
+
+    /**
+     * @brief 异步接受新连接
+     *
+     * @param clientHost 输出参数，接收客户端地址信息，可为nullptr
+     * @return AcceptAwaitable 可等待对象，co_await后返回新连接的句柄
+     *
+     * @note
+     * - 仅服务端使用
+     * - 必须在listen之后调用
+     * - 返回的GHandle需要用新的TcpSocket包装
+     *
+     * @code
+     * Host clientHost;
+     * auto result = co_await listener.accept(&clientHost);
+     * if (result) {
+     *     TcpSocket client(scheduler, result.value());
+     *     // 处理客户端连接
+     * }
+     * @endcode
+     */
+    AcceptAwaitable accept(Host* clientHost);
+
+    /**
+     * @brief 异步连接到服务器
+     *
+     * @param host 目标服务器地址
+     * @return ConnectAwaitable 可等待对象，co_await后返回连接结果
+     *
+     * @note
+     * - 仅客户端使用
+     * - 必须在create之后调用
+     * - 建议先设置非阻塞模式
+     *
+     * @code
+     * auto result = co_await socket.connect(Host(IPType::IPV4, "127.0.0.1", 8080));
+     * if (!result) {
+     *     // 连接失败
+     * }
+     * @endcode
+     */
+    ConnectAwaitable connect(const Host& host);
+
+    /**
+     * @brief 异步接收数据
+     *
+     * @param buffer 接收缓冲区指针
+     * @param length 缓冲区大小
+     * @return RecvAwaitable 可等待对象，co_await后返回接收到的Bytes
+     *
+     * @note
+     * - 返回的Bytes大小为0表示对端关闭连接
+     * - 缓冲区生命周期必须持续到co_await完成
+     *
+     * @code
+     * char buffer[1024];
+     * auto result = co_await socket.recv(buffer, sizeof(buffer));
+     * if (result) {
+     *     auto& bytes = result.value();
+     *     if (bytes.size() == 0) {
+     *         // 对端关闭
+     *     } else {
+     *         // 处理数据
+     *     }
+     * }
+     * @endcode
+     */
+    RecvAwaitable recv(char* buffer, size_t length);
+
+    /**
+     * @brief 异步发送数据
+     *
+     * @param buffer 发送数据指针
+     * @param length 数据长度
+     * @return SendAwaitable 可等待对象，co_await后返回实际发送的字节数
+     *
+     * @note
+     * - 返回值可能小于length，表示部分发送
+     * - 缓冲区生命周期必须持续到co_await完成
+     *
+     * @code
+     * const char* msg = "Hello";
+     * auto result = co_await socket.send(msg, strlen(msg));
+     * if (result) {
+     *     size_t sent = result.value();
+     * }
+     * @endcode
+     */
+    SendAwaitable send(const char* buffer, size_t length);
+
+    /**
+     * @brief 异步关闭socket
+     *
+     * @return CloseAwaitable 可等待对象，co_await后返回关闭结果
+     *
+     * @note 关闭后socket变为无效状态，不可再使用
+     *
+     * @code
+     * co_await socket.close();
+     * @endcode
+     */
+    CloseAwaitable close();
+
+private:
+    GHandle m_handle;           ///< 底层socket句柄
+    IOScheduler* m_scheduler;   ///< IO调度器指针
+    IOController m_controller;  ///< IO事件控制器
+};
+
+} // namespace galay::async
+
+#endif // GALAY_KERNEL_ASYNC_TCP_SOCKET_H
