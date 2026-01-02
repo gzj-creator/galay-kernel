@@ -61,6 +61,7 @@ public:
     int addSendTo(IOController* event) override;
     int addFileWatch(IOController* event) override;
     int addTimer(int timer_fd, struct TimerController* timer_ctrl) override;
+    int addSleep(IOController* controller) override;
 
     int remove(int fd);
 

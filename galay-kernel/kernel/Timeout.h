@@ -108,14 +108,16 @@ public:
             return -1;
         }
 
-        struct itimerspec its;
-        memset(&its, 0, sizeof(its));
+        struct itimerspec its{};
 
-        auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(timeout).count();
-        if (ns < 1) ns = 1;
-
-        its.it_value.tv_sec = ns / 1000000000;
-        its.it_value.tv_nsec = ns % 1000000000;
+        // 直接分别转换，避免大数除法
+        auto secs = std::chrono::duration_cast<std::chrono::seconds>(timeout);
+        auto nsecs = std::chrono::duration_cast<std::chrono::nanoseconds>(timeout - secs);
+        its.it_value.tv_sec = secs.count();
+        its.it_value.tv_nsec = nsecs.count();
+        if (its.it_value.tv_sec == 0 && its.it_value.tv_nsec < 1) {
+            its.it_value.tv_nsec = 1;
+        }
 
         if (timerfd_settime(m_fd, 0, &its, nullptr) < 0) {
             close(m_fd);
@@ -164,12 +166,14 @@ struct TimeoutSupport {
 
 /**
  * @brief 超时包装器
+ *
+ * @details 对于 io_uring，使用独立的 timeout 操作；对于 epoll/kqueue，使用 timerfd。
+ * 定时器状态存储在 IOController 中，生命周期与 TcpSocket 绑定。
  */
 template<typename Awaitable>
 struct WithTimeout {
     Awaitable m_inner;
     std::chrono::milliseconds m_timeout;
-    Timer m_timer;
 
     WithTimeout(Awaitable&& inner, std::chrono::milliseconds timeout)
         : m_inner(std::move(inner)), m_timeout(timeout) {}
@@ -185,32 +189,83 @@ struct WithTimeout {
             return false;
         }
 
-        // 启动定时器
-        if (m_timer.start(m_timeout, m_inner.m_controller,
-                          &m_inner.m_waker, m_inner.m_controller->m_generation) < 0) {
+        // 设置超时时间到 IOController
+        auto* controller = m_inner.m_controller;
+        controller->m_timer_cancelled = false;
+
+#ifdef USE_IOURING
+        // io_uring: 使用独立的 timeout 操作
+        auto secs = std::chrono::duration_cast<std::chrono::seconds>(m_timeout);
+        auto nsecs = std::chrono::duration_cast<std::chrono::nanoseconds>(m_timeout - secs);
+        controller->m_timeout_ts.tv_sec = secs.count();
+        controller->m_timeout_ts.tv_nsec = nsecs.count();
+        if (controller->m_timeout_ts.tv_sec == 0 && controller->m_timeout_ts.tv_nsec < 1) {
+            controller->m_timeout_ts.tv_nsec = 1;
+        }
+        // 注册独立超时（使用特殊标记 3 表示 IO 超时）
+        m_inner.m_scheduler->addTimer(-1, reinterpret_cast<TimerController*>(controller));
+#else
+        // epoll/kqueue: 创建 timerfd 并存储在 IOController 中
+        controller->m_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+        if (controller->m_timer_fd < 0) {
             // 定时器创建失败，继续等待 IO（不超时）
             return true;
         }
 
-        // 将定时器注册到调度器
-        m_inner.m_scheduler->addTimer(m_timer.fd(), m_timer.timerController());
+        struct itimerspec its{};
+        auto secs = std::chrono::duration_cast<std::chrono::seconds>(m_timeout);
+        auto nsecs = std::chrono::duration_cast<std::chrono::nanoseconds>(m_timeout - secs);
+        its.it_value.tv_sec = secs.count();
+        its.it_value.tv_nsec = nsecs.count();
+        if (its.it_value.tv_sec == 0 && its.it_value.tv_nsec < 1) {
+            its.it_value.tv_nsec = 1;
+        }
+
+        if (timerfd_settime(controller->m_timer_fd, 0, &its, nullptr) < 0) {
+            close(controller->m_timer_fd);
+            controller->m_timer_fd = -1;
+            return true;
+        }
+
+        // 创建 TimerController 用于注册（存储在 WithTimeout 中，生命周期足够）
+        m_timer_ctrl.m_io_controller = controller;
+        m_timer_ctrl.m_waker = &m_inner.m_waker;
+        m_timer_ctrl.m_generation = controller->m_generation;
+        m_timer_ctrl.m_cancelled = false;
+
+        m_inner.m_scheduler->addTimer(controller->m_timer_fd, &m_timer_ctrl);
+#endif
         return true;
     }
 
     auto await_resume() -> decltype(m_inner.await_resume()) {
         using ResultType = decltype(m_inner.await_resume());
 
-        // 取消定时器
-        m_timer.cancel();
+        auto* controller = m_inner.m_controller;
+
+        // 标记定时器已取消
+        controller->m_timer_cancelled = true;
+#ifndef USE_IOURING
+        m_timer_ctrl.m_cancelled = true;
+        // 关闭 timerfd
+        if (controller->m_timer_fd >= 0) {
+            close(controller->m_timer_fd);
+            controller->m_timer_fd = -1;
+        }
+#endif
 
         // 检查是否超时
-        if (m_inner.m_controller->isTimedOut()) {
-            m_inner.m_controller->removeAwaitable();
+        if (controller->isTimedOut()) [[unlikely]] {
+            controller->removeAwaitable();
             return ResultType(std::unexpected(IOError(kTimeout, 0)));
         }
 
         return m_inner.await_resume();
     }
+
+#ifndef USE_IOURING
+    TimerController m_timer_ctrl;
+#endif
 };
 
 /**
@@ -231,28 +286,42 @@ public:
 
     bool await_suspend(std::coroutine_handle<> handle) {
         m_waker = Waker(handle);
+        m_controller.fillAwaitable(IOEventType::SLEEP, this);
 
-        // 启动定时器
+#ifdef USE_IOURING
+        // io_uring: 使用原生 timeout，无需 timerfd
+        auto secs = std::chrono::duration_cast<std::chrono::seconds>(m_duration);
+        auto nsecs = std::chrono::duration_cast<std::chrono::nanoseconds>(m_duration - secs);
+        m_controller.m_timeout_ts.tv_sec = secs.count();
+        m_controller.m_timeout_ts.tv_nsec = nsecs.count();
+        if (m_controller.m_timeout_ts.tv_sec == 0 && m_controller.m_timeout_ts.tv_nsec < 1) {
+            m_controller.m_timeout_ts.tv_nsec = 1;
+        }
+        return m_scheduler->addSleep(&m_controller) == 0;
+#else
+        // epoll/kqueue: 使用 timerfd
         if (m_timer.start(m_duration, &m_controller, &m_waker, m_controller.m_generation) < 0) {
-            // 定时器创建失败，立即返回
             return false;
         }
-
-        // 将定时器注册到调度器
         m_scheduler->addTimer(m_timer.fd(), m_timer.timerController());
         return true;
+#endif
     }
 
     void await_resume() {
         // Sleep 完成，无返回值
     }
 
+    // 供调度器访问
+    Waker m_waker;
+
 private:
     IOScheduler* m_scheduler;
     std::chrono::milliseconds m_duration;
-    Timer m_timer;
     IOController m_controller;
-    Waker m_waker;
+#ifndef USE_IOURING
+    Timer m_timer;
+#endif
 };
 
 /**

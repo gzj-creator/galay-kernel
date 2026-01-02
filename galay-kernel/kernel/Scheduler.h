@@ -17,6 +17,11 @@
 #define GALAY_KERNEL_SCHEDULER_H
 
 #include "galay-kernel/common/Defn.hpp"
+#include <chrono>
+
+#ifdef USE_IOURING
+#include <linux/time_types.h>
+#endif
 
 /**
  * @def GALAY_SCHEDULER_MAX_EVENTS
@@ -165,6 +170,13 @@ struct IOController {
     void* m_awaitable = nullptr;                ///< 关联的Awaitable对象
     uint64_t m_generation = 0;                  ///< 操作代数，每次注册递增
     State m_state = State::Pending;             ///< 操作状态
+
+    // 超时相关字段
+    int m_timer_fd = -1;                        ///< timerfd（epoll/kqueue 使用）
+    bool m_timer_cancelled = false;             ///< 定时器是否已取消
+#ifdef USE_IOURING
+    struct __kernel_timespec m_timeout_ts{};    ///< 超时时间（io_uring 使用）
+#endif
 };
 
 /**
@@ -260,6 +272,13 @@ public:
      * @return 0表示成功，<0表示错误
      */
     virtual int addTimer(int timer_fd, struct TimerController* timer_ctrl) = 0;
+
+    /**
+     * @brief 注册休眠事件（io_uring 原生超时）
+     * @param controller IO控制器（m_timeout_ts 需要已设置）
+     * @return 0表示成功，<0表示错误
+     */
+    virtual int addSleep(IOController* controller) = 0;
 };
 
 // 前置声明

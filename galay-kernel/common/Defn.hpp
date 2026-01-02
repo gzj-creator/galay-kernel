@@ -75,6 +75,7 @@
         FILEWATCH       = 8,
         RECVFROM        = 9,
         SENDTO          = 10,
+        SLEEP           = 11,
     };
 
 #endif

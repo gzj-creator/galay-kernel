@@ -254,7 +254,7 @@ void EpollScheduler::eventLoop()
 
             // 检查是否是定时器事件（最低位为1）
             uintptr_t ptr_val = reinterpret_cast<uintptr_t>(ev.data.ptr);
-            if (ptr_val & 1) {
+            if (ptr_val & 1) [[unlikely]] {
                 // 定时器事件
                 TimerController* timer_ctrl = reinterpret_cast<TimerController*>(ptr_val & ~1UL);
                 if (timer_ctrl && !timer_ctrl->m_cancelled) {
@@ -647,6 +647,14 @@ int EpollScheduler::addTimer(int timer_fd, TimerController* timer_ctrl)
         ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, timer_fd, &ev);
     }
     return ret;
+}
+
+int EpollScheduler::addSleep(IOController* controller)
+{
+    // epoll 不支持原生超时，SleepAwaitable 应该使用 timerfd + addTimer
+    // 这个方法不应该被调用
+    (void)controller;
+    return -ENOTSUP;
 }
 
 }

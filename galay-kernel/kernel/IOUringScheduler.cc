@@ -287,10 +287,34 @@ int IOUringScheduler::addTimer(int timer_fd, TimerController* timer_ctrl)
         return -EAGAIN;
     }
 
-    // 读取 timerfd，当定时器触发时会返回
-    // 使用特殊标记区分定时器事件：将指针的最低位设为1
-    io_uring_prep_read(sqe, timer_fd, &timer_ctrl->m_generation, sizeof(uint64_t), 0);
-    io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(timer_ctrl) | 1));
+    if (timer_fd == -1) {
+        // io_uring 原生超时：timer_ctrl 实际上是 IOController*
+        IOController* controller = reinterpret_cast<IOController*>(timer_ctrl);
+        // 使用独立的 timeout 操作
+        io_uring_prep_timeout(sqe, &controller->m_timeout_ts, 0, 0);
+        // 使用特殊标记：最低两位为 11 (3) 表示 IO 超时
+        io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(controller) | 3));
+    } else {
+        // 传统 timerfd 方式（epoll 兼容）
+        io_uring_prep_read(sqe, timer_fd, &timer_ctrl->m_generation, sizeof(uint64_t), 0);
+        // 使用特殊标记：最低位为 1 表示 timerfd 事件
+        io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(timer_ctrl) | 1));
+    }
+    // 延迟提交：由事件循环批量提交
+    return 0;
+}
+
+int IOUringScheduler::addSleep(IOController* controller)
+{
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    if (!sqe) {
+        return -EAGAIN;
+    }
+
+    // 使用 io_uring 原生超时，无需 timerfd
+    // controller->m_timeout_ts 需要在调用前设置好
+    io_uring_prep_timeout(sqe, &controller->m_timeout_ts, 0, 0);
+    io_uring_sqe_set_data(sqe, controller);
     // 延迟提交：由事件循环批量提交
     return 0;
 }
@@ -382,16 +406,68 @@ void IOUringScheduler::eventLoop()
             } else if (user_data != nullptr) {
                 // 检查是否是定时器事件（最低位为1）
                 uintptr_t ptr_val = reinterpret_cast<uintptr_t>(user_data);
-                if (ptr_val & 1) {
-                    // 定时器事件
-                    TimerController* timer_ctrl = reinterpret_cast<TimerController*>(ptr_val & ~1UL);
-                    if (timer_ctrl && !timer_ctrl->m_cancelled) {
-                        // 尝试标记为超时
-                        if (timer_ctrl->m_io_controller &&
-                            timer_ctrl->m_io_controller->tryTimeout()) {
-                            // 成功标记超时，唤醒协程
-                            if (timer_ctrl->m_waker) {
-                                timer_ctrl->m_waker->wakeUp();
+                if (ptr_val & 1) [[unlikely]] {
+                    if ((ptr_val & 3) == 3) {
+                        // IO 超时事件（最低两位都是1）
+                        IOController* controller = reinterpret_cast<IOController*>(ptr_val & ~3UL);
+                        if (controller && !controller->m_timer_cancelled) {
+                            // 检查 CQE 结果：-ETIME 表示超时触发
+                            if (cqe->res == -ETIME && controller->tryTimeout()) {
+                                // 超时触发，需要唤醒协程
+                                // 从 awaitable 中获取 waker
+                                if (controller->m_awaitable) {
+                                    // 通用方式：所有 Awaitable 都有 m_waker 成员
+                                    // 使用 IOEventType 来确定具体类型
+                                    switch (controller->m_type) {
+                                    case ACCEPT: {
+                                        auto* aw = static_cast<AcceptAwaitable*>(controller->m_awaitable);
+                                        aw->m_waker.wakeUp();
+                                        break;
+                                    }
+                                    case CONNECT: {
+                                        auto* aw = static_cast<ConnectAwaitable*>(controller->m_awaitable);
+                                        aw->m_waker.wakeUp();
+                                        break;
+                                    }
+                                    case RECV: {
+                                        auto* aw = static_cast<RecvAwaitable*>(controller->m_awaitable);
+                                        aw->m_waker.wakeUp();
+                                        break;
+                                    }
+                                    case SEND: {
+                                        auto* aw = static_cast<SendAwaitable*>(controller->m_awaitable);
+                                        aw->m_waker.wakeUp();
+                                        break;
+                                    }
+                                    case RECVFROM: {
+                                        auto* aw = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+                                        aw->m_waker.wakeUp();
+                                        break;
+                                    }
+                                    case SENDTO: {
+                                        auto* aw = static_cast<SendToAwaitable*>(controller->m_awaitable);
+                                        aw->m_waker.wakeUp();
+                                        break;
+                                    }
+                                    default:
+                                        break;
+                                    }
+                                }
+                            }
+                            // 其他结果（如 -ECANCELED）表示超时被取消，不需要处理
+                        }
+                    } else {
+                        // 传统 timerfd 事件（只有最低位是1）
+                        TimerController* timer_ctrl = reinterpret_cast<TimerController*>(ptr_val & ~1UL);
+                        if (timer_ctrl && !timer_ctrl->m_cancelled) {
+                            // 尝试标记为超时（需检查 generation 防止过期定时器）
+                            if (timer_ctrl->m_io_controller &&
+                                timer_ctrl->m_generation == timer_ctrl->m_io_controller->m_generation &&
+                                timer_ctrl->m_io_controller->tryTimeout()) {
+                                // 成功标记超时，唤醒协程
+                                if (timer_ctrl->m_waker) {
+                                    timer_ctrl->m_waker->wakeUp();
+                                }
                             }
                         }
                     }
@@ -568,6 +644,14 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         } else {
             awaitable->m_result = std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(-res)));
         }
+        awaitable->m_waker.wakeUp();
+        break;
+    }
+    case SLEEP:
+    {
+        // io_uring timeout 完成，res == -ETIME 表示正常超时
+        // 直接唤醒协程，SleepAwaitable::await_resume 无需返回值
+        SleepAwaitable* awaitable = static_cast<SleepAwaitable*>(controller->m_awaitable);
         awaitable->m_waker.wakeUp();
         break;
     }
