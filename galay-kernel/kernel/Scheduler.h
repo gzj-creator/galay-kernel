@@ -172,7 +172,13 @@ struct IOController {
     State m_state = State::Pending;             ///< 操作状态
 
     // 超时相关字段
-    int m_timer_fd = -1;                        ///< timerfd（epoll/kqueue 使用）
+#ifdef USE_EPOLL
+    int m_timer_fd = -1;                        ///< timerfd（epoll 使用）
+#endif
+#ifdef USE_KQUEUE
+    int64_t m_timeout_ms = 0;                   ///< 超时时间毫秒（kqueue 使用）
+    uintptr_t m_timer_ident = 0;                ///< kqueue 定时器标识符
+#endif
     bool m_timer_cancelled = false;             ///< 定时器是否已取消
 #ifdef USE_IOURING
     struct __kernel_timespec m_timeout_ts{};    ///< 超时时间（io_uring 使用）
@@ -273,12 +279,6 @@ public:
      */
     virtual int addTimer(int timer_fd, struct TimerController* timer_ctrl) = 0;
 
-    /**
-     * @brief 注册休眠事件（io_uring 原生超时）
-     * @param controller IO控制器（m_timeout_ts 需要已设置）
-     * @return 0表示成功，<0表示错误
-     */
-    virtual int addSleep(IOController* controller) = 0;
 };
 
 // 前置声明

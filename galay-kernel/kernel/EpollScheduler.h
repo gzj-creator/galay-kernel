@@ -70,9 +70,6 @@ public:
     // 定时器
     int addTimer(int timer_fd, struct TimerController* timer_ctrl) override;
 
-    // 休眠（epoll 使用 timerfd 实现）
-    int addSleep(IOController* controller) override;
-
     int remove(int fd);
 
     void spawn(Coroutine coro) override;

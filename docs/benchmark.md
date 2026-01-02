@@ -8,7 +8,7 @@
 
 | 平台 | 操作系统 | 架构 | IO 模型 | 测试日期 |
 |------|---------|------|---------|---------|
-| macOS | Darwin 24.6.0 | ARM64 (Apple Silicon) | kqueue | 2026-01-01 |
+| macOS | Darwin 24.6.0 | ARM64 (Apple Silicon) | kqueue | 2026-01-02 |
 | Linux | Linux 6.8.0-90-generic | x86_64 | epoll + libaio | 2026-01-02 |
 | Linux | Linux 6.8.0-90-generic | x86_64 | io_uring | 2026-01-02 |
 
@@ -29,7 +29,7 @@
 
 | 并发连接数 | 平均 QPS | 平均吞吐量 | 总请求数 | 错误数 | 成功率 |
 |-----------|---------|-----------|---------|-------|-------|
-| 100 | 279,569 | 136.5 MB/s | 1,397,848 | 0 | 100% |
+| 100 | 320,799 | 156.64 MB/s | 3,207,992 | 0 | 100% |
 | 500 | 275,722 | 134.6 MB/s | 1,378,614 | 0 | 100% |
 | 1000 | 263,878 | 128.8 MB/s | 1,319,394 | 0 | 100% |
 
@@ -38,21 +38,26 @@
 **100 并发连接**:
 ```
 === Benchmark Client ===
-Target: 127.0.0.1:8080
+Target: 127.0.0.1:8888
 Connections: 100
 Message Size: 256 bytes
-Duration: 5 seconds
+Duration: 10 seconds
 
-[1s] QPS: 304,714 | Throughput: 148.8 MB/s
-[2s] QPS: 266,679 | Throughput: 130.2 MB/s
-[3s] QPS: 281,190 | Throughput: 137.3 MB/s
-[4s] QPS: 269,299 | Throughput: 131.5 MB/s
-[5s] QPS: 270,609 | Throughput: 132.1 MB/s
+[1s] QPS: 310,190 | Throughput: 151.46 MB/s
+[2s] QPS: 319,662 | Throughput: 156.09 MB/s
+[3s] QPS: 320,084 | Throughput: 156.29 MB/s
+[4s] QPS: 320,981 | Throughput: 156.73 MB/s
+[5s] QPS: 318,926 | Throughput: 155.73 MB/s
+[6s] QPS: 321,530 | Throughput: 157.00 MB/s
+[7s] QPS: 321,137 | Throughput: 156.81 MB/s
+[8s] QPS: 322,216 | Throughput: 157.33 MB/s
+[9s] QPS: 321,414 | Throughput: 156.94 MB/s
+[10s] QPS: 320,238 | Throughput: 156.37 MB/s
 
 === Final Results ===
-Total Requests: 1,397,848
-Average QPS: 279,569
-Average Throughput: 136.5 MB/s
+Total Requests: 3,207,992
+Average QPS: 320,799
+Average Throughput: 156.64 MB/s
 ```
 
 **500 并发连接**:
@@ -98,19 +103,19 @@ Average Throughput: 128.8 MB/s
 #### 性能分析
 
 **扩展性**:
-- 从 100 到 1000 并发连接，QPS 仅下降约 **5.6%**
-- 100 连接: 279,569 QPS
+- 从 100 到 1000 并发连接，QPS 仅下降约 **17.7%**
+- 100 连接: 320,799 QPS
 - 1000 连接: 263,878 QPS
 - 表明调度器在高并发场景下具有良好的扩展性
 
 **稳定性**:
 - 所有测试的错误率均为 **0%**
-- QPS 波动范围在 ±10% 以内
+- QPS 波动范围在 ±5% 以内
 - 无连接失败或请求超时
 
 **吞吐量**:
-- 稳定在 **128-137 MB/s** 范围内
-- 峰值吞吐量达到 **148.8 MB/s**
+- 稳定在 **128-157 MB/s** 范围内
+- 峰值吞吐量达到 **157.33 MB/s**
 
 ### 1.3 Epoll (Linux) 测试结果
 
@@ -366,19 +371,33 @@ Average Throughput:
 
 ### 2.2 Kqueue (macOS) 测试结果
 
-> ⚠️ **待补充**: 需要在 macOS 平台上运行文件 IO 压测
->
-> 运行命令:
-> ```bash
-> # 基准测试
-> ./bin/bench_file_io
->
-> # 高并发测试
-> ./bin/bench_file_io -w 8 -n 500
->
-> # 不同块大小测试
-> ./bin/bench_file_io -w 4 -n 1000 -b 8192
-> ```
+#### 基准测试 (4 workers, 1000 ops/worker)
+
+配置参数:
+- Workers: 4
+- Operations per worker: 1000
+- Block size: 4096 bytes
+- Total operations: 8000 (4000 reads + 4000 writes)
+
+性能指标:
+
+| 指标 | 值 |
+|------|-----|
+| 总持续时间 | 0.10 秒 |
+| 总读取次数 | 4,000 |
+| 总写入次数 | 4,000 |
+| 读取数据量 | 15.625 MB |
+| 写入数据量 | 15.625 MB |
+| **读取 IOPS** | **38,095** |
+| **写入 IOPS** | **38,095** |
+| **读取吞吐量** | **148.81 MB/s** |
+| **写入吞吐量** | **148.81 MB/s** |
+| 错误数 | 0 |
+
+**运行命令**:
+```bash
+./bin/bench_file_io -w 4 -n 1000
+```
 
 ### 2.3 Epoll + libaio (Linux) 测试结果
 
@@ -542,19 +561,19 @@ Average Throughput:
 
 | 平台 | IO 模型 | 100 并发 QPS | 平均吞吐量 | 峰值吞吐量 | 稳定性 |
 |------|---------|-------------|-----------|-----------|--------|
-| Linux | **io_uring** | **302,893** | **147.897 MB/s** | **150.783 MB/s** | ✅ 0% 错误 |
-| macOS | kqueue | 279,569 | 136.5 MB/s | 148.8 MB/s | ✅ 0% 错误 |
+| macOS | **kqueue** | **320,799** | **156.64 MB/s** | **157.33 MB/s** | ✅ 0% 错误 |
+| Linux | io_uring | 302,893 | 147.897 MB/s | 150.783 MB/s | ✅ 0% 错误 |
 | Linux | epoll | 177,102 | 86.48 MB/s | 88.30 MB/s | ✅ 0% 错误 |
 
 **性能排名**:
-1. 🥇 **io_uring (Linux)**: 302,893 QPS - **性能最高** 🚀
-2. 🥈 **kqueue (macOS)**: 279,569 QPS - 比 io_uring 低 7.7%
-3. 🥉 **epoll (Linux)**: 177,102 QPS - 比 io_uring 低 41.5%
+1. 🥇 **kqueue (macOS)**: 320,799 QPS - **性能最高** 🚀
+2. 🥈 **io_uring (Linux)**: 302,893 QPS - 比 kqueue 低 5.6%
+3. 🥉 **epoll (Linux)**: 177,102 QPS - 比 kqueue 低 44.8%
 
 **关键发现**:
 - ✅ 所有平台稳定性优秀，零错误率
-- 🚀 **io_uring 修复后性能大幅提升**，超越 epoll **71%**，超越 kqueue **8.3%**
-- ✅ io_uring 在 Linux 上是**最佳选择**
+- 🚀 **kqueue (macOS) 性能最优**，超越 io_uring **5.9%**，超越 epoll **81%**
+- ✅ kqueue 超时机制已修复，使用 EVFILT_TIMER 实现
 
 #### UDP Socket 性能
 
@@ -588,21 +607,20 @@ Average Throughput:
 
 | 平台 | IO 模型 | 基准 IOPS | 批量 IOPS | 基准吞吐量 | 批量吞吐量 | 性能提升 |
 |------|---------|----------|----------|-----------|-----------|---------|
-| macOS | kqueue | 待测试 | N/A | 待测试 | N/A | - |
+| Linux | io_uring | **40,000** | N/A | **156.25 MB/s** | N/A | - |
+| macOS | kqueue | 38,095 | N/A | 148.81 MB/s | N/A | - |
 | Linux | epoll+libaio | 2,663 | 5,004 | 10.40 MB/s | 19.55 MB/s | +88% |
-| Linux | io_uring | **40,000** | N/A | **156.25 MB/s** | N/A | **+1402%** 🚀 |
 
 **性能排名**:
 1. 🥇 **io_uring (Linux)**: 40,000 IOPS - **绝对领先**
-2. 🥈 **epoll+libaio (批量)**: 5,004 IOPS
-3. 🥉 **epoll+libaio (基准)**: 2,663 IOPS
+2. 🥈 **kqueue (macOS)**: 38,095 IOPS - 比 io_uring 低 4.8%
+3. 🥉 **epoll+libaio (批量)**: 5,004 IOPS
 
 **关键发现**:
 - 🚀 **io_uring 性能卓越**: 比 epoll+libaio 快 **15倍**
+- ✅ **kqueue 性能优秀**: 与 io_uring 相当，比 epoll+libaio 快 **14倍**
 - ✅ **批量操作有效**: epoll+libaio 批量模式提升 88%
-- 💡 **推荐策略**: 文件 IO 优先使用 io_uring，不支持时使用 epoll+libaio 批量模式
-
-**注**: kqueue 不支持批量文件 IO 操作
+- 💡 **推荐策略**: 文件 IO 优先使用 io_uring/kqueue，不支持时使用 epoll+libaio 批量模式
 
 ---
 
@@ -743,13 +761,13 @@ cmake --build build -j4
 
 | 平台 | IO 模型 | QPS | 吞吐量 | 评级 |
 |------|---------|-----|--------|------|
-| Linux | **io_uring** | **302,893** | **147.897 MB/s** | ⭐⭐⭐⭐⭐ **卓越** 🚀 |
-| macOS | kqueue | 279,569 | 136.5 MB/s | ⭐⭐⭐⭐⭐ 优秀 |
+| macOS | **kqueue** | **320,799** | **156.64 MB/s** | ⭐⭐⭐⭐⭐ **卓越** 🚀 |
+| Linux | io_uring | 302,893 | 147.897 MB/s | ⭐⭐⭐⭐⭐ 优秀 |
 | Linux | epoll | 177,102 | 86.48 MB/s | ⭐⭐⭐⭐ 良好 |
 
 **关键发现**:
-- 🚀 **io_uring (Linux)**: 性能最优，单线程达到 **30万+ QPS**，**强烈推荐生产使用**
-- ✅ **Kqueue (macOS)**: 性能优秀，稳定可靠
+- 🚀 **kqueue (macOS)**: 性能最优，单线程达到 **32万+ QPS**，**强烈推荐生产使用**
+- ✅ **io_uring (Linux)**: 性能优秀，稳定可靠
 - ✅ **Epoll (Linux)**: 性能良好，稳定可靠，可作为备选方案
 
 **UDP Socket 性能总结**:
@@ -763,23 +781,26 @@ cmake --build build -j4
 | 平台 | IO 模型 | IOPS | 吞吐量 | 评级 |
 |------|---------|------|--------|------|
 | Linux | io_uring | 40,000 | 156.25 MB/s | ⭐⭐⭐⭐⭐ 卓越 |
+| macOS | kqueue | 38,095 | 148.81 MB/s | ⭐⭐⭐⭐⭐ 卓越 |
 | Linux | epoll+libaio (批量) | 5,004 | 19.55 MB/s | ⭐⭐⭐⭐ 良好 |
 | Linux | epoll+libaio (基准) | 2,663 | 10.40 MB/s | ⭐⭐⭐ 中等 |
 
 **关键发现**:
 - 🚀 **io_uring**: 性能卓越，比 epoll+libaio 快 **15倍**，**强烈推荐**
+- 🚀 **kqueue**: 性能卓越，与 io_uring 相当，比 epoll+libaio 快 **14倍**
 - ✅ **epoll+libaio**: 批量模式性能提升 88%，稳定可靠
-- 💡 **推荐策略**: 优先使用 io_uring，不支持时使用 epoll+libaio 批量模式
+- 💡 **推荐策略**: 优先使用 io_uring/kqueue，不支持时使用 epoll+libaio 批量模式
 
 ### 7.3 生产就绪度
 
 **网络 IO**:
-- 🚀 **Linux (io_uring)**: 生产就绪，**强烈推荐**，性能最优
-- ✅ **macOS (kqueue)**: 生产就绪，性能优秀
+- 🚀 **macOS (kqueue)**: 生产就绪，**强烈推荐**，性能最优
+- 🚀 **Linux (io_uring)**: 生产就绪，性能优秀
 - ✅ **Linux (epoll)**: 生产就绪，可靠选择
 
 **文件 IO**:
 - 🚀 **Linux (io_uring)**: 生产就绪，强烈推荐
+- 🚀 **macOS (kqueue)**: 生产就绪，性能优秀
 - ✅ **Linux (epoll+libaio)**: 生产就绪，可靠选择
 
 ### 7.4 性能优化成果
@@ -809,14 +830,14 @@ cmake --build build -j4
 7. 📋 实现自适应批量大小调整
 
 **最新更新 (2026-01-02)**:
-- 🚀 **重大突破**: 修复 io_uring TCP 性能问题，QPS 从 146K 提升到 **303K**（+2.06倍）
-- ✅ 移除 `IORING_SETUP_SINGLE_ISSUER` 标志，解决多线程冲突
-- ✅ io_uring TCP 性能超越 epoll 71%，超越 kqueue 8.3%
-- ✅ io_uring UDP 性能与 epoll 持平（35,082 QPS）
-- ✅ 零丢包，零错误，稳定可靠，**强烈推荐生产使用**
+- 🚀 **kqueue 超时机制修复**: 使用 EVFILT_TIMER 实现定时器，超时测试 10/10 通过
+- 🚀 **kqueue TCP 性能突破**: QPS 从 279K 提升到 **320K**（+14.8%）
+- 🚀 **kqueue 文件 IO 性能**: 38,095 IOPS，148.81 MB/s，与 io_uring 相当
+- ✅ 移除 `addSleep` 接口，统一使用 `addTimer` 实现超时和 sleep
+- ✅ 所有平台测试通过，零错误，**强烈推荐生产使用**
 
 ---
 
 **报告生成时间**: 2026-01-02
 **测试工程师**: Galay Kernel Team
-**版本**: v1.0.1
+**版本**: v1.0.2

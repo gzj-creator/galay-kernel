@@ -585,15 +585,20 @@ int KqueueScheduler::addFileWatch(IOController* controller)
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
-int KqueueScheduler::addTimer(int timer_fd, TimerController* timer_ctrl)
+int KqueueScheduler::addTimer(int timeout_ms, TimerController* timer_ctrl)
 {
-    // macOS/BSD 没有 timerfd，但 kqueue 可以直接监听 timerfd（如果是 Linux 兼容层）
-    // 或者使用 EVFILT_TIMER
-    // 这里我们使用 EVFILT_READ 监听 timerfd（跨平台兼容）
+    // macOS/BSD 使用 EVFILT_TIMER，不需要 timerfd
+    // timeout_ms 参数在 kqueue 中表示超时时间（毫秒）
     struct kevent ev;
     // 使用 timer_ctrl 指针的最低位设为1来标记这是定时器事件
     void* udata = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(timer_ctrl) | 1);
-    EV_SET(&ev, timer_fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, udata);
+    // 使用 timer_ctrl 的地址作为唯一标识符
+    uintptr_t ident = reinterpret_cast<uintptr_t>(timer_ctrl);
+    // 存储 ident 到 IOController 以便后续取消
+    if (timer_ctrl->m_io_controller) {
+        timer_ctrl->m_io_controller->m_timer_ident = ident;
+    }
+    EV_SET(&ev, ident, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_USECONDS, timeout_ms * 1000, udata);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 

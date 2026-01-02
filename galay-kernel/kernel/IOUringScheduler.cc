@@ -304,21 +304,6 @@ int IOUringScheduler::addTimer(int timer_fd, TimerController* timer_ctrl)
     return 0;
 }
 
-int IOUringScheduler::addSleep(IOController* controller)
-{
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    // 使用 io_uring 原生超时，无需 timerfd
-    // controller->m_timeout_ts 需要在调用前设置好
-    io_uring_prep_timeout(sqe, &controller->m_timeout_ts, 0, 0);
-    io_uring_sqe_set_data(sqe, controller);
-    // 延迟提交：由事件循环批量提交
-    return 0;
-}
-
 int IOUringScheduler::remove(int fd)
 {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);

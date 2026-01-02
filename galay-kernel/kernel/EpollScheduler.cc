@@ -649,14 +649,6 @@ int EpollScheduler::addTimer(int timer_fd, TimerController* timer_ctrl)
     return ret;
 }
 
-int EpollScheduler::addSleep(IOController* controller)
-{
-    // epoll 不支持原生超时，SleepAwaitable 应该使用 timerfd + addTimer
-    // 这个方法不应该被调用
-    (void)controller;
-    return -ENOTSUP;
-}
-
 }
 
 #endif // USE_EPOLL

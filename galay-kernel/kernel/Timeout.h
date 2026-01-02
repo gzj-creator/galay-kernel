@@ -204,8 +204,8 @@ struct WithTimeout {
         }
         // 注册独立超时（使用特殊标记 3 表示 IO 超时）
         m_inner.m_scheduler->addTimer(-1, reinterpret_cast<TimerController*>(controller));
-#else
-        // epoll/kqueue: 创建 timerfd 并存储在 IOController 中
+#elif defined(USE_EPOLL)
+        // epoll: 创建 timerfd 并存储在 IOController 中
         controller->m_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
         if (controller->m_timer_fd < 0) {
             // 定时器创建失败，继续等待 IO（不超时）
@@ -234,6 +234,17 @@ struct WithTimeout {
         m_timer_ctrl.m_cancelled = false;
 
         m_inner.m_scheduler->addTimer(controller->m_timer_fd, &m_timer_ctrl);
+#elif defined(USE_KQUEUE)
+        // kqueue: 使用 EVFILT_TIMER，不需要 timerfd
+        m_timer_ctrl.m_io_controller = controller;
+        m_timer_ctrl.m_waker = &m_inner.m_waker;
+        m_timer_ctrl.m_generation = controller->m_generation;
+        m_timer_ctrl.m_cancelled = false;
+
+        // 存储超时时间（毫秒）
+        controller->m_timeout_ms = m_timeout.count();
+
+        m_inner.m_scheduler->addTimer(controller->m_timeout_ms, &m_timer_ctrl);
 #endif
         return true;
     }
@@ -245,13 +256,16 @@ struct WithTimeout {
 
         // 标记定时器已取消
         controller->m_timer_cancelled = true;
-#ifndef USE_IOURING
+#ifdef USE_EPOLL
         m_timer_ctrl.m_cancelled = true;
         // 关闭 timerfd
         if (controller->m_timer_fd >= 0) {
             close(controller->m_timer_fd);
             controller->m_timer_fd = -1;
         }
+#elif defined(USE_KQUEUE)
+        m_timer_ctrl.m_cancelled = true;
+        // kqueue 定时器会自动删除（EV_ONESHOT），无需手动清理
 #endif
 
         // 检查是否超时
@@ -289,7 +303,7 @@ public:
         m_controller.fillAwaitable(IOEventType::SLEEP, this);
 
 #ifdef USE_IOURING
-        // io_uring: 使用原生 timeout，无需 timerfd
+        // io_uring: 使用原生 timeout，通过 addTimer(-1, ...) 触发
         auto secs = std::chrono::duration_cast<std::chrono::seconds>(m_duration);
         auto nsecs = std::chrono::duration_cast<std::chrono::nanoseconds>(m_duration - secs);
         m_controller.m_timeout_ts.tv_sec = secs.count();
@@ -297,14 +311,24 @@ public:
         if (m_controller.m_timeout_ts.tv_sec == 0 && m_controller.m_timeout_ts.tv_nsec < 1) {
             m_controller.m_timeout_ts.tv_nsec = 1;
         }
-        return m_scheduler->addSleep(&m_controller) == 0;
-#else
-        // epoll/kqueue: 使用 timerfd
+        // timer_fd = -1 表示使用 io_uring 原生超时，传递 IOController*
+        return m_scheduler->addTimer(-1, reinterpret_cast<TimerController*>(&m_controller)) == 0;
+#elif defined(USE_EPOLL)
+        // epoll: 使用 timerfd
         if (m_timer.start(m_duration, &m_controller, &m_waker, m_controller.m_generation) < 0) {
             return false;
         }
         m_scheduler->addTimer(m_timer.fd(), m_timer.timerController());
         return true;
+#elif defined(USE_KQUEUE)
+        // kqueue: 使用 EVFILT_TIMER
+        if (m_timer.start(m_duration, &m_controller, &m_waker, m_controller.m_generation) < 0) {
+            return false;
+        }
+        m_scheduler->addTimer(m_timer.timeoutMs(), m_timer.timerController());
+        return true;
+#else
+        return false;
 #endif
     }
 
