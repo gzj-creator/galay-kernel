@@ -33,7 +33,9 @@
     #include <sys/socket.h>
     #include <netinet/in.h>
     #include <arpa/inet.h>
-    #define USE_KQUEUE
+    #ifndef USE_KQUEUE
+        #define USE_KQUEUE
+    #endif
 
     // macOS-specific handle structure
     struct GHandle {
