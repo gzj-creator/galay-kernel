@@ -60,6 +60,7 @@ public:
     int addRecvFrom(IOController* event) override;
     int addSendTo(IOController* event) override;
     int addFileWatch(IOController* event) override;
+    int addTimer(int timer_fd, struct TimerController* timer_ctrl) override;
 
     int remove(int fd);
 

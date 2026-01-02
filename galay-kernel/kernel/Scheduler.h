@@ -85,8 +85,18 @@ protected:
  * @note
  * - 由TcpSocket内部管理
  * - 存储当前IO操作类型和对应的Awaitable对象
+ * - 支持超时机制，通过 generation 和 state 防止重复唤醒
  */
 struct IOController {
+    /**
+     * @brief IO操作状态
+     */
+    enum class State : uint8_t {
+        Pending,      ///< 等待中
+        Completed,    ///< IO完成
+        TimedOut      ///< 超时
+    };
+
     /**
      * @brief 默认构造函数
      */
@@ -100,6 +110,8 @@ struct IOController {
     void fillAwaitable(IOEventType type, void* awaitable) {
         m_type = type;
         m_awaitable = awaitable;
+        m_generation++;
+        m_state = State::Pending;
     }
 
     /**
@@ -111,8 +123,48 @@ struct IOController {
         m_awaitable = nullptr;
     }
 
+    /**
+     * @brief 尝试标记为完成状态
+     * @return true 成功标记，false 已被超时处理
+     */
+    bool tryComplete() {
+        if (m_state != State::Pending) return false;
+        m_state = State::Completed;
+        return true;
+    }
+
+    /**
+     * @brief 尝试标记为超时状态
+     * @return true 成功标记，false 已被IO完成处理
+     */
+    bool tryTimeout() {
+        if (m_state != State::Pending) return false;
+        m_state = State::TimedOut;
+        return true;
+    }
+
+    /**
+     * @brief 检查是否超时
+     * @return 是否超时
+     */
+    bool isTimedOut() const { return m_state == State::TimedOut; }
+
+    /**
+     * @brief 检查是否完成
+     * @return 是否完成
+     */
+    bool isCompleted() const { return m_state == State::Completed; }
+
+    /**
+     * @brief 检查是否处于等待状态
+     * @return 是否等待中
+     */
+    bool isPending() const { return m_state == State::Pending; }
+
     IOEventType m_type = IOEventType::INVALID;  ///< 当前IO事件类型
-    void* m_awaitable = nullptr;                 ///< 关联的Awaitable对象
+    void* m_awaitable = nullptr;                ///< 关联的Awaitable对象
+    uint64_t m_generation = 0;                  ///< 操作代数，每次注册递增
+    State m_state = State::Pending;             ///< 操作状态
 };
 
 /**
@@ -200,7 +252,18 @@ public:
      * @return 1表示立即完成，0表示已注册等待，<0表示错误
      */
     virtual int addFileWatch(IOController* controller) = 0;
+
+    /**
+     * @brief 注册定时器事件
+     * @param timer_fd 定时器文件描述符（timerfd）
+     * @param timer_ctrl 定时器控制器
+     * @return 0表示成功，<0表示错误
+     */
+    virtual int addTimer(int timer_fd, struct TimerController* timer_ctrl) = 0;
 };
+
+// 前置声明
+struct TimerController;
 
 } // namespace galay::kernel
 

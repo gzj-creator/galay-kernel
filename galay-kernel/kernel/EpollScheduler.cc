@@ -3,6 +3,7 @@
 #ifdef USE_EPOLL
 
 #include "Awaitable.h"
+#include "Timeout.h"
 #include "galay-kernel/async/AioFile.h"
 #include "galay-kernel/common/Log.h"
 #include <sys/eventfd.h>
@@ -240,6 +241,7 @@ void EpollScheduler::eventLoop()
         for (int i = 0; i < nev; ++i) {
             struct epoll_event& ev = m_events[i];
 
+            // 检查是否是 eventfd（用于唤醒）
             if (ev.data.ptr == nullptr) {
                 uint64_t val;
                 while (read(m_event_fd, &val, sizeof(val)) > 0);
@@ -247,6 +249,25 @@ void EpollScheduler::eventLoop()
             }
 
             if (ev.events & EPOLLERR) {
+                continue;
+            }
+
+            // 检查是否是定时器事件（最低位为1）
+            uintptr_t ptr_val = reinterpret_cast<uintptr_t>(ev.data.ptr);
+            if (ptr_val & 1) {
+                // 定时器事件
+                TimerController* timer_ctrl = reinterpret_cast<TimerController*>(ptr_val & ~1UL);
+                if (timer_ctrl && !timer_ctrl->m_cancelled) {
+                    // 尝试标记为超时
+                    if (timer_ctrl->m_io_controller &&
+                        timer_ctrl->m_generation == timer_ctrl->m_io_controller->m_generation &&
+                        timer_ctrl->m_io_controller->tryTimeout()) {
+                        // 成功标记超时，唤醒协程
+                        if (timer_ctrl->m_waker) {
+                            timer_ctrl->m_waker->wakeUp();
+                        }
+                    }
+                }
                 continue;
             }
 
@@ -259,6 +280,12 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
 {
     IOController* controller = static_cast<IOController*>(ev.data.ptr);
     if (!controller || controller->m_type == IOEventType::INVALID || controller->m_awaitable == nullptr) {
+        return;
+    }
+
+    // 关键：尝试标记为完成状态，如果已被超时处理则跳过
+    if (!controller->tryComplete()) {
+        // 已被超时处理，忽略此 IO 事件
         return;
     }
 
@@ -603,6 +630,21 @@ int EpollScheduler::addFileWatch(IOController* controller)
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, awaitable->m_inotify_fd, &ev);
     if (ret == -1 && errno == EEXIST) {
         ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, awaitable->m_inotify_fd, &ev);
+    }
+    return ret;
+}
+
+int EpollScheduler::addTimer(int timer_fd, TimerController* timer_ctrl)
+{
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLET;
+    // 使用特殊标记区分定时器事件：将指针的最低位设为1
+    // TimerController 指针至少是 8 字节对齐，所以最低位一定是 0
+    ev.data.ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(timer_ctrl) | 1);
+
+    int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, timer_fd, &ev);
+    if (ret == -1 && errno == EEXIST) {
+        ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, timer_fd, &ev);
     }
     return ret;
 }

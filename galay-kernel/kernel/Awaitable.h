@@ -12,6 +12,10 @@
  * - CloseAwaitable: 关闭连接
  *
  * 这些类型实现了C++20 Awaitable接口，可以在协程中使用co_await。
+ * 所有 Awaitable 都支持超时：
+ * @code
+ * auto result = co_await socket.recv(buffer, size).timeout(5s);
+ * @endcode
  *
  * @note 这些类型由TcpSocket内部创建，用户通常不需要直接使用
  */
@@ -25,6 +29,7 @@
 #include "galay-kernel/common/Host.hpp"
 #include "Scheduler.h"
 #include "Waker.h"
+#include "Timeout.h"
 #include <coroutine>
 #include <cstddef>
 #include <expected>
@@ -46,7 +51,7 @@ class IOScheduler;
  *
  * @note 由TcpSocket::accept()创建
  */
-struct AcceptAwaitable {
+struct AcceptAwaitable : TimeoutSupport<AcceptAwaitable> {
     /**
      * @brief 构造函数
      * @param scheduler IO调度器
@@ -95,7 +100,7 @@ struct AcceptAwaitable {
  *
  * @note 由TcpSocket::recv()创建
  */
-struct RecvAwaitable {
+struct RecvAwaitable : TimeoutSupport<RecvAwaitable> {
     /**
      * @brief 构造函数
      * @param scheduler IO调度器
@@ -146,7 +151,7 @@ struct RecvAwaitable {
  *
  * @note 由TcpSocket::send()创建
  */
-struct SendAwaitable {
+struct SendAwaitable : TimeoutSupport<SendAwaitable> {
     /**
      * @brief 构造函数
      * @param scheduler IO调度器
@@ -197,7 +202,7 @@ struct SendAwaitable {
  *
  * @note 由TcpSocket::connect()创建
  */
-struct ConnectAwaitable {
+struct ConnectAwaitable : TimeoutSupport<ConnectAwaitable> {
     /**
      * @brief 构造函数
      * @param scheduler IO调度器
@@ -246,7 +251,7 @@ struct ConnectAwaitable {
  *
  * @note 由TcpSocket::close()创建
  */
-struct CloseAwaitable {
+struct CloseAwaitable : TimeoutSupport<CloseAwaitable> {
     /**
      * @brief 构造函数
      * @param scheduler IO调度器
@@ -288,7 +293,7 @@ struct CloseAwaitable {
  *
  * @note 由UdpSocket::recvfrom()创建
  */
-struct RecvFromAwaitable {
+struct RecvFromAwaitable : TimeoutSupport<RecvFromAwaitable> {
     /**
      * @brief 构造函数
      * @param scheduler IO调度器
@@ -348,7 +353,7 @@ struct RecvFromAwaitable {
  *
  * @note 由UdpSocket::sendto()创建
  */
-struct SendToAwaitable {
+struct SendToAwaitable : TimeoutSupport<SendToAwaitable> {
     /**
      * @brief 构造函数
      * @param scheduler IO调度器
@@ -407,7 +412,7 @@ struct SendToAwaitable {
  *
  * @note 由AsyncFile::read()创建
  */
-struct FileReadAwaitable {
+struct FileReadAwaitable : TimeoutSupport<FileReadAwaitable> {
 #ifdef USE_EPOLL
     // epoll 平台：需要 eventfd 和 libaio context
     FileReadAwaitable(IOScheduler* scheduler, IOController* controller, GHandle handle,
@@ -456,7 +461,7 @@ struct FileReadAwaitable {
  *
  * @note 由AsyncFile::write()创建
  */
-struct FileWriteAwaitable {
+struct FileWriteAwaitable : TimeoutSupport<FileWriteAwaitable> {
 #ifdef USE_EPOLL
     // epoll 平台：需要 eventfd 和 libaio context
     FileWriteAwaitable(IOScheduler* scheduler, IOController* controller, GHandle handle,
@@ -551,7 +556,7 @@ struct FileWatchResult {
  *
  * @note 由FileWatcher::watch()创建
  */
-struct FileWatchAwaitable {
+struct FileWatchAwaitable : TimeoutSupport<FileWatchAwaitable> {
     /**
      * @brief 构造函数
      * @param scheduler IO调度器

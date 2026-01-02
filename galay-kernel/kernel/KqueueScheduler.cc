@@ -1,5 +1,6 @@
 #include "KqueueScheduler.h"
 #include "Scheduler.h"
+#include "Timeout.h"
 #include "common/Defn.hpp"
 #include "common/Error.h"
 
@@ -230,6 +231,26 @@ void KqueueScheduler::eventLoop()
             if (!ev.udata) {
                 continue;
             }
+
+            // 检查是否是定时器事件（最低位为1）
+            uintptr_t ptr_val = reinterpret_cast<uintptr_t>(ev.udata);
+            if (ptr_val & 1) {
+                // 定时器事件
+                TimerController* timer_ctrl = reinterpret_cast<TimerController*>(ptr_val & ~1UL);
+                if (timer_ctrl && !timer_ctrl->m_cancelled) {
+                    // 尝试标记为超时
+                    if (timer_ctrl->m_io_controller &&
+                        timer_ctrl->m_generation == timer_ctrl->m_io_controller->m_generation &&
+                        timer_ctrl->m_io_controller->tryTimeout()) {
+                        // 成功标记超时，唤醒协程
+                        if (timer_ctrl->m_waker) {
+                            timer_ctrl->m_waker->wakeUp();
+                        }
+                    }
+                }
+                continue;
+            }
+
             processEvent(ev);
         }
     }
@@ -239,6 +260,12 @@ void KqueueScheduler::processEvent(struct kevent& ev)
 {
     IOController* controller = static_cast<IOController*>(ev.udata);
     if (!controller || controller->m_type == IOEventType::INVALID || controller->m_awaitable == nullptr) {
+        return;
+    }
+
+    // 关键：尝试标记为完成状态，如果已被超时处理则跳过
+    if (!controller->tryComplete()) {
+        // 已被超时处理，忽略此 IO 事件
         return;
     }
 
@@ -555,6 +582,18 @@ int KqueueScheduler::addFileWatch(IOController* controller)
     // NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_ATTRIB | NOTE_EXTEND
     unsigned int fflags = NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_ATTRIB | NOTE_EXTEND;
     EV_SET(&ev, awaitable->m_inotify_fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, fflags, 0, controller);
+    return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
+}
+
+int KqueueScheduler::addTimer(int timer_fd, TimerController* timer_ctrl)
+{
+    // macOS/BSD 没有 timerfd，但 kqueue 可以直接监听 timerfd（如果是 Linux 兼容层）
+    // 或者使用 EVFILT_TIMER
+    // 这里我们使用 EVFILT_READ 监听 timerfd（跨平台兼容）
+    struct kevent ev;
+    // 使用 timer_ctrl 指针的最低位设为1来标记这是定时器事件
+    void* udata = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(timer_ctrl) | 1);
+    EV_SET(&ev, timer_fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, udata);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 

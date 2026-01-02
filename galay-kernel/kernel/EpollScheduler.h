@@ -67,6 +67,9 @@ public:
     // 文件监控 (通过 inotify)
     int addFileWatch(IOController* event) override;
 
+    // 定时器
+    int addTimer(int timer_fd, struct TimerController* timer_ctrl) override;
+
     int remove(int fd);
 
     void spawn(Coroutine coro) override;

@@ -23,6 +23,7 @@ enum IOErrorCode : uint32_t {
     kStatFailed = 11,
     kSyncFailed = 12,
     kSeekFailed = 13,
+    kTimeout = 14,              ///< 操作超时
 };
 
 /**

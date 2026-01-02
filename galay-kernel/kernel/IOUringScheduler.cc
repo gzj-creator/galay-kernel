@@ -1,5 +1,6 @@
 #include "IOUringScheduler.h"
 #include "Scheduler.h"
+#include "Timeout.h"
 #include "common/Defn.hpp"
 #include "common/Error.h"
 #include "common/Log.h"
@@ -279,6 +280,21 @@ int IOUringScheduler::addFileWatch(IOController* controller)
     return 0;
 }
 
+int IOUringScheduler::addTimer(int timer_fd, TimerController* timer_ctrl)
+{
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    if (!sqe) {
+        return -EAGAIN;
+    }
+
+    // 读取 timerfd，当定时器触发时会返回
+    // 使用特殊标记区分定时器事件：将指针的最低位设为1
+    io_uring_prep_read(sqe, timer_fd, &timer_ctrl->m_generation, sizeof(uint64_t), 0);
+    io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(timer_ctrl) | 1));
+    // 延迟提交：由事件循环批量提交
+    return 0;
+}
+
 int IOUringScheduler::remove(int fd)
 {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
@@ -364,7 +380,24 @@ void IOUringScheduler::eventLoop()
                 // 标记需要重新提交监听
                 eventfd_triggered = true;
             } else if (user_data != nullptr) {
-                processCompletion(cqe);
+                // 检查是否是定时器事件（最低位为1）
+                uintptr_t ptr_val = reinterpret_cast<uintptr_t>(user_data);
+                if (ptr_val & 1) {
+                    // 定时器事件
+                    TimerController* timer_ctrl = reinterpret_cast<TimerController*>(ptr_val & ~1UL);
+                    if (timer_ctrl && !timer_ctrl->m_cancelled) {
+                        // 尝试标记为超时
+                        if (timer_ctrl->m_io_controller &&
+                            timer_ctrl->m_io_controller->tryTimeout()) {
+                            // 成功标记超时，唤醒协程
+                            if (timer_ctrl->m_waker) {
+                                timer_ctrl->m_waker->wakeUp();
+                            }
+                        }
+                    }
+                } else {
+                    processCompletion(cqe);
+                }
             }
             ++count;
         }
@@ -388,6 +421,12 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
 {
     IOController* controller = static_cast<IOController*>(io_uring_cqe_get_data(cqe));
     if (!controller) {
+        return;
+    }
+
+    // 关键：尝试标记为完成状态，如果已被超时处理则跳过
+    if (!controller->tryComplete()) {
+        // 已被超时处理，忽略此 IO 事件
         return;
     }
 

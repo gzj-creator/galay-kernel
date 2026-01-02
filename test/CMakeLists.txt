@@ -19,3 +19,8 @@ target_include_directories(test_file_io PRIVATE ${CMAKE_SOURCE_DIR})
 add_executable(test_file_watcher test_file_watcher.cc)
 target_link_libraries(test_file_watcher PRIVATE galay-kernel)
 target_include_directories(test_file_watcher PRIVATE ${CMAKE_SOURCE_DIR})
+
+# Timeout测试
+add_executable(test_timeout test_timeout.cc)
+target_link_libraries(test_timeout PRIVATE galay-kernel)
+target_include_directories(test_timeout PRIVATE ${CMAKE_SOURCE_DIR})
