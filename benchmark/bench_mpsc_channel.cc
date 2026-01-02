@@ -75,45 +75,57 @@ struct TimestampedMessage {
 
 // 简单消费者（吞吐量测试）
 Coroutine simpleConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
-    while (g_received < expected_count) {
+    int64_t received = 0;
+    int64_t sum = 0;
+    while (received < expected_count) {
         auto value = co_await channel->recv();
         if (value) {
-            g_received.fetch_add(1, std::memory_order_relaxed);
-            g_sum.fetch_add(*value, std::memory_order_relaxed);
+            ++received;
+            sum += *value;
         }
     }
+    g_received.store(received, std::memory_order_relaxed);
+    g_sum.store(sum, std::memory_order_relaxed);
     g_consumer_done = true;
     co_return;
 }
 
 // 批量消费者
 Coroutine batchConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
-    while (g_received < expected_count) {
+    int64_t received = 0;
+    int64_t sum = 0;
+    while (received < expected_count) {
         auto batch = co_await channel->recv_batch(256);
         if (batch) {
             for (int64_t v : *batch) {
-                g_sum.fetch_add(v, std::memory_order_relaxed);
+                sum += v;
             }
-            g_received.fetch_add(batch->size(), std::memory_order_relaxed);
+            received += batch->size();
         }
     }
+    g_received.store(received, std::memory_order_relaxed);
+    g_sum.store(sum, std::memory_order_relaxed);
     g_consumer_done = true;
     co_return;
 }
 
 // 延迟测试消费者
 Coroutine latencyConsumer(MpscChannel<TimestampedMessage>* channel, int64_t expected_count) {
-    while (g_received < expected_count) {
+    int64_t received = 0;
+    int64_t latency_sum_ns = 0;
+    while (received < expected_count) {
         auto msg = co_await channel->recv();
         if (msg) {
             auto now = std::chrono::steady_clock::now();
             auto latency_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                 now - msg->send_time).count();
-            g_latency_sum_ns.fetch_add(latency_ns, std::memory_order_relaxed);
-            g_latency_count.fetch_add(1, std::memory_order_relaxed);
-            g_received.fetch_add(1, std::memory_order_relaxed);
+            latency_sum_ns += latency_ns;
+            ++received;
         }
     }
+    g_received.store(received, std::memory_order_relaxed);
+    g_latency_sum_ns.store(latency_sum_ns, std::memory_order_relaxed);
+    g_latency_count.store(received, std::memory_order_relaxed);
     g_consumer_done = true;
     co_return;
 }
@@ -140,8 +152,8 @@ Coroutine correctnessConsumer(MpscChannel<int64_t>* channel, int64_t expected_co
 void singleProducer(MpscChannel<int64_t>* channel, int64_t count) {
     for (int64_t i = 0; i < count; ++i) {
         channel->send(i);
-        g_sent.fetch_add(1, std::memory_order_relaxed);
     }
+    g_sent.store(count, std::memory_order_relaxed);
     g_producer_done = true;
 }
 
@@ -149,8 +161,8 @@ void singleProducer(MpscChannel<int64_t>* channel, int64_t count) {
 void multiProducer(MpscChannel<int64_t>* channel, int64_t start, int64_t count) {
     for (int64_t i = 0; i < count; ++i) {
         channel->send(start + i);
-        g_sent.fetch_add(1, std::memory_order_relaxed);
     }
+    g_sent.fetch_add(count, std::memory_order_relaxed);
 }
 
 // 延迟测试生产者
@@ -160,8 +172,8 @@ void latencyProducer(MpscChannel<TimestampedMessage>* channel, int64_t count) {
         msg.id = i;
         msg.send_time = std::chrono::steady_clock::now();
         channel->send(std::move(msg));
-        g_sent.fetch_add(1, std::memory_order_relaxed);
     }
+    g_sent.store(count, std::memory_order_relaxed);
     g_producer_done = true;
 }
 
@@ -177,18 +189,10 @@ void benchSingleProducerThroughput(int64_t message_count) {
     IOSchedulerType scheduler;
 
     scheduler.start();
+
+    // 正式测试（移除预热，避免状态不同步）
     scheduler.spawn(simpleConsumer(&channel, message_count));
 
-    // 预热
-    for (int i = 0; i < WARMUP_COUNT; ++i) {
-        channel.send(0);
-    }
-    while (g_received < WARMUP_COUNT) {
-        std::this_thread::sleep_for(1ms);
-    }
-    resetCounters();
-
-    // 正式测试
     auto start = std::chrono::steady_clock::now();
 
     std::thread producer([&]() {
