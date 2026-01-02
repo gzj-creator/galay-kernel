@@ -24,3 +24,13 @@ target_include_directories(test_file_watcher PRIVATE ${CMAKE_SOURCE_DIR})
 add_executable(test_timeout test_timeout.cc)
 target_link_libraries(test_timeout PRIVATE galay-kernel)
 target_include_directories(test_timeout PRIVATE ${CMAKE_SOURCE_DIR})
+
+# ComputeScheduler测试
+add_executable(test_compute_scheduler test_compute_scheduler.cc)
+target_link_libraries(test_compute_scheduler PRIVATE galay-kernel)
+target_include_directories(test_compute_scheduler PRIVATE ${CMAKE_SOURCE_DIR})
+
+# Mixed Scheduler测试 (IOScheduler + ComputeScheduler)
+add_executable(test_mixed_scheduler test_mixed_scheduler.cc)
+target_link_libraries(test_mixed_scheduler PRIVATE galay-kernel)
+target_include_directories(test_mixed_scheduler PRIVATE ${CMAKE_SOURCE_DIR})
