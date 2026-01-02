@@ -525,10 +525,6 @@ inline FileWatchEvent operator&(FileWatchEvent a, FileWatchEvent b) {
     return static_cast<FileWatchEvent>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
 }
 
-inline bool hasEvent(FileWatchEvent events, FileWatchEvent check) {
-    return (static_cast<uint32_t>(events) & static_cast<uint32_t>(check)) != 0;
-}
-
 /**
  * @brief 文件监控结果
  */
@@ -536,6 +532,15 @@ struct FileWatchResult {
     FileWatchEvent event;       ///< 触发的事件类型
     std::string name;           ///< 相关文件名（目录监控时有效）
     bool isDir;                 ///< 是否是目录
+
+    /**
+     * @brief 检查是否包含指定事件
+     * @param check 要检查的事件类型
+     * @return 是否包含该事件
+     */
+    bool has(FileWatchEvent check) const {
+        return (static_cast<uint32_t>(event) & static_cast<uint32_t>(check)) != 0;
+    }
 };
 
 /**

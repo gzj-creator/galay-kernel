@@ -41,7 +41,7 @@ using namespace galay::kernel;
  *         auto event = co_await watcher.watch();
  *         if (event) {
  *             // 处理事件
- *             if (hasEvent(event->event, FileWatchEvent::Modify)) {
+ *             if (event->has(FileWatchEvent::Modify)) {
  *                 // 文件被修改
  *             }
  *         }

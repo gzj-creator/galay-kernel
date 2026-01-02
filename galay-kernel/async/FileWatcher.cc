@@ -25,18 +25,19 @@ namespace galay::async
 static uint32_t toInotifyMask(FileWatchEvent events)
 {
     uint32_t mask = 0;
-    if (hasEvent(events, FileWatchEvent::Access))       mask |= IN_ACCESS;
-    if (hasEvent(events, FileWatchEvent::Modify))       mask |= IN_MODIFY;
-    if (hasEvent(events, FileWatchEvent::Attrib))       mask |= IN_ATTRIB;
-    if (hasEvent(events, FileWatchEvent::CloseWrite))   mask |= IN_CLOSE_WRITE;
-    if (hasEvent(events, FileWatchEvent::CloseNoWrite)) mask |= IN_CLOSE_NOWRITE;
-    if (hasEvent(events, FileWatchEvent::Open))         mask |= IN_OPEN;
-    if (hasEvent(events, FileWatchEvent::MovedFrom))    mask |= IN_MOVED_FROM;
-    if (hasEvent(events, FileWatchEvent::MovedTo))      mask |= IN_MOVED_TO;
-    if (hasEvent(events, FileWatchEvent::Create))       mask |= IN_CREATE;
-    if (hasEvent(events, FileWatchEvent::Delete))       mask |= IN_DELETE;
-    if (hasEvent(events, FileWatchEvent::DeleteSelf))   mask |= IN_DELETE_SELF;
-    if (hasEvent(events, FileWatchEvent::MoveSelf))     mask |= IN_MOVE_SELF;
+    uint32_t e = static_cast<uint32_t>(events);
+    if (e & static_cast<uint32_t>(FileWatchEvent::Access))       mask |= IN_ACCESS;
+    if (e & static_cast<uint32_t>(FileWatchEvent::Modify))       mask |= IN_MODIFY;
+    if (e & static_cast<uint32_t>(FileWatchEvent::Attrib))       mask |= IN_ATTRIB;
+    if (e & static_cast<uint32_t>(FileWatchEvent::CloseWrite))   mask |= IN_CLOSE_WRITE;
+    if (e & static_cast<uint32_t>(FileWatchEvent::CloseNoWrite)) mask |= IN_CLOSE_NOWRITE;
+    if (e & static_cast<uint32_t>(FileWatchEvent::Open))         mask |= IN_OPEN;
+    if (e & static_cast<uint32_t>(FileWatchEvent::MovedFrom))    mask |= IN_MOVED_FROM;
+    if (e & static_cast<uint32_t>(FileWatchEvent::MovedTo))      mask |= IN_MOVED_TO;
+    if (e & static_cast<uint32_t>(FileWatchEvent::Create))       mask |= IN_CREATE;
+    if (e & static_cast<uint32_t>(FileWatchEvent::Delete))       mask |= IN_DELETE;
+    if (e & static_cast<uint32_t>(FileWatchEvent::DeleteSelf))   mask |= IN_DELETE_SELF;
+    if (e & static_cast<uint32_t>(FileWatchEvent::MoveSelf))     mask |= IN_MOVE_SELF;
     return mask;
 }
 #endif

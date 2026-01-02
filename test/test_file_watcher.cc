@@ -47,34 +47,34 @@ Coroutine watchFileCoroutine(IOScheduler* scheduler, const std::string& path)
 
         std::cout << "[Event] ";
 
-        if (hasEvent(event->event, FileWatchEvent::Access)) {
+        if (event->has(FileWatchEvent::Access)) {
             std::cout << "Access ";
         }
-        if (hasEvent(event->event, FileWatchEvent::Modify)) {
+        if (event->has(FileWatchEvent::Modify)) {
             std::cout << "Modify ";
         }
-        if (hasEvent(event->event, FileWatchEvent::Attrib)) {
+        if (event->has(FileWatchEvent::Attrib)) {
             std::cout << "Attrib ";
         }
-        if (hasEvent(event->event, FileWatchEvent::CloseWrite)) {
+        if (event->has(FileWatchEvent::CloseWrite)) {
             std::cout << "CloseWrite ";
         }
-        if (hasEvent(event->event, FileWatchEvent::CloseNoWrite)) {
+        if (event->has(FileWatchEvent::CloseNoWrite)) {
             std::cout << "CloseNoWrite ";
         }
-        if (hasEvent(event->event, FileWatchEvent::Open)) {
+        if (event->has(FileWatchEvent::Open)) {
             std::cout << "Open ";
         }
-        if (hasEvent(event->event, FileWatchEvent::Create)) {
+        if (event->has(FileWatchEvent::Create)) {
             std::cout << "Create ";
         }
-        if (hasEvent(event->event, FileWatchEvent::Delete)) {
+        if (event->has(FileWatchEvent::Delete)) {
             std::cout << "Delete ";
         }
-        if (hasEvent(event->event, FileWatchEvent::DeleteSelf)) {
+        if (event->has(FileWatchEvent::DeleteSelf)) {
             std::cout << "DeleteSelf ";
         }
-        if (hasEvent(event->event, FileWatchEvent::MoveSelf)) {
+        if (event->has(FileWatchEvent::MoveSelf)) {
             std::cout << "MoveSelf ";
         }
 
