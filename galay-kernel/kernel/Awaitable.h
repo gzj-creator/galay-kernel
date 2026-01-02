@@ -331,6 +331,13 @@ struct RecvFromAwaitable {
     Host* m_from;                              ///< 发送方地址输出
     Waker m_waker;                             ///< 协程唤醒器
     std::expected<Bytes, IOError> m_result;    ///< 操作结果
+
+#ifdef USE_IOURING
+    // io_uring 需要的持久化结构体
+    struct msghdr m_msg;                       ///< msghdr 结构体（io_uring 使用）
+    struct iovec m_iov;                        ///< iovec 结构体（io_uring 使用）
+    sockaddr_storage m_addr;                   ///< 地址存储（io_uring 使用）
+#endif
 };
 
 /**
@@ -384,6 +391,12 @@ struct SendToAwaitable {
     Host m_to;                                  ///< 目标地址
     Waker m_waker;                              ///< 协程唤醒器
     std::expected<size_t, IOError> m_result;    ///< 操作结果
+
+#ifdef USE_IOURING
+    // io_uring 需要的持久化结构体
+    struct msghdr m_msg;                        ///< msghdr 结构体（io_uring 使用）
+    struct iovec m_iov;                         ///< iovec 结构体（io_uring 使用）
+#endif
 };
 
 /**

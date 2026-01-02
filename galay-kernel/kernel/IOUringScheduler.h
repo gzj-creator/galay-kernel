@@ -27,6 +27,10 @@
 #define GALAY_SCHEDULER_BATCH_SIZE 256
 #endif
 
+#ifndef GALAY_IOURING_WAIT_TIMEOUT_NS
+#define GALAY_IOURING_WAIT_TIMEOUT_NS 10000000  // 10ms
+#endif
+
 namespace galay::kernel
 {
 
@@ -68,6 +72,7 @@ private:
     int m_queue_depth;
     int m_batch_size;
     int m_event_fd;
+    uint64_t m_eventfd_buf;  // eventfd 读取缓冲区
 
     moodycamel::ConcurrentQueue<Coroutine> m_coro_queue;
     std::vector<Coroutine> m_coro_buffer;
