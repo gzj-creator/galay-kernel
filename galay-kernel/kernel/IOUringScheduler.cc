@@ -2,6 +2,7 @@
 #include "Scheduler.h"
 #include "common/Defn.hpp"
 #include "common/Error.h"
+#include "common/Log.h"
 
 #ifdef USE_IOURING
 
@@ -30,14 +31,23 @@ IOUringScheduler::IOUringScheduler(int queue_depth, int batch_size)
 
     struct io_uring_params params;
     std::memset(&params, 0, sizeof(params));
+    // 注意：不能使用 IORING_SETUP_SINGLE_ISSUER，因为协程的 await_suspend
+    // 可能在用户线程中调用 io_uring_get_sqe()，而 io_uring_submit() 在事件循环线程中调用
+    // SINGLE_ISSUER 要求所有操作必须在同一个线程，否则会返回 -EEXIST
     params.flags = IORING_SETUP_SQPOLL | IORING_SETUP_COOP_TASKRUN;
-    params.sq_thread_idle = 1000;
+    params.sq_thread_idle = 1000;  // 内核线程空闲 1 秒后休眠
 
     if (io_uring_queue_init_params(m_queue_depth, &m_ring, &params) < 0) {
+        // 降级：不使用 SQPOLL
         std::memset(&params, 0, sizeof(params));
+        params.flags = IORING_SETUP_COOP_TASKRUN;
         if (io_uring_queue_init_params(m_queue_depth, &m_ring, &params) < 0) {
-            close(m_event_fd);
-            throw std::runtime_error("Failed to initialize io_uring");
+            // 最后降级：使用默认配置
+            std::memset(&params, 0, sizeof(params));
+            if (io_uring_queue_init_params(m_queue_depth, &m_ring, &params) < 0) {
+                close(m_event_fd);
+                throw std::runtime_error("Failed to initialize io_uring");
+            }
         }
     }
 
@@ -79,15 +89,9 @@ void IOUringScheduler::stop()
 
 void IOUringScheduler::notify()
 {
+    // 使用 eventfd 唤醒事件循环，避免多线程竞争 io_uring
     uint64_t val = 1;
     write(m_event_fd, &val, sizeof(val));
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (sqe) {
-        io_uring_prep_nop(sqe);
-        io_uring_sqe_set_data(sqe, nullptr);
-        io_uring_submit(&m_ring);
-    }
 }
 
 int IOUringScheduler::addAccept(IOController* controller)
@@ -103,7 +107,7 @@ int IOUringScheduler::addAccept(IOController* controller)
                          awaitable->m_host->sockAddr(),
                          awaitable->m_host->addrLen(), 0);
     io_uring_sqe_set_data(sqe, controller);
-    io_uring_submit(&m_ring);
+    // SQE 已准备，由事件循环统一调用 io_uring_submit() 批量提交
     return 0;
 }
 
@@ -120,7 +124,7 @@ int IOUringScheduler::addConnect(IOController* controller)
                           awaitable->m_host.sockAddr(),
                           *awaitable->m_host.addrLen());
     io_uring_sqe_set_data(sqe, controller);
-    io_uring_submit(&m_ring);
+    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
@@ -136,7 +140,7 @@ int IOUringScheduler::addRecv(IOController* controller)
     io_uring_prep_recv(sqe, awaitable->m_handle.fd,
                        awaitable->m_buffer, awaitable->m_length, 0);
     io_uring_sqe_set_data(sqe, controller);
-    io_uring_submit(&m_ring);
+    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
@@ -152,7 +156,7 @@ int IOUringScheduler::addSend(IOController* controller)
     io_uring_prep_send(sqe, awaitable->m_handle.fd,
                        awaitable->m_buffer, awaitable->m_length, 0);
     io_uring_sqe_set_data(sqe, controller);
-    io_uring_submit(&m_ring);
+    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
@@ -166,7 +170,7 @@ int IOUringScheduler::addClose(int fd)
 
     io_uring_prep_close(sqe, fd);
     io_uring_sqe_set_data(sqe, nullptr);
-    io_uring_submit(&m_ring);
+    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
@@ -183,7 +187,7 @@ int IOUringScheduler::addFileRead(IOController* controller)
     io_uring_prep_read(sqe, awaitable->m_handle.fd,
                        awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
     io_uring_sqe_set_data(sqe, controller);
-    io_uring_submit(&m_ring);
+    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
@@ -200,7 +204,7 @@ int IOUringScheduler::addFileWrite(IOController* controller)
     io_uring_prep_write(sqe, awaitable->m_handle.fd,
                         awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
     io_uring_sqe_set_data(sqe, controller);
-    io_uring_submit(&m_ring);
+    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
@@ -213,25 +217,21 @@ int IOUringScheduler::addRecvFrom(IOController* controller)
         return -EAGAIN;
     }
 
-    // 使用 recvmsg 来接收 UDP 数据报和源地址
-    struct msghdr msg;
-    struct iovec iov;
-    sockaddr_storage addr;
+    // 使用 awaitable 中的持久化结构体
+    std::memset(&awaitable->m_msg, 0, sizeof(awaitable->m_msg));
+    std::memset(&awaitable->m_addr, 0, sizeof(awaitable->m_addr));
 
-    std::memset(&msg, 0, sizeof(msg));
-    std::memset(&addr, 0, sizeof(addr));
+    awaitable->m_iov.iov_base = awaitable->m_buffer;
+    awaitable->m_iov.iov_len = awaitable->m_length;
 
-    iov.iov_base = awaitable->m_buffer;
-    iov.iov_len = awaitable->m_length;
+    awaitable->m_msg.msg_iov = &awaitable->m_iov;
+    awaitable->m_msg.msg_iovlen = 1;
+    awaitable->m_msg.msg_name = &awaitable->m_addr;
+    awaitable->m_msg.msg_namelen = sizeof(awaitable->m_addr);
 
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    msg.msg_name = &addr;
-    msg.msg_namelen = sizeof(addr);
-
-    io_uring_prep_recvmsg(sqe, awaitable->m_handle.fd, &msg, 0);
+    io_uring_prep_recvmsg(sqe, awaitable->m_handle.fd, &awaitable->m_msg, 0);
     io_uring_sqe_set_data(sqe, controller);
-    io_uring_submit(&m_ring);
+    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
@@ -244,23 +244,20 @@ int IOUringScheduler::addSendTo(IOController* controller)
         return -EAGAIN;
     }
 
-    // 使用 sendmsg 来发送 UDP 数据报到指定地址
-    struct msghdr msg;
-    struct iovec iov;
+    // 使用 awaitable 中的持久化结构体
+    std::memset(&awaitable->m_msg, 0, sizeof(awaitable->m_msg));
 
-    std::memset(&msg, 0, sizeof(msg));
+    awaitable->m_iov.iov_base = const_cast<char*>(awaitable->m_buffer);
+    awaitable->m_iov.iov_len = awaitable->m_length;
 
-    iov.iov_base = const_cast<char*>(awaitable->m_buffer);
-    iov.iov_len = awaitable->m_length;
+    awaitable->m_msg.msg_iov = &awaitable->m_iov;
+    awaitable->m_msg.msg_iovlen = 1;
+    awaitable->m_msg.msg_name = const_cast<sockaddr*>(awaitable->m_to.sockAddr());
+    awaitable->m_msg.msg_namelen = *awaitable->m_to.addrLen();
 
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    msg.msg_name = const_cast<sockaddr*>(awaitable->m_to.sockAddr());
-    msg.msg_namelen = awaitable->m_to.addrLen();
-
-    io_uring_prep_sendmsg(sqe, awaitable->m_handle.fd, &msg, 0);
+    io_uring_prep_sendmsg(sqe, awaitable->m_handle.fd, &awaitable->m_msg, 0);
     io_uring_sqe_set_data(sqe, controller);
-    io_uring_submit(&m_ring);
+    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
@@ -273,7 +270,7 @@ int IOUringScheduler::remove(int fd)
 
     io_uring_prep_cancel_fd(sqe, fd, 0);
     io_uring_sqe_set_data(sqe, nullptr);
-    io_uring_submit(&m_ring);
+    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
@@ -300,27 +297,71 @@ void IOUringScheduler::processPendingCoroutines()
 void IOUringScheduler::eventLoop()
 {
     struct io_uring_cqe* cqe;
+    struct __kernel_timespec timeout;
+    timeout.tv_sec = 0;
+    timeout.tv_nsec = GALAY_IOURING_WAIT_TIMEOUT_NS;
+
+    // 添加 eventfd 到 io_uring 监听（SQPOLL 会自动提交）
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    if (sqe) {
+        io_uring_prep_read(sqe, m_event_fd, &m_eventfd_buf, sizeof(m_eventfd_buf), 0);
+        io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(-1)); // 特殊标记
+    }
 
     while (m_running.load(std::memory_order_acquire)) {
+        // 1. 处理待执行的协程
         processPendingCoroutines();
 
-        int ret = io_uring_wait_cqe_timeout(&m_ring, &cqe, nullptr);
+        // 2. 提交所有待处理的 SQE
+        // 即使在 SQPOLL 模式下，也需要调用 io_uring_submit() 来更新 SQ tail 指针
+        // 让内核线程能看到新的 SQE。io_uring_submit() 会自动检查 NEED_WAKEUP 标志
+        // 并在需要时唤醒内核线程，不会产生不必要的系统调用
+        int submitted = io_uring_submit(&m_ring);
+        if (submitted < 0 && submitted != -EBUSY) {
+            LogError("io_uring_submit failed: {}", submitted);
+        }
+
+        // 3. 等待完成事件（带超时）
+        int ret = io_uring_wait_cqe_timeout(&m_ring, &cqe, &timeout);
         if (ret < 0) {
             if (ret == -EINTR || ret == -ETIME) {
+                // 超时或被中断，继续循环检查协程队列
                 continue;
             }
+            LogError("io_uring_wait_cqe_timeout failed: {}", ret);
             break;
         }
 
+        // 4. 批量收割所有完成事件
         unsigned head;
         unsigned count = 0;
+        bool eventfd_triggered = false;
+
         io_uring_for_each_cqe(&m_ring, head, cqe) {
-            processCompletion(cqe);
+            void* user_data = io_uring_cqe_get_data(cqe);
+
+            // 检查是否是 eventfd 事件
+            if (user_data == reinterpret_cast<void*>(-1)) {
+                // eventfd 被触发，数据已经被 io_uring 读取到 m_eventfd_buf
+                // 标记需要重新提交监听
+                eventfd_triggered = true;
+            } else if (user_data != nullptr) {
+                processCompletion(cqe);
+            }
             ++count;
         }
 
         if (count > 0) {
             io_uring_cq_advance(&m_ring, count);
+        }
+
+        // 5. 如果 eventfd 被触发，重新提交监听（SQPOLL 会自动提交）
+        if (eventfd_triggered) {
+            struct io_uring_sqe* new_sqe = io_uring_get_sqe(&m_ring);
+            if (new_sqe) {
+                io_uring_prep_read(new_sqe, m_event_fd, &m_eventfd_buf, sizeof(m_eventfd_buf), 0);
+                io_uring_sqe_set_data(new_sqe, reinterpret_cast<void*>(-1));
+            }
         }
     }
 }
@@ -415,8 +456,10 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         if (res > 0) {
             Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
             awaitable->m_result = std::move(bytes);
-            // 注意：io_uring的recvmsg需要在awaitable中保存msghdr结构来获取源地址
-            // 这里需要从msghdr中提取地址信息
+            // 从 msghdr 中提取源地址信息
+            if (awaitable->m_from) {
+                *awaitable->m_from = Host::fromSockAddr(awaitable->m_addr);
+            }
         } else if (res == 0) {
             awaitable->m_result = std::unexpected(IOError(kRecvFailed, 0));
         } else {
