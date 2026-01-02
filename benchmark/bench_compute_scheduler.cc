@@ -5,7 +5,7 @@
  * 测试项目：
  * 1. 吞吐量：每秒可处理的协程数
  * 2. 延迟：协程从提交到执行的延迟
- * 3. 扩展性：不同线程数下的性能
+ * 3. 扩展性：不同调度器数量下的性能
  */
 
 #include <iostream>
@@ -15,6 +15,7 @@
 #include <cmath>
 #include <iomanip>
 #include <thread>
+#include <memory>
 #include "galay-kernel/kernel/ComputeScheduler.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/common/Log.h"
@@ -79,6 +80,42 @@ Coroutine latencyTask(int index) {
     co_return;
 }
 
+// ============== 多调度器管理器 ==============
+class SchedulerPool {
+public:
+    explicit SchedulerPool(int count) : m_count(count), m_next(0) {
+        m_schedulers.reserve(count);
+        for (int i = 0; i < count; ++i) {
+            m_schedulers.push_back(std::make_unique<ComputeScheduler>());
+        }
+    }
+
+    void start() {
+        for (auto& s : m_schedulers) {
+            s->start();
+        }
+    }
+
+    void stop() {
+        for (auto& s : m_schedulers) {
+            s->stop();
+        }
+    }
+
+    void spawn(Coroutine coro) {
+        // 轮询分发
+        int idx = m_next.fetch_add(1, std::memory_order_relaxed) % m_count;
+        m_schedulers[idx]->spawn(std::move(coro));
+    }
+
+    int count() const { return m_count; }
+
+private:
+    int m_count;
+    std::atomic<int> m_next;
+    std::vector<std::unique_ptr<ComputeScheduler>> m_schedulers;
+};
+
 // ============== 压测函数 ==============
 
 void resetCounters() {
@@ -88,16 +125,16 @@ void resetCounters() {
 }
 
 // 吞吐量测试
-void benchThroughput(const std::string& name, int thread_count, int task_count,
+void benchThroughput(const std::string& name, int scheduler_count, int task_count,
                      std::function<Coroutine()> task_factory) {
     resetCounters();
 
-    ComputeScheduler scheduler(thread_count);
-    scheduler.start();
+    SchedulerPool pool(scheduler_count);
+    pool.start();
 
     // 预热
     for (int i = 0; i < WARMUP_COUNT; ++i) {
-        scheduler.spawn(task_factory());
+        pool.spawn(task_factory());
     }
     while (g_completed < WARMUP_COUNT) {
         std::this_thread::sleep_for(1ms);
@@ -108,7 +145,7 @@ void benchThroughput(const std::string& name, int thread_count, int task_count,
     auto start = std::chrono::steady_clock::now();
 
     for (int i = 0; i < task_count; ++i) {
-        scheduler.spawn(task_factory());
+        pool.spawn(task_factory());
     }
 
     // 等待所有任务完成
@@ -120,24 +157,24 @@ void benchThroughput(const std::string& name, int thread_count, int task_count,
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
     double throughput = (double)task_count / ms * 1000.0;
 
-    scheduler.stop();
+    pool.stop();
 
-    LogInfo("[{}] threads={}, tasks={}, time={}ms, throughput={:.0f} tasks/sec",
-            name, thread_count, task_count, ms, throughput);
+    LogInfo("[{}] schedulers={}, tasks={}, time={}ms, throughput={:.0f} tasks/sec",
+            name, scheduler_count, task_count, ms, throughput);
 }
 
 // 延迟测试
-void benchLatency(int thread_count, int task_count) {
+void benchLatency(int scheduler_count, int task_count) {
     resetCounters();
     g_latency_tasks.clear();
     g_latency_tasks.resize(task_count);
 
-    ComputeScheduler scheduler(thread_count);
-    scheduler.start();
+    SchedulerPool pool(scheduler_count);
+    pool.start();
 
     // 预热
     for (int i = 0; i < WARMUP_COUNT; ++i) {
-        scheduler.spawn(emptyTask());
+        pool.spawn(emptyTask());
     }
     while (g_completed < WARMUP_COUNT) {
         std::this_thread::sleep_for(1ms);
@@ -147,7 +184,7 @@ void benchLatency(int thread_count, int task_count) {
     // 正式测试
     for (int i = 0; i < task_count; ++i) {
         g_latency_tasks[i].submit_time = std::chrono::steady_clock::now();
-        scheduler.spawn(latencyTask(i));
+        pool.spawn(latencyTask(i));
     }
 
     // 等待所有任务完成
@@ -155,33 +192,33 @@ void benchLatency(int thread_count, int task_count) {
         std::this_thread::sleep_for(1ms);
     }
 
-    scheduler.stop();
+    pool.stop();
 
     double avg_latency_us = (double)g_latency_sum / g_latency_count / 1000.0;
 
-    LogInfo("[Latency] threads={}, tasks={}, avg_latency={:.2f}us",
-            thread_count, task_count, avg_latency_us);
+    LogInfo("[Latency] schedulers={}, tasks={}, avg_latency={:.2f}us",
+            scheduler_count, task_count, avg_latency_us);
 }
 
 // 扩展性测试
 void benchScalability() {
     LogInfo("--- Scalability Test (heavy compute tasks) ---");
 
-    std::vector<int> thread_counts = {1, 2, 4, 8};
+    std::vector<int> scheduler_counts = {1, 2, 4, 8};
     int task_count = 1000;
 
     double baseline_throughput = 0;
 
-    for (int threads : thread_counts) {
+    for (int schedulers : scheduler_counts) {
         resetCounters();
 
-        ComputeScheduler scheduler(threads);
-        scheduler.start();
+        SchedulerPool pool(schedulers);
+        pool.start();
 
         auto start = std::chrono::steady_clock::now();
 
         for (int i = 0; i < task_count; ++i) {
-            scheduler.spawn(heavyComputeTask());
+            pool.spawn(heavyComputeTask());
         }
 
         while (g_completed < task_count) {
@@ -192,27 +229,27 @@ void benchScalability() {
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
         double throughput = (double)task_count / ms * 1000.0;
 
-        scheduler.stop();
+        pool.stop();
 
-        if (threads == 1) {
+        if (schedulers == 1) {
             baseline_throughput = throughput;
         }
 
         double speedup = throughput / baseline_throughput;
 
-        LogInfo("  threads={}: time={}ms, throughput={:.0f}/s, speedup={:.2f}x",
-                threads, ms, throughput, speedup);
+        LogInfo("  schedulers={}: time={}ms, throughput={:.0f}/s, speedup={:.2f}x",
+                schedulers, ms, throughput, speedup);
     }
 }
 
 // 持续压力测试
-void benchSustained(int thread_count, int duration_sec) {
+void benchSustained(int scheduler_count, int duration_sec) {
     LogInfo("--- Sustained Load Test ({}s) ---", duration_sec);
 
     resetCounters();
 
-    ComputeScheduler scheduler(thread_count);
-    scheduler.start();
+    SchedulerPool pool(scheduler_count);
+    pool.start();
 
     auto start = std::chrono::steady_clock::now();
     auto end_time = start + std::chrono::seconds(duration_sec);
@@ -222,7 +259,7 @@ void benchSustained(int thread_count, int duration_sec) {
     // 生产者线程
     std::thread producer([&]() {
         while (running) {
-            scheduler.spawn(lightComputeTask());
+            pool.spawn(lightComputeTask());
             // 控制提交速率
             if (g_completed < 10000) {
                 continue;
@@ -246,7 +283,7 @@ void benchSustained(int thread_count, int duration_sec) {
 
     // 等待剩余任务完成
     std::this_thread::sleep_for(100ms);
-    scheduler.stop();
+    pool.stop();
 
     auto elapsed = std::chrono::steady_clock::now() - start;
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
@@ -257,36 +294,36 @@ void benchSustained(int thread_count, int duration_sec) {
 }
 
 int main(int argc, char* argv[]) {
-    int thread_count = std::thread::hardware_concurrency();
+    int scheduler_count = std::thread::hardware_concurrency();
     if (argc > 1) {
-        thread_count = std::atoi(argv[1]);
+        scheduler_count = std::atoi(argv[1]);
     }
 
     LogInfo("=== ComputeScheduler Benchmark ===");
-    LogInfo("CPU cores: {}, using {} threads", std::thread::hardware_concurrency(), thread_count);
+    LogInfo("CPU cores: {}, using {} schedulers", std::thread::hardware_concurrency(), scheduler_count);
     LogInfo("");
 
     // 1. 吞吐量测试 - 空任务
     LogInfo("--- Throughput Test (empty tasks) ---");
-    benchThroughput("Empty", thread_count, THROUGHPUT_TASKS, emptyTask);
+    benchThroughput("Empty", scheduler_count, THROUGHPUT_TASKS, emptyTask);
 
     LogInfo("");
 
     // 2. 吞吐量测试 - 轻量计算
     LogInfo("--- Throughput Test (light compute) ---");
-    benchThroughput("Light", thread_count, THROUGHPUT_TASKS, lightComputeTask);
+    benchThroughput("Light", scheduler_count, THROUGHPUT_TASKS, lightComputeTask);
 
     LogInfo("");
 
     // 3. 吞吐量测试 - 重计算
     LogInfo("--- Throughput Test (heavy compute) ---");
-    benchThroughput("Heavy", thread_count, 10000, heavyComputeTask);
+    benchThroughput("Heavy", scheduler_count, 10000, heavyComputeTask);
 
     LogInfo("");
 
     // 4. 延迟测试
     LogInfo("--- Latency Test ---");
-    benchLatency(thread_count, LATENCY_TASKS);
+    benchLatency(scheduler_count, LATENCY_TASKS);
 
     LogInfo("");
 
@@ -296,7 +333,7 @@ int main(int argc, char* argv[]) {
     LogInfo("");
 
     // 6. 持续压力测试
-    benchSustained(thread_count, 5);
+    benchSustained(scheduler_count, 5);
 
     LogInfo("");
     LogInfo("=== Benchmark Complete ===");

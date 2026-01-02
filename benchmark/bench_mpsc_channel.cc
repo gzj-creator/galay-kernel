@@ -95,7 +95,7 @@ Coroutine batchConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
     int64_t received = 0;
     int64_t sum = 0;
     while (received < expected_count) {
-        auto batch = co_await channel->recv_batch(256);
+        auto batch = co_await channel->recvBatch(256);
         if (batch) {
             for (int64_t v : *batch) {
                 sum += v;

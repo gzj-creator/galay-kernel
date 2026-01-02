@@ -34,3 +34,13 @@ target_include_directories(test_compute_scheduler PRIVATE ${CMAKE_SOURCE_DIR})
 add_executable(test_mixed_scheduler test_mixed_scheduler.cc)
 target_link_libraries(test_mixed_scheduler PRIVATE galay-kernel)
 target_include_directories(test_mixed_scheduler PRIVATE ${CMAKE_SOURCE_DIR})
+
+# AsyncMutex测试
+add_executable(test_async_mutex test_async_mutex.cc)
+target_link_libraries(test_async_mutex PRIVATE galay-kernel)
+target_include_directories(test_async_mutex PRIVATE ${CMAKE_SOURCE_DIR})
+
+# MpscChannel测试
+add_executable(test_mpsc_channel test_mpsc_channel.cc)
+target_link_libraries(test_mpsc_channel PRIVATE galay-kernel)
+target_include_directories(test_mpsc_channel PRIVATE ${CMAKE_SOURCE_DIR})

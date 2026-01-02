@@ -4,12 +4,12 @@
  * @author galay-kernel
  * @version 1.0.0
  *
- * @details 基于线程池的计算任务调度器，用于处理 CPU 密集型任务。
+ * @details 基于单线程的计算任务调度器，用于处理 CPU 密集型任务。
  * 不涉及 IO 事件驱动，纯粹用于协程的计算任务调度。
  *
  * 使用方式：
  * @code
- * ComputeScheduler scheduler(4);  // 4 个工作线程
+ * ComputeScheduler scheduler;
  * scheduler.start();
  * scheduler.spawn(myComputeCoroutine());
  * // ...
@@ -22,7 +22,6 @@
 
 #include "Coroutine.h"
 #include "Scheduler.h"
-#include <vector>
 #include <thread>
 #include <atomic>
 #include <concurrentqueue/moodycamel/blockingconcurrentqueue.h>
@@ -44,9 +43,9 @@ struct ComputeTask {
 /**
  * @brief 计算任务调度器
  *
- * @details 基于线程池实现，适用于 CPU 密集型计算任务。
+ * @details 基于单线程实现，适用于 CPU 密集型计算任务。
  * 特点：
- * - 多线程并行执行协程
+ * - 单线程执行协程
  * - BlockingConcurrentQueue 实现高效阻塞等待
  * - 计算完成后自动 spawn 回原调度器
  *
@@ -57,9 +56,8 @@ class ComputeScheduler : public Scheduler
 public:
     /**
      * @brief 构造函数
-     * @param thread_count 工作线程数量，默认为 CPU 核心数
      */
-    explicit ComputeScheduler(size_t thread_count = std::thread::hardware_concurrency());
+    ComputeScheduler();
 
     /**
      * @brief 析构函数
@@ -79,7 +77,7 @@ public:
 
     /**
      * @brief 停止调度器
-     * @note 等待所有工作线程结束
+     * @note 等待工作线程结束
      */
     void stop();
 
@@ -89,12 +87,6 @@ public:
      * @note 计算完成后会自动 spawn 回协程原来的调度器
      */
     void spawn(Coroutine coro) override;
-
-    /**
-     * @brief 获取工作线程数量
-     * @return 线程数量
-     */
-    size_t threadCount() const { return m_thread_count; }
 
     /**
      * @brief 检查调度器是否正在运行
@@ -109,8 +101,7 @@ private:
     void workerLoop();
 
 private:
-    size_t m_thread_count;                                      ///< 工作线程数量
-    std::vector<std::thread> m_threads;                         ///< 工作线程
+    std::thread m_thread;                                       ///< 工作线程
     std::atomic<bool> m_running{false};                         ///< 运行状态
 
     moodycamel::BlockingConcurrentQueue<ComputeTask> m_queue;   ///< 任务队列（阻塞）

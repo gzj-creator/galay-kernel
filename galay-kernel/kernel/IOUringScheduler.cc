@@ -72,6 +72,7 @@ void IOUringScheduler::start()
     }
 
     m_thread = std::thread([this]() {
+        m_threadId = std::this_thread::get_id();  // 设置调度器线程ID
         eventLoop();
     });
 }
@@ -322,6 +323,7 @@ void IOUringScheduler::spawn(Coroutine coro)
     // 如果协程未绑定 scheduler，绑定到当前 scheduler
     if (!coro.belongScheduler()) {
         coro.belongScheduler(this);
+        coro.threadId(m_threadId);
     }
     m_coro_queue.enqueue(std::move(coro));
     notify();

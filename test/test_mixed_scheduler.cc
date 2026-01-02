@@ -8,7 +8,7 @@
 #include <chrono>
 #include <thread>
 #include "galay-kernel/kernel/ComputeScheduler.h"
-#include "galay-kernel/kernel/AsyncWaiter.h"
+#include "galay-kernel/concurrency/AsyncWaiter.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/common/Log.h"
 
@@ -304,7 +304,7 @@ void runTests() {
         g_total++;
 
         IOSchedulerType ioScheduler;
-        ComputeScheduler computeScheduler(2);
+        ComputeScheduler computeScheduler;
 
         ioScheduler.start();
         computeScheduler.start();
@@ -337,7 +337,7 @@ void runTests() {
         g_total++;
 
         IOSchedulerType ioScheduler;
-        ComputeScheduler computeScheduler(4);
+        ComputeScheduler computeScheduler;
 
         ioScheduler.start();
         computeScheduler.start();
@@ -371,7 +371,7 @@ void runTests() {
         LogInfo("[Test 3] Pure ComputeScheduler tasks (20 tasks)...");
         g_total++;
 
-        ComputeScheduler computeScheduler(4);
+        ComputeScheduler computeScheduler;
         computeScheduler.start();
 
         for (int i = 0; i < 20; ++i) {
@@ -402,7 +402,7 @@ void runTests() {
         g_total++;
 
         IOSchedulerType ioScheduler;
-        ComputeScheduler computeScheduler(2);
+        ComputeScheduler computeScheduler;
 
         ioScheduler.start();
         computeScheduler.start();
@@ -434,7 +434,7 @@ void runTests() {
         g_total++;
 
         IOSchedulerType ioScheduler;
-        ComputeScheduler computeScheduler(2);
+        ComputeScheduler computeScheduler;
 
         ioScheduler.start();
         computeScheduler.start();
@@ -467,7 +467,7 @@ void runTests() {
         g_total++;
 
         IOSchedulerType ioScheduler;
-        ComputeScheduler computeScheduler(8);
+        ComputeScheduler computeScheduler;
 
         ioScheduler.start();
         computeScheduler.start();
@@ -502,7 +502,7 @@ void runTests() {
         g_total++;
 
         IOSchedulerType ioScheduler;
-        ComputeScheduler computeScheduler(2);
+        ComputeScheduler computeScheduler;
 
         ioScheduler.start();
         computeScheduler.start();
@@ -534,7 +534,7 @@ void runTests() {
         g_total++;
 
         IOSchedulerType ioScheduler;
-        ComputeScheduler computeScheduler(2);
+        ComputeScheduler computeScheduler;
 
         ioScheduler.start();
         computeScheduler.start();
@@ -566,7 +566,7 @@ void runTests() {
         g_total++;
 
         IOSchedulerType ioScheduler;
-        ComputeScheduler computeScheduler(2);
+        ComputeScheduler computeScheduler;
 
         ioScheduler.start();
         computeScheduler.start();
@@ -598,8 +598,8 @@ void runTests() {
         g_total++;
 
         IOSchedulerType ioScheduler;
-        ComputeScheduler computeScheduler1(2);
-        ComputeScheduler computeScheduler2(2);
+        ComputeScheduler computeScheduler1;
+        ComputeScheduler computeScheduler2;
 
         ioScheduler.start();
         computeScheduler1.start();
@@ -634,7 +634,7 @@ void runTests() {
         LogInfo("[Test 11] Tasks completion during scheduler stop...");
         g_total++;
 
-        ComputeScheduler computeScheduler(4);
+        ComputeScheduler computeScheduler;
         computeScheduler.start();
 
         // 提交多个任务

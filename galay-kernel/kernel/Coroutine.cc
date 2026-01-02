@@ -111,6 +111,16 @@ void Coroutine::belongScheduler(Scheduler* scheduler)
     m_data->m_scheduler = scheduler;
 }
 
+std::thread::id Coroutine::threadId() const
+{
+    return m_data->m_threadId;
+}
+
+void Coroutine::threadId(std::thread::id id)
+{
+    m_data->m_threadId = id;
+}
+
 WaitResult Coroutine::wait()
 {
     return WaitResult(*this);

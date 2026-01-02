@@ -18,6 +18,7 @@
 
 #include "galay-kernel/common/Defn.hpp"
 #include <chrono>
+#include <thread>
 
 #ifdef USE_IOURING
 #include <linux/time_types.h>
@@ -72,6 +73,12 @@ public:
      */
     virtual void spawn(Coroutine co) = 0;
 
+    /**
+     * @brief 获取调度器所属线程ID
+     * @return 线程ID
+     */
+    std::thread::id threadId() const { return m_threadId; }
+
 protected:
     /**
      * @brief 恢复协程执行
@@ -79,6 +86,8 @@ protected:
      * @note 仅供调度器内部使用
      */
     void resume(Coroutine& co);
+
+    std::thread::id m_threadId;  ///< 调度器所属线程ID，在 start() 时设置
 };
 
 /**

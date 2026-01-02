@@ -30,6 +30,7 @@
 #include <atomic>
 #include <coroutine>
 #include <memory>
+#include <thread>
 
 namespace galay::kernel
 {
@@ -70,6 +71,9 @@ public:
     friend class PromiseType;
     friend class Waker;
     friend class Scheduler;
+
+    template <typename T>
+    friend class MpscChannel;  // MpscChannel 需要访问 resume()
 
     /**
      * @brief 默认构造函数
@@ -160,6 +164,18 @@ public:
      */
     void belongScheduler(Scheduler* scheduler);
 
+    /**
+     * @brief 获取所属线程ID
+     * @return 线程ID
+     */
+    std::thread::id threadId() const;
+
+    /**
+     * @brief 设置所属线程ID
+     * @param id 线程ID
+     */
+    void threadId(std::thread::id id);
+
 private:
     /**
      * @brief 修改状态为挂起
@@ -236,6 +252,7 @@ struct alignas(64) CoroutineData
     std::atomic<CoroutineStatus> m_status = CoroutineStatus::Suspended;  ///< 协程状态
     std::coroutine_handle<Coroutine::promise_type> m_handle = nullptr;   ///< 底层协程句柄
     Scheduler* m_scheduler = nullptr;                                     ///< 所属调度器
+    std::thread::id m_threadId;                                           ///< 所属线程ID
     Coroutine m_next;                                                     ///< 后续协程（用于链式执行）
 };
 

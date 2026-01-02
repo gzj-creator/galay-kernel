@@ -3,8 +3,7 @@
 namespace galay::kernel
 {
 
-ComputeScheduler::ComputeScheduler(size_t thread_count)
-    : m_thread_count(thread_count > 0 ? thread_count : 1)
+ComputeScheduler::ComputeScheduler()
 {
 }
 
@@ -20,10 +19,10 @@ void ComputeScheduler::start()
         return;  // 已经在运行
     }
 
-    m_threads.reserve(m_thread_count);
-    for (size_t i = 0; i < m_thread_count; ++i) {
-        m_threads.emplace_back(&ComputeScheduler::workerLoop, this);
-    }
+    m_thread = std::thread([this]() {
+        m_threadId = std::this_thread::get_id();  // 设置调度器线程ID
+        workerLoop();
+    });
 }
 
 void ComputeScheduler::stop()
@@ -33,18 +32,13 @@ void ComputeScheduler::stop()
         return;  // 已经停止
     }
 
-    // 发送停止信号唤醒所有等待的线程
-    for (size_t i = 0; i < m_thread_count; ++i) {
-        m_queue.enqueue(ComputeTask{Coroutine{}, true});
-    }
+    // 发送停止信号唤醒等待的线程
+    m_queue.enqueue(ComputeTask{Coroutine{}, true});
 
-    // 等待所有线程结束
-    for (auto& thread : m_threads) {
-        if (thread.joinable()) {
-            thread.join();
-        }
+    // 等待线程结束
+    if (m_thread.joinable()) {
+        m_thread.join();
     }
-    m_threads.clear();
 }
 
 void ComputeScheduler::spawn(Coroutine coro)
@@ -52,6 +46,7 @@ void ComputeScheduler::spawn(Coroutine coro)
     // 如果协程未绑定 scheduler，绑定到当前 scheduler
     if (!coro.belongScheduler()) {
         coro.belongScheduler(this);
+        coro.threadId(m_threadId);
     }
     m_queue.enqueue(ComputeTask{std::move(coro)});
 }

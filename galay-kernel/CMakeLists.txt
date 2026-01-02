@@ -53,9 +53,12 @@ install(TARGETS galay-kernel
     INCLUDES DESTINATION include
 )
 
-# 安装头文件
-install(FILES ${HEADERS}
+# 安装头文件（保留目录结构）
+install(DIRECTORY async common kernel concurrency
     DESTINATION include/galay-kernel
+    FILES_MATCHING
+    PATTERN "*.h"
+    PATTERN "*.hpp"
 )
 
 # 安装配置文件

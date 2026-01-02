@@ -1,5 +1,10 @@
 # galay-kernel 构建选项配置
 
+# 设置默认安装目录为/usr/local
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX /usr/local CACHE PATH "Install path prefix" FORCE)
+endif()
+
 # 库类型选项
 option(BUILD_SHARED_LIBS "Build shared library instead of static" OFF)
 

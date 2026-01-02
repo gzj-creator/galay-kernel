@@ -26,8 +26,8 @@
 #ifndef GALAY_KERNEL_ASYNC_WAITER_H
 #define GALAY_KERNEL_ASYNC_WAITER_H
 
-#include "Coroutine.h"
-#include "Scheduler.h"
+#include "../kernel/Coroutine.h"
+#include "../kernel/Scheduler.h"
 #include <atomic>
 #include <optional>
 #include <coroutine>

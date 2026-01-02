@@ -27,9 +27,6 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# 设置安装目录为工作目录下的install
-set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR}/install)
-
 # 包含选项配置
 include(cmake/option.cmake)
 

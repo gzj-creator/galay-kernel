@@ -1,0 +1,329 @@
+# ComputeScheduler 设计文档
+
+## 概述
+
+`ComputeScheduler` 是一个单线程的计算任务调度器，专门用于处理 CPU 密集型协程任务。与 `IOScheduler` 不同，它不涉及 IO 事件驱动，纯粹用于协程的计算调度。
+
+**设计理念**: 每个 `ComputeScheduler` 实例是单线程的，通过创建多个实例来实现多线程并行计算。这种设计简化了线程管理，并与 `IOScheduler` 保持一致的单线程模型。
+
+## 架构设计
+
+### 单调度器架构
+```
+┌─────────────────────────────────────────┐
+│           ComputeScheduler              │
+├─────────────────────────────────────────┤
+│  ┌─────────────────────────────────┐   │
+│  │  BlockingConcurrentQueue<Task>  │   │
+│  │         (阻塞队列)               │   │
+│  └─────────────────────────────────┘   │
+│                   │                     │
+│                   ▼                     │
+│            ┌──────────┐                 │
+│            │  Worker  │                 │
+│            │  Thread  │                 │
+│            └──────────┘                 │
+│                   │                     │
+│                   ▼                     │
+│            m_threadId                   │
+│         (调度器线程ID)                   │
+└─────────────────────────────────────────┘
+```
+
+### 多调度器并行架构
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    SchedulerPool (用户实现)                  │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
+│  │ Scheduler 1 │  │ Scheduler 2 │  │ Scheduler N │         │
+│  │  (Thread 1) │  │  (Thread 2) │  │  (Thread N) │         │
+│  └─────────────┘  └─────────────┘  └─────────────┘         │
+│         │                │                │                 │
+│         └────────────────┼────────────────┘                 │
+│                          ▼                                  │
+│                   轮询/负载均衡分发                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## 核心组件
+
+### 1. 任务队列
+- **类型**: `moodycamel::BlockingConcurrentQueue<ComputeTask>`
+- **特点**: 支持阻塞等待的无锁队列
+- **优势**: 高效的生产者-消费者模式
+
+### 2. 工作线程
+- **数量**: 每个调度器固定 1 个线程
+- **模式**: 阻塞等待任务
+
+### 3. 线程 ID 管理
+- **m_threadId**: 调度器线程 ID，在 `start()` 时设置
+- **用途**: 支持同线程优化（如 MpscChannel 的直接 resume）
+
+## 工作流程
+
+### spawn() - 提交任务
+```cpp
+void spawn(Coroutine coro) {
+    if (!coro.belongScheduler()) {
+        coro.belongScheduler(this);
+        coro.threadId(m_threadId);  // 设置协程线程ID
+    }
+    m_queue.enqueue(ComputeTask{std::move(coro)});
+}
+```
+
+### workerLoop() - 工作线程主循环
+```
+┌─────────────────────────────────────────┐
+│              workerLoop                 │
+├─────────────────────────────────────────┤
+│  m_threadId = this_thread::get_id()     │
+│                                         │
+│  while (running) {                      │
+│    ┌─────────────────────────────────┐  │
+│    │ wait_dequeue_timed(task, 100ms) │  │
+│    │    ├─ 成功 → 执行协程           │  │
+│    │    └─ 超时 → 检查 running       │  │
+│    └─────────────────────────────────┘  │
+│    ┌─────────────────────────────────┐  │
+│    │ 执行协程后检查:                  │  │
+│    │    ├─ 协程完成 → 继续下一个     │  │
+│    │    └─ 协程未完成 → spawn 回原调度器│  │
+│    └─────────────────────────────────┘  │
+│  }                                      │
+│  处理剩余任务后退出                      │
+└─────────────────────────────────────────┘
+```
+
+## 关键设计决策
+
+### 1. 单线程设计
+
+**为什么选择单线程？**
+- 与 IOScheduler 保持一致的模型
+- 简化线程管理和同步
+- 每个调度器有明确的 threadId，便于同线程优化
+- 用户可灵活控制并行度
+
+**如何实现多线程并行？**
+```cpp
+// 创建多个调度器实例
+ComputeScheduler cs1, cs2, cs3, cs4;
+cs1.start();
+cs2.start();
+cs3.start();
+cs4.start();
+
+// 轮询分发任务
+for (int i = 0; i < taskCount; ++i) {
+    switch (i % 4) {
+        case 0: cs1.spawn(task()); break;
+        case 1: cs2.spawn(task()); break;
+        case 2: cs3.spawn(task()); break;
+        case 3: cs4.spawn(task()); break;
+    }
+}
+```
+
+### 2. 阻塞队列
+
+使用 `BlockingConcurrentQueue` 而非普通 `ConcurrentQueue`：
+- 内置阻塞等待，无需额外的条件变量
+- `wait_dequeue_timed()` 支持超时，便于检查运行状态
+
+### 3. 协程归属调度器
+
+```cpp
+// 计算完成后，协程自动 spawn 回原调度器
+if (!task.coro.isDone() && belong_scheduler && belong_scheduler != this) {
+    belong_scheduler->spawn(std::move(task.coro));
+}
+```
+
+这支持 IO 协程提交计算任务后，计算完成自动返回 IO 调度器继续执行。
+
+## 性能数据
+
+### 测试环境
+- CPU: 10 核
+- 队列: moodycamel::BlockingConcurrentQueue
+
+### 吞吐量 (10 个调度器)
+| 任务类型 | 吞吐量 |
+|----------|--------|
+| 空任务 | 714,286/s |
+| 轻量计算 | 735,294/s |
+| 重计算 | 588,235/s |
+
+### 延迟
+- 平均调度延迟: **225.94 μs**
+
+### 扩展性
+| 调度器数 | 加速比 |
+|----------|--------|
+| 1 | 1.00x |
+| 2 | 1.50x |
+| 4 | 3.00x |
+| 8 | 2.00x |
+
+## 使用示例
+
+### 基本用法
+```cpp
+#include "galay-kernel/kernel/ComputeScheduler.h"
+
+using namespace galay::kernel;
+
+Coroutine computeTask(int id) {
+    // CPU 密集型计算
+    double result = 0;
+    for (int i = 0; i < 1000000; ++i) {
+        result += std::sin(i) * std::cos(i);
+    }
+    std::cout << "Task " << id << " done\n";
+    co_return;
+}
+
+int main() {
+    ComputeScheduler scheduler;
+    scheduler.start();
+
+    // 提交计算任务
+    for (int i = 0; i < 10; ++i) {
+        scheduler.spawn(computeTask(i));
+    }
+
+    // 等待任务完成
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+
+    scheduler.stop();
+    return 0;
+}
+```
+
+### 多调度器并行
+```cpp
+#include "galay-kernel/kernel/ComputeScheduler.h"
+#include <vector>
+#include <memory>
+
+using namespace galay::kernel;
+
+// 调度器池
+class SchedulerPool {
+public:
+    explicit SchedulerPool(int count) : m_count(count), m_next(0) {
+        for (int i = 0; i < count; ++i) {
+            m_schedulers.push_back(std::make_unique<ComputeScheduler>());
+        }
+    }
+
+    void start() {
+        for (auto& s : m_schedulers) s->start();
+    }
+
+    void stop() {
+        for (auto& s : m_schedulers) s->stop();
+    }
+
+    void spawn(Coroutine coro) {
+        int idx = m_next++ % m_count;
+        m_schedulers[idx]->spawn(std::move(coro));
+    }
+
+private:
+    int m_count;
+    std::atomic<int> m_next;
+    std::vector<std::unique_ptr<ComputeScheduler>> m_schedulers;
+};
+
+int main() {
+    SchedulerPool pool(4);  // 4 个调度器 = 4 个线程
+    pool.start();
+
+    for (int i = 0; i < 100; ++i) {
+        pool.spawn(computeTask(i));
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+    pool.stop();
+    return 0;
+}
+```
+
+### 与 IOScheduler 混合使用
+```cpp
+#include "galay-kernel/kernel/KqueueScheduler.h"
+#include "galay-kernel/kernel/ComputeScheduler.h"
+#include "galay-kernel/concurrency/AsyncWaiter.h"
+
+// 计算任务
+Coroutine heavyCompute(AsyncWaiter<int>* waiter) {
+    int result = 0;
+    for (int i = 0; i < 1000000; ++i) {
+        result += i % 100;
+    }
+    waiter->notify(result);
+    co_return;
+}
+
+// IO 协程
+Coroutine ioTask(KqueueScheduler* io, ComputeScheduler* compute) {
+    // 提交计算任务
+    AsyncWaiter<int> waiter;
+    compute->spawn(heavyCompute(&waiter));
+
+    // 等待计算完成（协程挂起，不阻塞 IO 线程）
+    int result = co_await waiter.wait();
+
+    std::cout << "Compute result: " << result << "\n";
+    co_return;
+}
+
+int main() {
+    KqueueScheduler ioScheduler;
+    ComputeScheduler computeScheduler;
+
+    ioScheduler.start();
+    computeScheduler.start();
+
+    ioScheduler.spawn(ioTask(&ioScheduler, &computeScheduler));
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    computeScheduler.stop();
+    ioScheduler.stop();
+    return 0;
+}
+```
+
+## 与 IOScheduler 的对比
+
+| 特性 | ComputeScheduler | IOScheduler |
+|------|------------------|-------------|
+| 用途 | CPU 密集型任务 | IO 密集型任务 |
+| 线程模型 | 单线程（多实例并行） | 单线程事件循环 |
+| 任务队列 | BlockingConcurrentQueue | ConcurrentQueue |
+| 等待机制 | 阻塞队列 | epoll/kqueue/io_uring |
+| 协程挂起 | 不支持 IO 等待 | 支持（等待 IO） |
+| 适用场景 | 计算、加密、压缩 | 网络、文件 IO |
+| threadId | 有（支持同线程优化） | 有（支持同线程优化） |
+
+## 同线程优化
+
+当 `ComputeScheduler` 与 `MpscChannel` 配合使用时，如果生产者和消费者在同一调度器线程：
+
+```cpp
+// MpscChannel::wakeUpWaiter()
+if (waiterScheduler->threadId() == std::this_thread::get_id()) {
+    // 同线程，直接恢复协程（高性能路径）
+    waiterCoro.resume();
+} else {
+    // 跨线程，通过调度器队列唤醒
+    waiterScheduler->spawn(std::move(waiterCoro));
+}
+```
+
+这避免了不必要的队列操作和线程切换，显著提升性能。

@@ -9,7 +9,7 @@
 #include <vector>
 #include <cmath>
 #include "galay-kernel/kernel/ComputeScheduler.h"
-#include "galay-kernel/kernel/AsyncWaiter.h"
+#include "galay-kernel/concurrency/AsyncWaiter.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/common/Log.h"
 
@@ -114,7 +114,7 @@ void runTests() {
         LogInfo("[Test 1] Basic coroutine execution...");
         g_total++;
 
-        ComputeScheduler scheduler(2);
+        ComputeScheduler scheduler;
         scheduler.start();
         scheduler.spawn(testBasicExecution(&scheduler));
         std::this_thread::sleep_for(100ms);
@@ -133,15 +133,27 @@ void runTests() {
         LogInfo("[Test 2] Concurrent coroutine execution ({} tasks)...", TEST2_COUNT);
         g_total++;
 
-        ComputeScheduler scheduler(4);
-        scheduler.start();
+        ComputeScheduler scheduler1, scheduler2, scheduler3, scheduler4;
+        scheduler1.start();
+        scheduler2.start();
+        scheduler3.start();
+        scheduler4.start();
 
         for (int i = 0; i < TEST2_COUNT; ++i) {
-            scheduler.spawn(testConcurrentTask());
+            // 轮询分发到4个调度器
+            switch (i % 4) {
+                case 0: scheduler1.spawn(testConcurrentTask()); break;
+                case 1: scheduler2.spawn(testConcurrentTask()); break;
+                case 2: scheduler3.spawn(testConcurrentTask()); break;
+                case 3: scheduler4.spawn(testConcurrentTask()); break;
+            }
         }
 
         std::this_thread::sleep_for(500ms);
-        scheduler.stop();
+        scheduler1.stop();
+        scheduler2.stop();
+        scheduler3.stop();
+        scheduler4.stop();
 
         if (g_test2_counter == TEST2_COUNT) {
             LogInfo("[Test 2] PASSED: All {} tasks completed", TEST2_COUNT);
@@ -156,13 +168,21 @@ void runTests() {
         LogInfo("[Test 3] Compute-intensive tasks ({} tasks)...", TEST3_COUNT);
         g_total++;
 
-        ComputeScheduler scheduler(4);
-        scheduler.start();
+        ComputeScheduler scheduler1, scheduler2, scheduler3, scheduler4;
+        scheduler1.start();
+        scheduler2.start();
+        scheduler3.start();
+        scheduler4.start();
 
         auto start = std::chrono::steady_clock::now();
 
         for (int i = 0; i < TEST3_COUNT; ++i) {
-            scheduler.spawn(testComputeIntensive());
+            switch (i % 4) {
+                case 0: scheduler1.spawn(testComputeIntensive()); break;
+                case 1: scheduler2.spawn(testComputeIntensive()); break;
+                case 2: scheduler3.spawn(testComputeIntensive()); break;
+                case 3: scheduler4.spawn(testComputeIntensive()); break;
+            }
         }
 
         // 等待所有任务完成
@@ -173,7 +193,10 @@ void runTests() {
         auto elapsed = std::chrono::steady_clock::now() - start;
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
 
-        scheduler.stop();
+        scheduler1.stop();
+        scheduler2.stop();
+        scheduler3.stop();
+        scheduler4.stop();
 
         if (g_test3_counter == TEST3_COUNT) {
             LogInfo("[Test 3] PASSED: All {} compute tasks completed in {}ms", TEST3_COUNT, ms);
@@ -195,7 +218,7 @@ void runTests() {
         LogInfo("[Test 5] Scheduler start/stop cycles...");
         g_total++;
 
-        ComputeScheduler scheduler(2);
+        ComputeScheduler scheduler;
 
         // 第一次启停
         scheduler.start();
@@ -221,24 +244,24 @@ void runTests() {
         }
     }
 
-    // 测试6：线程数量
+    // 测试6：单线程调度器验证
     {
-        LogInfo("[Test 6] Thread count configuration...");
+        LogInfo("[Test 6] Single-threaded scheduler verification...");
         g_total++;
 
-        ComputeScheduler scheduler1(1);
-        ComputeScheduler scheduler2(8);
-        ComputeScheduler scheduler3(0);  // 应该至少有1个线程
+        ComputeScheduler scheduler;
 
-        bool pass = (scheduler1.threadCount() == 1 &&
-                    scheduler2.threadCount() == 8 &&
-                    scheduler3.threadCount() >= 1);
+        // 单线程调度器，验证基本功能
+        scheduler.start();
+        bool running = scheduler.isRunning();
+        scheduler.stop();
+        bool stopped = !scheduler.isRunning();
 
-        if (pass) {
-            LogInfo("[Test 6] PASSED: Thread counts: 1, 8, {}", scheduler3.threadCount());
+        if (running && stopped) {
+            LogInfo("[Test 6] PASSED: Single-threaded ComputeScheduler works correctly");
             g_passed++;
         } else {
-            LogError("[Test 6] FAILED: Unexpected thread counts");
+            LogError("[Test 6] FAILED: running={}, stopped={}", running, stopped);
         }
     }
 
@@ -247,7 +270,7 @@ void runTests() {
         LogInfo("[Test 7] isRunning state...");
         g_total++;
 
-        ComputeScheduler scheduler(2);
+        ComputeScheduler scheduler;
 
         bool before_start = scheduler.isRunning();
         scheduler.start();
@@ -269,7 +292,7 @@ void runTests() {
         LogInfo("[Test 8] AsyncWaiter<int> with result...");
         g_total++;
 
-        ComputeScheduler computeScheduler(2);
+        ComputeScheduler computeScheduler;
         computeScheduler.start();
 
         AsyncWaiter<int> waiter;
@@ -296,7 +319,7 @@ void runTests() {
         LogInfo("[Test 9] AsyncWaiter<void> without result...");
         g_total++;
 
-        ComputeScheduler computeScheduler(2);
+        ComputeScheduler computeScheduler;
         computeScheduler.start();
 
         AsyncWaiter<void> waiter;
