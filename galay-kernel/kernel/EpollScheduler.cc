@@ -6,6 +6,7 @@
 #include "galay-kernel/async/AioFile.h"
 #include "galay-kernel/common/Log.h"
 #include <sys/eventfd.h>
+#include <sys/inotify.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -331,6 +332,47 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         }
         break;
     }
+    case FILEWATCH:
+    {
+        if (ev.events & EPOLLIN) {
+            FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable);
+            // 从 inotify fd 读取事件
+            ssize_t len = read(awaitable->m_inotify_fd, awaitable->m_buffer, awaitable->m_buffer_size);
+            if (len > 0) {
+                // 解析 inotify 事件
+                struct inotify_event* event = reinterpret_cast<struct inotify_event*>(awaitable->m_buffer);
+                FileWatchResult result;
+                result.isDir = (event->mask & IN_ISDIR) != 0;
+                if (event->len > 0) {
+                    result.name = std::string(event->name);
+                }
+                // 转换 inotify 事件掩码到 FileWatchEvent
+                uint32_t mask = 0;
+                if (event->mask & IN_ACCESS)      mask |= static_cast<uint32_t>(FileWatchEvent::Access);
+                if (event->mask & IN_MODIFY)      mask |= static_cast<uint32_t>(FileWatchEvent::Modify);
+                if (event->mask & IN_ATTRIB)      mask |= static_cast<uint32_t>(FileWatchEvent::Attrib);
+                if (event->mask & IN_CLOSE_WRITE) mask |= static_cast<uint32_t>(FileWatchEvent::CloseWrite);
+                if (event->mask & IN_CLOSE_NOWRITE) mask |= static_cast<uint32_t>(FileWatchEvent::CloseNoWrite);
+                if (event->mask & IN_OPEN)        mask |= static_cast<uint32_t>(FileWatchEvent::Open);
+                if (event->mask & IN_MOVED_FROM)  mask |= static_cast<uint32_t>(FileWatchEvent::MovedFrom);
+                if (event->mask & IN_MOVED_TO)    mask |= static_cast<uint32_t>(FileWatchEvent::MovedTo);
+                if (event->mask & IN_CREATE)      mask |= static_cast<uint32_t>(FileWatchEvent::Create);
+                if (event->mask & IN_DELETE)      mask |= static_cast<uint32_t>(FileWatchEvent::Delete);
+                if (event->mask & IN_DELETE_SELF) mask |= static_cast<uint32_t>(FileWatchEvent::DeleteSelf);
+                if (event->mask & IN_MOVE_SELF)   mask |= static_cast<uint32_t>(FileWatchEvent::MoveSelf);
+                result.event = static_cast<FileWatchEvent>(mask);
+                awaitable->m_result = std::move(result);
+            } else if (len == 0) {
+                awaitable->m_result = std::unexpected(IOError(kReadFailed, 0));
+            } else {
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    awaitable->m_result = std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(errno)));
+                }
+            }
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
     default:
         break;
     }
@@ -548,6 +590,21 @@ bool EpollScheduler::handleSendTo(IOController* controller)
         awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
         return true;
     }
+}
+
+int EpollScheduler::addFileWatch(IOController* controller)
+{
+    FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable);
+
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.ptr = controller;
+
+    int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, awaitable->m_inotify_fd, &ev);
+    if (ret == -1 && errno == EEXIST) {
+        ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, awaitable->m_inotify_fd, &ev);
+    }
+    return ret;
 }
 
 }

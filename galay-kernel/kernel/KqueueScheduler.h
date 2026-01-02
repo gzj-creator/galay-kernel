@@ -60,6 +60,7 @@ public:
     int addFileWrite(IOController* event) override;
     int addRecvFrom(IOController* event) override;
     int addSendTo(IOController* event) override;
+    int addFileWatch(IOController* event) override;
 
     // Remove events (only need fd)
     int remove(int fd);

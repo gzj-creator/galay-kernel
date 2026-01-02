@@ -14,3 +14,8 @@ target_include_directories(test_udp_socket PRIVATE ${CMAKE_SOURCE_DIR})
 add_executable(test_file_io test_file_io.cc)
 target_link_libraries(test_file_io PRIVATE galay-kernel)
 target_include_directories(test_file_io PRIVATE ${CMAKE_SOURCE_DIR})
+
+# FileWatcher测试
+add_executable(test_file_watcher test_file_watcher.cc)
+target_link_libraries(test_file_watcher PRIVATE galay-kernel)
+target_include_directories(test_file_watcher PRIVATE ${CMAKE_SOURCE_DIR})

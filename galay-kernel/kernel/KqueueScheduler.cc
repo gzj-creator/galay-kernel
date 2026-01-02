@@ -326,6 +326,27 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         }
         break;
     }
+    case FILEWATCH:
+    {
+        if (ev.filter == EVFILT_VNODE) {
+            FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable);
+            FileWatchResult result;
+            result.isDir = false;  // kqueue 不直接提供此信息
+
+            // 转换 kqueue fflags 到 FileWatchEvent
+            uint32_t mask = 0;
+            if (ev.fflags & NOTE_WRITE)   mask |= static_cast<uint32_t>(FileWatchEvent::Modify);
+            if (ev.fflags & NOTE_DELETE)  mask |= static_cast<uint32_t>(FileWatchEvent::DeleteSelf);
+            if (ev.fflags & NOTE_RENAME)  mask |= static_cast<uint32_t>(FileWatchEvent::MoveSelf);
+            if (ev.fflags & NOTE_ATTRIB)  mask |= static_cast<uint32_t>(FileWatchEvent::Attrib);
+            if (ev.fflags & NOTE_EXTEND)  mask |= static_cast<uint32_t>(FileWatchEvent::Modify);
+            result.event = static_cast<FileWatchEvent>(mask);
+
+            awaitable->m_result = std::move(result);
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
     default:
         break;
     }
@@ -522,6 +543,19 @@ bool KqueueScheduler::handleSendTo(IOController* controller)
         awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
         return true;
     }
+}
+
+int KqueueScheduler::addFileWatch(IOController* controller)
+{
+    FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable);
+
+    // kqueue 使用 EVFILT_VNODE 监控文件变化
+    // 需要打开的文件描述符，而不是 inotify fd
+    struct kevent ev;
+    // NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_ATTRIB | NOTE_EXTEND
+    unsigned int fflags = NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_ATTRIB | NOTE_EXTEND;
+    EV_SET(&ev, awaitable->m_inotify_fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, fflags, 0, controller);
+    return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
 }

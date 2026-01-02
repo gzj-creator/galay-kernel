@@ -8,6 +8,7 @@
 
 #include "Awaitable.h"
 #include <sys/eventfd.h>
+#include <sys/inotify.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -261,6 +262,23 @@ int IOUringScheduler::addSendTo(IOController* controller)
     return 0;
 }
 
+int IOUringScheduler::addFileWatch(IOController* controller)
+{
+    FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable);
+
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    if (!sqe) {
+        return -EAGAIN;
+    }
+
+    // inotify fd 是可读的，当有事件时读取
+    io_uring_prep_read(sqe, awaitable->m_inotify_fd,
+                       awaitable->m_buffer, awaitable->m_buffer_size, 0);
+    io_uring_sqe_set_data(sqe, controller);
+    // 延迟提交：由事件循环批量提交
+    return 0;
+}
+
 int IOUringScheduler::remove(int fd)
 {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
@@ -475,6 +493,41 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
             awaitable->m_result = static_cast<size_t>(res);
         } else {
             awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res)));
+        }
+        awaitable->m_waker.wakeUp();
+        break;
+    }
+    case FILEWATCH:
+    {
+        FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable);
+        if (res > 0) {
+            // 解析 inotify 事件
+            struct inotify_event* event = reinterpret_cast<struct inotify_event*>(awaitable->m_buffer);
+            FileWatchResult result;
+            result.isDir = (event->mask & IN_ISDIR) != 0;
+            if (event->len > 0) {
+                result.name = std::string(event->name);
+            }
+            // 转换 inotify 事件掩码到 FileWatchEvent
+            uint32_t mask = 0;
+            if (event->mask & IN_ACCESS)      mask |= static_cast<uint32_t>(FileWatchEvent::Access);
+            if (event->mask & IN_MODIFY)      mask |= static_cast<uint32_t>(FileWatchEvent::Modify);
+            if (event->mask & IN_ATTRIB)      mask |= static_cast<uint32_t>(FileWatchEvent::Attrib);
+            if (event->mask & IN_CLOSE_WRITE) mask |= static_cast<uint32_t>(FileWatchEvent::CloseWrite);
+            if (event->mask & IN_CLOSE_NOWRITE) mask |= static_cast<uint32_t>(FileWatchEvent::CloseNoWrite);
+            if (event->mask & IN_OPEN)        mask |= static_cast<uint32_t>(FileWatchEvent::Open);
+            if (event->mask & IN_MOVED_FROM)  mask |= static_cast<uint32_t>(FileWatchEvent::MovedFrom);
+            if (event->mask & IN_MOVED_TO)    mask |= static_cast<uint32_t>(FileWatchEvent::MovedTo);
+            if (event->mask & IN_CREATE)      mask |= static_cast<uint32_t>(FileWatchEvent::Create);
+            if (event->mask & IN_DELETE)      mask |= static_cast<uint32_t>(FileWatchEvent::Delete);
+            if (event->mask & IN_DELETE_SELF) mask |= static_cast<uint32_t>(FileWatchEvent::DeleteSelf);
+            if (event->mask & IN_MOVE_SELF)   mask |= static_cast<uint32_t>(FileWatchEvent::MoveSelf);
+            result.event = static_cast<FileWatchEvent>(mask);
+            awaitable->m_result = std::move(result);
+        } else if (res == 0) {
+            awaitable->m_result = std::unexpected(IOError(kReadFailed, 0));
+        } else {
+            awaitable->m_result = std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(-res)));
         }
         awaitable->m_waker.wakeUp();
         break;

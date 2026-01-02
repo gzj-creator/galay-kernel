@@ -193,6 +193,13 @@ public:
      * @return 1表示立即完成，0表示已注册等待，<0表示错误
      */
     virtual int addSendTo(IOController* controller) = 0;
+
+    /**
+     * @brief 注册文件监控事件
+     * @param controller IO控制器
+     * @return 1表示立即完成，0表示已注册等待，<0表示错误
+     */
+    virtual int addFileWatch(IOController* controller) = 0;
 };
 
 } // namespace galay::kernel

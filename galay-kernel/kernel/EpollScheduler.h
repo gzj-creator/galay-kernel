@@ -64,6 +64,9 @@ public:
     int addRecvFrom(IOController* event) override;
     int addSendTo(IOController* event) override;
 
+    // 文件监控 (通过 inotify)
+    int addFileWatch(IOController* event) override;
+
     int remove(int fd);
 
     void spawn(Coroutine coro) override;

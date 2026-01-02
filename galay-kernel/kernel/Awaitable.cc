@@ -96,4 +96,13 @@ bool SendToAwaitable::await_suspend(std::coroutine_handle<> handle) {
     return true;
 }
 
+bool FileWatchAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_waker = Waker(handle);
+    m_controller->fillAwaitable(FILEWATCH, this);
+    if(m_scheduler->addFileWatch(m_controller) == OK) {
+        return false;
+    }
+    return true;
+}
+
 }

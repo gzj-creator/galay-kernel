@@ -497,6 +497,100 @@ struct FileWriteAwaitable {
 #endif
 };
 
+/**
+ * @brief 文件监控事件类型
+ */
+enum class FileWatchEvent : uint32_t {
+    None        = 0,
+    Access      = 0x00000001,  ///< 文件被访问
+    Modify      = 0x00000002,  ///< 文件被修改
+    Attrib      = 0x00000004,  ///< 文件属性变化
+    CloseWrite  = 0x00000008,  ///< 可写文件关闭
+    CloseNoWrite= 0x00000010,  ///< 不可写文件关闭
+    Open        = 0x00000020,  ///< 文件被打开
+    MovedFrom   = 0x00000040,  ///< 文件被移出
+    MovedTo     = 0x00000080,  ///< 文件被移入
+    Create      = 0x00000100,  ///< 文件被创建
+    Delete      = 0x00000200,  ///< 文件被删除
+    DeleteSelf  = 0x00000400,  ///< 监控目标被删除
+    MoveSelf    = 0x00000800,  ///< 监控目标被移动
+    All         = 0x00000FFF,  ///< 所有事件
+};
+
+inline FileWatchEvent operator|(FileWatchEvent a, FileWatchEvent b) {
+    return static_cast<FileWatchEvent>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
+
+inline FileWatchEvent operator&(FileWatchEvent a, FileWatchEvent b) {
+    return static_cast<FileWatchEvent>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
+}
+
+inline bool hasEvent(FileWatchEvent events, FileWatchEvent check) {
+    return (static_cast<uint32_t>(events) & static_cast<uint32_t>(check)) != 0;
+}
+
+/**
+ * @brief 文件监控结果
+ */
+struct FileWatchResult {
+    FileWatchEvent event;       ///< 触发的事件类型
+    std::string name;           ///< 相关文件名（目录监控时有效）
+    bool isDir;                 ///< 是否是目录
+};
+
+/**
+ * @brief 文件监控操作的可等待对象
+ *
+ * @details 用于异步监控文件或目录变化。
+ * co_await后返回触发的事件或错误。
+ *
+ * @note 由FileWatcher::watch()创建
+ */
+struct FileWatchAwaitable {
+    /**
+     * @brief 构造函数
+     * @param scheduler IO调度器
+     * @param controller IO控制器
+     * @param inotify_fd inotify文件描述符
+     * @param buffer 事件缓冲区
+     * @param buffer_size 缓冲区大小
+     */
+    FileWatchAwaitable(IOScheduler* scheduler, IOController* controller, int inotify_fd,
+                       char* buffer, size_t buffer_size)
+        : m_scheduler(scheduler), m_controller(controller), m_inotify_fd(inotify_fd),
+          m_buffer(buffer), m_buffer_size(buffer_size) {}
+
+    /**
+     * @brief 检查是否可以立即返回
+     * @return 始终返回false
+     */
+    bool await_ready() { return false; }
+
+    /**
+     * @brief 挂起协程并注册IO事件
+     * @param handle 当前协程句柄
+     * @return true表示挂起，false表示立即完成
+     */
+    bool await_suspend(std::coroutine_handle<> handle);
+
+    /**
+     * @brief 恢复时获取结果
+     * @return 成功返回FileWatchResult，失败返回IOError
+     */
+    std::expected<FileWatchResult, IOError> await_resume() {
+        m_controller->removeAwaitable();
+        return std::move(m_result);
+    }
+
+    IOScheduler* m_scheduler;                           ///< IO调度器
+    IOController* m_controller;                         ///< IO控制器
+    int m_inotify_fd;                                   ///< inotify文件描述符
+    char* m_buffer;                                     ///< 事件缓冲区
+    size_t m_buffer_size;                               ///< 缓冲区大小
+    Waker m_waker;                                      ///< 协程唤醒器
+    std::expected<FileWatchResult, IOError> m_result;   ///< 操作结果
+};
+
 } // namespace galay::kernel
 
 #endif // GALAY_KERNEL_AWAITABLE_H
