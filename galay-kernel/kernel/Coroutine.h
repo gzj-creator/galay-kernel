@@ -129,6 +129,12 @@ public:
     bool isDone() const;
 
     /**
+     * @brief 检查协程是否有效
+     * @return true 如果协程数据有效
+     */
+    bool isValid() const { return m_data != nullptr; }
+
+    /**
      * @brief 设置后续协程
      * @param co 当前协程完成后要执行的协程
      * @return 当前协程引用，支持链式调用

@@ -100,7 +100,9 @@ Scheduler *Coroutine::belongScheduler() const
 
 Coroutine& Coroutine::then(Coroutine co)
 {
-    m_data->m_next = co;
+    if (m_data) {
+        m_data->m_next = std::move(co);
+    }
     return *this;
 }
 

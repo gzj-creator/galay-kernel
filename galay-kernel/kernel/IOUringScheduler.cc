@@ -319,6 +319,10 @@ int IOUringScheduler::remove(int fd)
 
 void IOUringScheduler::spawn(Coroutine coro)
 {
+    // 如果协程未绑定 scheduler，绑定到当前 scheduler
+    if (!coro.belongScheduler()) {
+        coro.belongScheduler(this);
+    }
     m_coro_queue.enqueue(std::move(coro));
     notify();
 }

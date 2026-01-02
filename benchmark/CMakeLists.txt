@@ -29,3 +29,8 @@ target_include_directories(bench_udp PRIVATE ${CMAKE_SOURCE_DIR})
 add_executable(bench_file_io bench_file_io.cc)
 target_link_libraries(bench_file_io PRIVATE galay-kernel)
 target_include_directories(bench_file_io PRIVATE ${CMAKE_SOURCE_DIR})
+
+# ComputeScheduler 压测
+add_executable(bench_compute_scheduler bench_compute_scheduler.cc)
+target_link_libraries(bench_compute_scheduler PRIVATE galay-kernel)
+target_include_directories(bench_compute_scheduler PRIVATE ${CMAKE_SOURCE_DIR})
