@@ -150,8 +150,9 @@ Coroutine correctnessConsumer(MpscChannel<int64_t>* channel, int64_t expected_co
 
 // 单线程生产者
 void singleProducer(MpscChannel<int64_t>* channel, int64_t count) {
+    auto token = MpscChannel<int64_t>::getToken();
     for (int64_t i = 0; i < count; ++i) {
-        channel->send(i);
+        channel->send(i, token);
     }
     g_sent.store(count, std::memory_order_relaxed);
     g_producer_done = true;
@@ -159,19 +160,21 @@ void singleProducer(MpscChannel<int64_t>* channel, int64_t count) {
 
 // 多线程生产者
 void multiProducer(MpscChannel<int64_t>* channel, int64_t start, int64_t count) {
+    auto token = MpscChannel<int64_t>::getToken();
     for (int64_t i = 0; i < count; ++i) {
-        channel->send(start + i);
+        channel->send(start + i, token);
     }
     g_sent.fetch_add(count, std::memory_order_relaxed);
 }
 
 // 延迟测试生产者
 void latencyProducer(MpscChannel<TimestampedMessage>* channel, int64_t count) {
+    auto token = MpscChannel<TimestampedMessage>::getToken();
     for (int64_t i = 0; i < count; ++i) {
         TimestampedMessage msg;
         msg.id = i;
         msg.send_time = std::chrono::steady_clock::now();
-        channel->send(std::move(msg));
+        channel->send(std::move(msg), token);
     }
     g_sent.store(count, std::memory_order_relaxed);
     g_producer_done = true;
@@ -418,8 +421,9 @@ void benchCrossScheduler(int64_t message_count) {
 
     // 生产者协程
     auto producerCoro = [](MpscChannel<int64_t>* ch, int64_t count) -> Coroutine {
+        auto token = MpscChannel<int64_t>::getToken();
         for (int64_t i = 0; i < count; ++i) {
-            ch->send(i);
+            ch->send(i, token);
             g_sent.fetch_add(1, std::memory_order_relaxed);
             if (i % 100 == 0) {
                 co_yield true;  // 让出执行权
@@ -504,9 +508,10 @@ void benchSustained(int duration_sec) {
 
     // 生产者线程
     std::thread producer([&]() {
+        auto token = MpscChannel<int64_t>::getToken();
         int64_t id = 0;
         while (running) {
-            channel.send(id++);
+            channel.send(id++, token);
             g_sent.fetch_add(1, std::memory_order_relaxed);
         }
     });

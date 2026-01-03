@@ -64,6 +64,8 @@ template <typename T>
 class MpscChannel
 {
 public:
+    using MpscToken = std::thread::id;
+
     static constexpr size_t DEFAULT_BATCH_SIZE = 1024;
 
     explicit MpscChannel(size_t initialCapacity = 32)
@@ -74,29 +76,33 @@ public:
     MpscChannel(MpscChannel&&) = delete;
     MpscChannel& operator=(MpscChannel&&) = delete;
 
+    static MpscToken getToken() {
+        return std::this_thread::get_id();
+    }
+
     /**
      * @brief 发送单条数据（线程安全，支持跨调度器）
      */
-    bool send(T&& value) {
+    bool send(T&& value, MpscToken& token) {
         if (!m_queue.enqueue(std::forward<T>(value))) {
             return false;
         }
         uint32_t prevSize = m_size.fetch_add(1, std::memory_order_acq_rel);
         if (prevSize == 0) {
-            wakeUpWaiter();
+            wakeUpWaiter(token);
         }
         return true;
     }
 
-    bool send(const T& value) {
+    bool send(const T& value, MpscToken& token) {
         T copy = value;
-        return send(std::move(copy));
+        return send(std::move(copy), token);
     }
 
     /**
      * @brief 批量发送数据
      */
-    bool sendBatch(const std::vector<T>& values) {
+    bool sendBatch(const std::vector<T>& values, MpscToken& token) {
         if (values.empty()) return true;
         if (!m_queue.enqueue_bulk(values.data(), values.size())) {
             return false;
@@ -104,12 +110,12 @@ public:
         uint32_t prevSize = m_size.fetch_add(static_cast<uint32_t>(values.size()),
                                               std::memory_order_acq_rel);
         if (prevSize == 0) {
-            wakeUpWaiter();
+            wakeUpWaiter(token);
         }
         return true;
     }
 
-    bool sendBatch(std::vector<T>&& values) {
+    bool sendBatch(std::vector<T>&& values, MpscToken& token) {
         if (values.empty()) return true;
         size_t count = values.size();
         if (!m_queue.enqueue_bulk(std::make_move_iterator(values.begin()), count)) {
@@ -118,7 +124,7 @@ public:
         uint32_t prevSize = m_size.fetch_add(static_cast<uint32_t>(count),
                                               std::memory_order_acq_rel);
         if (prevSize == 0) {
-            wakeUpWaiter();
+            wakeUpWaiter(token);
         }
         return true;
     }
@@ -170,7 +176,7 @@ private:
     template <typename U>
     friend class MpscRecvBatchAwaitable;
 
-    void wakeUpWaiter() {
+    void wakeUpWaiter(MpscToken& token) {
         bool expected = true;
         if (m_hasWaiter.compare_exchange_strong(expected, false,
                                                  std::memory_order_acq_rel)) {
@@ -179,7 +185,7 @@ private:
 
             if (waiterCoro.isValid() && waiterScheduler) {
                 // 判断是否同线程：比较当前线程ID和recv协程所属调度器的线程ID
-                if (waiterScheduler->threadId() == std::this_thread::get_id()) {
+                if (waiterScheduler->threadId() == token) {
                     // 同线程，直接恢复协程（高性能路径）
                     waiterCoro.resume();
                 } else {

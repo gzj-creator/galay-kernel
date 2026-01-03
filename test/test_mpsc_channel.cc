@@ -125,8 +125,9 @@ Coroutine testMultiProducerConsumer(MpscChannel<int>* channel) {
 }
 
 void producerThread(MpscChannel<int>* channel, int id) {
+    auto token = MpscChannel<int>::getToken();
     for (int i = 0; i < TEST5_MSG_PER_PRODUCER; ++i) {
-        channel->send(id * 100 + i);
+        channel->send(id * 100 + i, token);
         std::this_thread::sleep_for(1ms);
     }
 }
@@ -217,8 +218,9 @@ Coroutine testHighConcurrency(MpscChannel<int>* channel) {
 }
 
 void highConcurrencyProducer(MpscChannel<int>* channel, int count) {
+    auto token = MpscChannel<int>::getToken();
     for (int i = 0; i < count; ++i) {
-        channel->send(i);
+        channel->send(i, token);
         g_test10_sent.fetch_add(1, std::memory_order_relaxed);
     }
 }
@@ -233,8 +235,9 @@ std::atomic<bool> g_test11_consumer_done{false};
 constexpr int TEST11_MSG_COUNT = 50;
 
 Coroutine testCrossSchedulerProducer(MpscChannel<int>* channel) {
+    auto token = MpscChannel<int>::getToken();
     for (int i = 1; i <= TEST11_MSG_COUNT; ++i) {
-        channel->send(i);
+        channel->send(i, token);
         co_yield true;  // 让出执行权
     }
     g_test11_producer_done = true;
@@ -264,8 +267,9 @@ constexpr int TEST12_PRODUCER_COUNT = 3;
 constexpr int TEST12_MSG_PER_PRODUCER = 20;
 
 Coroutine testMultiSchedulerProducer(MpscChannel<int>* channel, int id) {
+    auto token = MpscChannel<int>::getToken();
     for (int i = 0; i < TEST12_MSG_PER_PRODUCER; ++i) {
-        channel->send(id * 100 + i);
+        channel->send(id * 100 + i, token);
         co_yield true;
     }
     g_test12_producers_done.fetch_add(1, std::memory_order_relaxed);
@@ -295,8 +299,9 @@ constexpr int TEST13_MSG_COUNT = 100;
 
 // 生产者协程 - 在同一调度器线程中发送数据
 Coroutine testSameThreadProducer(MpscChannel<int>* channel, int startValue, int count) {
+    auto token = MpscChannel<int>::getToken();
     for (int i = 0; i < count; ++i) {
-        channel->send(startValue + i);
+        channel->send(startValue + i, token);
         co_yield true;  // 让出执行权，让消费者有机会接收
     }
     co_return;
@@ -337,7 +342,8 @@ void runTests() {
         scheduler.spawn(testBasicSendRecv(&channel));
 
         std::this_thread::sleep_for(10ms);
-        channel.send(42);
+        auto token = MpscChannel<int>::getToken();
+        channel.send(42, token);
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test1_done) {
@@ -368,9 +374,10 @@ void runTests() {
         scheduler.spawn(testMultipleSendRecv(&channel));
 
         // 发送数据
+        auto token = MpscChannel<int>::getToken();
         int expected_sum = 0;
         for (int i = 0; i < TEST2_COUNT; ++i) {
-            channel.send(i + 1);
+            channel.send(i + 1, token);
             expected_sum += (i + 1);
             std::this_thread::sleep_for(5ms);
         }
@@ -404,7 +411,8 @@ void runTests() {
         // 先发送数据
         std::vector<int> data = {1, 2, 3, 4, 5};
         int expected = 15;
-        channel.sendBatch(data);
+        auto token = MpscChannel<int>::getToken();
+        channel.sendBatch(data, token);
 
         scheduler.start();
         scheduler.spawn(testBatchSendRecv(&channel));
@@ -439,7 +447,8 @@ void runTests() {
         scheduler.spawn(testTryRecv(&channel));
 
         std::this_thread::sleep_for(20ms);
-        channel.send(99);
+        auto token = MpscChannel<int>::getToken();
+        channel.send(99, token);
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test4_done) {
@@ -520,7 +529,8 @@ void runTests() {
 
         // 延迟发送
         std::this_thread::sleep_for(50ms);
-        channel.send(123);
+        auto token = MpscChannel<int>::getToken();
+        channel.send(123, token);
 
         start = std::chrono::steady_clock::now();
         while (!g_test6_done) {
@@ -548,8 +558,9 @@ void runTests() {
         MpscChannel<int> channel;
 
         // 发送数据
+        auto token = MpscChannel<int>::getToken();
         for (int i = 0; i < 5; ++i) {
-            channel.send(i);
+            channel.send(i, token);
         }
 
         bool size_ok = (channel.size() == 5);
@@ -593,12 +604,13 @@ void runTests() {
         std::vector<int> batch2 = {4, 5, 6, 7};
         std::vector<int> batch3 = {8, 9, 10};
 
+        auto token = MpscChannel<int>::getToken();
         std::this_thread::sleep_for(10ms);
-        channel.sendBatch(batch1);
+        channel.sendBatch(batch1, token);
         std::this_thread::sleep_for(10ms);
-        channel.sendBatch(batch2);
+        channel.sendBatch(batch2, token);
         std::this_thread::sleep_for(10ms);
-        channel.sendBatch(batch3);
+        channel.sendBatch(batch3, token);
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test8_done) {
@@ -634,7 +646,8 @@ void runTests() {
         scheduler.spawn(testStringChannel(&channel));
 
         std::this_thread::sleep_for(10ms);
-        channel.send(std::string("Hello, Channel!"));
+        auto token = MpscChannel<std::string>::getToken();
+        channel.send(std::string("Hello, Channel!"), token);
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test9_done) {

@@ -317,12 +317,24 @@ int main() {
 
 ```cpp
 // MpscChannel::wakeUpWaiter()
-if (waiterScheduler->threadId() == std::this_thread::get_id()) {
+if (waiterScheduler->threadId() == token) {
     // 同线程，直接恢复协程（高性能路径）
     waiterCoro.resume();
 } else {
     // 跨线程，通过调度器队列唤醒
     waiterScheduler->spawn(std::move(waiterCoro));
+}
+```
+
+**MpscToken 优化**: `send()` 方法接受 `MpscToken` 参数，避免每次调用 `std::this_thread::get_id()` 的开销：
+
+```cpp
+// 在循环外获取一次 token
+auto token = MpscChannel<int>::getToken();
+
+// 循环内复用 token
+for (int i = 0; i < count; ++i) {
+    channel.send(i, token);
 }
 ```
 
