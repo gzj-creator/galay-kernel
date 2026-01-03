@@ -44,7 +44,7 @@ Coroutine testBasicLockUnlock(AsyncMutex* mutex) {
 }
 
 // ============================================================================
-// 测试2：try_lock
+// 测试2：tryLock
 // ============================================================================
 std::atomic<bool> g_test2_try_failed{false};
 std::atomic<bool> g_test2_done{false};
@@ -53,8 +53,8 @@ Coroutine testTryLock(AsyncMutex* mutex) {
     // 先获取锁
     co_await mutex->lock();
 
-    // 在持有锁时 try_lock 应该失败
-    g_test2_try_failed = !mutex->try_lock();
+    // 在持有锁时 tryLock 应该失败
+    g_test2_try_failed = !mutex->tryLock();
 
     mutex->unlock();
     g_test2_done = true;
@@ -133,30 +133,30 @@ Coroutine testStress(AsyncMutex* mutex) {
 }
 
 // ============================================================================
-// 测试6：is_locked 状态检查
+// 测试6：isLocked 状态检查
 // ============================================================================
 std::atomic<bool> g_test6_locked_inside{false};
 std::atomic<bool> g_test6_done{false};
 
 Coroutine testIsLocked(AsyncMutex* mutex) {
     co_await mutex->lock();
-    g_test6_locked_inside = mutex->is_locked();
+    g_test6_locked_inside = mutex->isLocked();
     mutex->unlock();
     g_test6_done = true;
     co_return;
 }
 
 // ============================================================================
-// 测试7：waiter_count 检查（简化版）
+// 测试7：waiterCount 检查（简化版）
 // ============================================================================
-std::atomic<int> g_test7_waiter_count{0};
+std::atomic<int> g_test7_waiterCount{0};
 std::atomic<bool> g_test7_done{false};
 
 Coroutine testWaiterCountSingle(AsyncMutex* mutex) {
     // 先获取锁
     co_await mutex->lock();
-    // 初始 waiter_count 应该为 0
-    g_test7_waiter_count = mutex->waiter_count();
+    // 初始 waiterCount 应该为 0
+    g_test7_waiterCount = mutex->waiterCount();
     mutex->unlock();
     g_test7_done = true;
     co_return;
@@ -199,7 +199,7 @@ Coroutine testRapidLockUnlock(AsyncMutex* mutex) {
 }
 
 // ============================================================================
-// 测试10：try_lock 在竞争环境下
+// 测试10：tryLock 在竞争环境下
 // ============================================================================
 std::atomic<int> g_test10_try_success{0};
 std::atomic<int> g_test10_try_fail{0};
@@ -208,7 +208,7 @@ constexpr int TEST10_COROUTINE_COUNT = 20;
 
 Coroutine testTryLockContention(AsyncMutex* mutex) {
     for (int i = 0; i < 10; ++i) {
-        if (mutex->try_lock()) {
+        if (mutex->tryLock()) {
             g_test10_try_success.fetch_add(1, std::memory_order_relaxed);
             std::this_thread::sleep_for(1ms);
             mutex->unlock();
@@ -222,7 +222,7 @@ Coroutine testTryLockContention(AsyncMutex* mutex) {
 }
 
 // ============================================================================
-// 测试11：waiter_count 在多等待者场景（使用 yield 让出执行权）
+// 测试11：waiterCount 在多等待者场景（使用 yield 让出执行权）
 // ============================================================================
 std::atomic<int> g_test11_max_waiters{0};
 std::atomic<int> g_test11_completed{0};
@@ -236,7 +236,7 @@ Coroutine testWaiterCountHolder(AsyncMutex* mutex) {
     // 使用 yield 让出执行权，让等待者有机会入队
     for (int i = 0; i < 100; ++i) {
         co_yield true;  // 让出执行权
-        int waiters = mutex->waiter_count();
+        int waiters = mutex->waiterCount();
         int max = g_test11_max_waiters.load(std::memory_order_relaxed);
         while (waiters > max && !g_test11_max_waiters.compare_exchange_weak(max, waiters));
         if (waiters >= TEST11_WAITER_COUNT) break;
@@ -286,7 +286,7 @@ Coroutine testEarlyExit(AsyncMutex* mutex, bool shouldExit) {
 }
 
 // ============================================================================
-// 测试14：混合 lock 和 try_lock
+// 测试14：混合 lock 和 tryLock
 // ============================================================================
 std::atomic<int> g_test14_lock_count{0};
 std::atomic<int> g_test14_trylock_count{0};
@@ -296,7 +296,7 @@ constexpr int TEST14_COROUTINE_COUNT = 10;
 Coroutine testMixedLockTryLock(AsyncMutex* mutex, bool useTryLock) {
     for (int i = 0; i < 5; ++i) {
         if (useTryLock) {
-            while (!mutex->try_lock()) {
+            while (!mutex->tryLock()) {
                 // 自旋等待
                 std::this_thread::sleep_for(1ms);
             }
@@ -334,7 +334,7 @@ Coroutine testLongHoldWaiter(AsyncMutex* mutex) {
 }
 
 // ============================================================================
-// 测试16：scoped_lock RAII 守卫
+// 测试16：scopedLock RAII 守卫
 // ============================================================================
 std::atomic<int> g_test16_counter{0};
 std::atomic<int> g_test16_completed{0};
@@ -342,7 +342,7 @@ constexpr int TEST16_COROUTINE_COUNT = 10;
 
 Coroutine testScopedLock(AsyncMutex* mutex) {
     for (int i = 0; i < 5; ++i) {
-        auto guard = co_await mutex->scoped_lock();
+        auto guard = co_await mutex->scopedLock();
         g_test16_counter++;
         // guard 析构时自动释放锁
     }
@@ -351,14 +351,14 @@ Coroutine testScopedLock(AsyncMutex* mutex) {
 }
 
 // ============================================================================
-// 测试17：scoped_lock 提前释放
+// 测试17：scopedLock 提前释放
 // ============================================================================
 std::atomic<int> g_test17_counter{0};
 std::atomic<bool> g_test17_done{false};
 
 Coroutine testScopedLockEarlyUnlock(AsyncMutex* mutex) {
     {
-        auto guard = co_await mutex->scoped_lock();
+        auto guard = co_await mutex->scopedLock();
         g_test17_counter++;
         guard.unlock();  // 提前释放
         // 此时锁已释放，但 guard 仍在作用域内
@@ -368,18 +368,18 @@ Coroutine testScopedLockEarlyUnlock(AsyncMutex* mutex) {
 }
 
 // ============================================================================
-// 测试18：scoped_lock 移动语义
+// 测试18：scopedLock 移动语义
 // ============================================================================
 std::atomic<bool> g_test18_done{false};
 
 Coroutine testScopedLockMove(AsyncMutex* mutex) {
-    auto guard1 = co_await mutex->scoped_lock();
+    auto guard1 = co_await mutex->scopedLock();
 
     // 移动守卫
     auto guard2 = std::move(guard1);
 
     // guard1 不再持有锁
-    if (!guard1.owns_lock() && guard2.owns_lock()) {
+    if (!guard1.ownsLock() && guard2.ownsLock()) {
         g_test18_done = true;
     }
 
@@ -409,14 +409,14 @@ Coroutine testCrossScheduler(AsyncMutex* mutex) {
 }
 
 // ============================================================================
-// 测试20：跨调度器 scoped_lock
+// 测试20：跨调度器 scopedLock
 // ============================================================================
 std::atomic<int> g_test20_counter{0};
 std::atomic<int> g_test20_completed{0};
 
 Coroutine testCrossSchedulerScopedLock(AsyncMutex* mutex) {
     for (int i = 0; i < 10; ++i) {
-        auto guard = co_await mutex->scoped_lock();
+        auto guard = co_await mutex->scopedLock();
         int val = g_test20_counter.load(std::memory_order_relaxed);
         std::this_thread::sleep_for(1ms);
         g_test20_counter.store(val + 1, std::memory_order_relaxed);
@@ -462,9 +462,9 @@ void runTests() {
         }
     }
 
-    // 测试2：try_lock
+    // 测试2：tryLock
     {
-        LogInfo("\n--- Test 2: try_lock ---");
+        LogInfo("\n--- Test 2: tryLock ---");
         g_total++;
 
         IOSchedulerType scheduler;
@@ -482,10 +482,10 @@ void runTests() {
         scheduler.stop();
 
         if (g_test2_done && g_test2_try_failed) {
-            LogInfo("[PASS] try_lock failed when lock is held");
+            LogInfo("[PASS] tryLock failed when lock is held");
             g_passed++;
         } else {
-            LogError("[FAIL] try_lock test: done={}, try_failed={}", g_test2_done.load(), g_test2_try_failed.load());
+            LogError("[FAIL] tryLock test: done={}, try_failed={}", g_test2_done.load(), g_test2_try_failed.load());
         }
     }
 
@@ -605,15 +605,15 @@ void runTests() {
         }
     }
 
-    // 测试6：is_locked 状态检查
+    // 测试6：isLocked 状态检查
     {
-        LogInfo("\n--- Test 6: is_locked state ---");
+        LogInfo("\n--- Test 6: isLocked state ---");
         g_total++;
 
         IOSchedulerType scheduler;
         AsyncMutex mutex(8);
 
-        bool initially_unlocked = !mutex.is_locked();
+        bool initially_unlocked = !mutex.isLocked();
 
         scheduler.start();
         scheduler.spawn(testIsLocked(&mutex));
@@ -626,22 +626,22 @@ void runTests() {
 
         scheduler.stop();
 
-        bool finally_unlocked = !mutex.is_locked();
+        bool finally_unlocked = !mutex.isLocked();
 
         if (initially_unlocked && g_test6_locked_inside && finally_unlocked) {
-            LogInfo("[PASS] is_locked: initial=unlocked, inside=locked, final=unlocked");
+            LogInfo("[PASS] isLocked: initial=unlocked, inside=locked, final=unlocked");
             g_passed++;
         } else {
-            LogError("[FAIL] is_locked: initial={}, inside={}, final={}",
+            LogError("[FAIL] isLocked: initial={}, inside={}, final={}",
                     initially_unlocked ? "unlocked" : "locked",
                     g_test6_locked_inside ? "locked" : "unlocked",
                     finally_unlocked ? "unlocked" : "locked");
         }
     }
 
-    // 测试7：waiter_count 检查（简化版）
+    // 测试7：waiterCount 检查（简化版）
     {
-        LogInfo("\n--- Test 7: waiter_count ---");
+        LogInfo("\n--- Test 7: waiterCount ---");
         g_total++;
 
         IOSchedulerType scheduler;
@@ -658,12 +658,12 @@ void runTests() {
 
         scheduler.stop();
 
-        // 单协程时 waiter_count 应该为 0
-        if (g_test7_done && g_test7_waiter_count == 0) {
-            LogInfo("[PASS] waiter_count = {} (expected 0 for single coroutine)", g_test7_waiter_count.load());
+        // 单协程时 waiterCount 应该为 0
+        if (g_test7_done && g_test7_waiterCount == 0) {
+            LogInfo("[PASS] waiterCount = {} (expected 0 for single coroutine)", g_test7_waiterCount.load());
             g_passed++;
         } else {
-            LogError("[FAIL] waiter_count = {}, done = {}", g_test7_waiter_count.load(), g_test7_done.load());
+            LogError("[FAIL] waiterCount = {}, done = {}", g_test7_waiterCount.load(), g_test7_done.load());
         }
     }
 
@@ -735,9 +735,9 @@ void runTests() {
         }
     }
 
-    // 测试10：try_lock 竞争
+    // 测试10：tryLock 竞争
     {
-        LogInfo("\n--- Test 10: try_lock contention ({} coroutines) ---", TEST10_COROUTINE_COUNT);
+        LogInfo("\n--- Test 10: tryLock contention ({} coroutines) ---", TEST10_COROUTINE_COUNT);
         g_total++;
 
         IOSchedulerType scheduler;
@@ -761,19 +761,19 @@ void runTests() {
         int total_attempts = g_test10_try_success + g_test10_try_fail;
 
         if (passed) {
-            LogInfo("[PASS] try_lock contention: completed={}, success={}, fail={}, total={}",
+            LogInfo("[PASS] tryLock contention: completed={}, success={}, fail={}, total={}",
                     g_test10_completed.load(), g_test10_try_success.load(),
                     g_test10_try_fail.load(), total_attempts);
             g_passed++;
         } else {
-            LogError("[FAIL] try_lock contention: completed={}/{}",
+            LogError("[FAIL] tryLock contention: completed={}/{}",
                     g_test10_completed.load(), TEST10_COROUTINE_COUNT);
         }
     }
 
-    // 测试11：waiter_count 多等待者
+    // 测试11：waiterCount 多等待者
     {
-        LogInfo("\n--- Test 11: waiter_count with multiple waiters ---");
+        LogInfo("\n--- Test 11: waiterCount with multiple waiters ---");
         g_total++;
 
         IOSchedulerType scheduler;
@@ -802,11 +802,11 @@ void runTests() {
                       (g_test11_max_waiters > 0);
 
         if (passed) {
-            LogInfo("[PASS] waiter_count: max_waiters={}, completed={}",
+            LogInfo("[PASS] waiterCount: max_waiters={}, completed={}",
                     g_test11_max_waiters.load(), g_test11_completed.load());
             g_passed++;
         } else {
-            LogError("[FAIL] waiter_count: holder_done={}, max_waiters={}, completed={}/{}",
+            LogError("[FAIL] waiterCount: holder_done={}, max_waiters={}, completed={}/{}",
                     g_test11_holder_done.load(), g_test11_max_waiters.load(),
                     g_test11_completed.load(), TEST11_WAITER_COUNT);
         }
@@ -868,7 +868,7 @@ void runTests() {
         scheduler.stop();
 
         // 验证锁状态正常
-        bool lock_ok = !mutex.is_locked();
+        bool lock_ok = !mutex.isLocked();
 
         if (g_test13_completed == 2 && lock_ok) {
             LogInfo("[PASS] Early exit: completed={}, lock_released={}",
@@ -880,9 +880,9 @@ void runTests() {
         }
     }
 
-    // 测试14：混合 lock 和 try_lock
+    // 测试14：混合 lock 和 tryLock
     {
-        LogInfo("\n--- Test 14: Mixed lock and try_lock ---");
+        LogInfo("\n--- Test 14: Mixed lock and tryLock ---");
         g_total++;
 
         IOSchedulerType scheduler;
@@ -908,12 +908,12 @@ void runTests() {
                       (actual_total == expected_total);
 
         if (passed) {
-            LogInfo("[PASS] Mixed lock/try_lock: completed={}, lock={}, trylock={}, total={}",
+            LogInfo("[PASS] Mixed lock/tryLock: completed={}, lock={}, trylock={}, total={}",
                     g_test14_completed.load(), g_test14_lock_count.load(),
                     g_test14_trylock_count.load(), actual_total);
             g_passed++;
         } else {
-            LogError("[FAIL] Mixed lock/try_lock: completed={}/{}, total={}/{}",
+            LogError("[FAIL] Mixed lock/tryLock: completed={}/{}, total={}/{}",
                     g_test14_completed.load(), TEST14_COROUTINE_COUNT,
                     actual_total, expected_total);
         }
@@ -957,9 +957,9 @@ void runTests() {
         }
     }
 
-    // 测试16：scoped_lock RAII 守卫
+    // 测试16：scopedLock RAII 守卫
     {
-        LogInfo("\n--- Test 16: scoped_lock RAII guard ---");
+        LogInfo("\n--- Test 16: scopedLock RAII guard ---");
         g_total++;
 
         IOSchedulerType scheduler;
@@ -984,19 +984,19 @@ void runTests() {
                       (g_test16_counter == expected);
 
         if (passed) {
-            LogInfo("[PASS] scoped_lock: completed={}, counter={} (expected {})",
+            LogInfo("[PASS] scopedLock: completed={}, counter={} (expected {})",
                     g_test16_completed.load(), g_test16_counter.load(), expected);
             g_passed++;
         } else {
-            LogError("[FAIL] scoped_lock: completed={}/{}, counter={}/{}",
+            LogError("[FAIL] scopedLock: completed={}/{}, counter={}/{}",
                     g_test16_completed.load(), TEST16_COROUTINE_COUNT,
                     g_test16_counter.load(), expected);
         }
     }
 
-    // 测试17：scoped_lock 提前释放
+    // 测试17：scopedLock 提前释放
     {
-        LogInfo("\n--- Test 17: scoped_lock early unlock ---");
+        LogInfo("\n--- Test 17: scopedLock early unlock ---");
         g_total++;
 
         IOSchedulerType scheduler;
@@ -1013,21 +1013,21 @@ void runTests() {
 
         scheduler.stop();
 
-        bool lock_released = !mutex.is_locked();
+        bool lock_released = !mutex.isLocked();
 
         if (g_test17_done && lock_released) {
-            LogInfo("[PASS] scoped_lock early unlock: done={}, lock_released={}",
+            LogInfo("[PASS] scopedLock early unlock: done={}, lock_released={}",
                     g_test17_done.load(), lock_released);
             g_passed++;
         } else {
-            LogError("[FAIL] scoped_lock early unlock: done={}, lock_released={}",
+            LogError("[FAIL] scopedLock early unlock: done={}, lock_released={}",
                     g_test17_done.load(), lock_released);
         }
     }
 
-    // 测试18：scoped_lock 移动语义
+    // 测试18：scopedLock 移动语义
     {
-        LogInfo("\n--- Test 18: scoped_lock move semantics ---");
+        LogInfo("\n--- Test 18: scopedLock move semantics ---");
         g_total++;
 
         IOSchedulerType scheduler;
@@ -1044,14 +1044,14 @@ void runTests() {
 
         scheduler.stop();
 
-        bool lock_released = !mutex.is_locked();
+        bool lock_released = !mutex.isLocked();
 
         if (g_test18_done && lock_released) {
-            LogInfo("[PASS] scoped_lock move: done={}, lock_released={}",
+            LogInfo("[PASS] scopedLock move: done={}, lock_released={}",
                     g_test18_done.load(), lock_released);
             g_passed++;
         } else {
-            LogError("[FAIL] scoped_lock move: done={}, lock_released={}",
+            LogError("[FAIL] scopedLock move: done={}, lock_released={}",
                     g_test18_done.load(), lock_released);
         }
     }
@@ -1108,9 +1108,9 @@ void runTests() {
         }
     }
 
-    // 测试20：跨调度器 scoped_lock
+    // 测试20：跨调度器 scopedLock
     {
-        LogInfo("\n--- Test 20: Cross-scheduler scoped_lock ---");
+        LogInfo("\n--- Test 20: Cross-scheduler scopedLock ---");
         g_total++;
 
         AsyncMutex mutex(32);
@@ -1144,11 +1144,11 @@ void runTests() {
         bool passed = (g_test20_completed == 3) && (g_test20_counter == expected);
 
         if (passed) {
-            LogInfo("[PASS] Cross-scheduler scoped_lock: completed={}, counter={}",
+            LogInfo("[PASS] Cross-scheduler scopedLock: completed={}, counter={}",
                     g_test20_completed.load(), g_test20_counter.load());
             g_passed++;
         } else {
-            LogError("[FAIL] Cross-scheduler scoped_lock: completed={}/3, counter={}/{}",
+            LogError("[FAIL] Cross-scheduler scopedLock: completed={}/3, counter={}/{}",
                     g_test20_completed.load(), g_test20_counter.load(), expected);
         }
     }

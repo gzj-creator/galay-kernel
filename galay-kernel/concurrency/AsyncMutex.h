@@ -26,7 +26,7 @@
  *
  * // 或使用 RAII 守卫（推荐）
  * Coroutine task2() {
- *     auto guard = co_await mutex.scoped_lock();
+ *     auto guard = co_await mutex.scopedLock();
  *     // 临界区，自动释放锁
  *     co_return;
  * }
@@ -73,7 +73,7 @@ private:
 };
 
 /**
- * @brief AsyncMutex scoped_lock 的等待体，返回 AsyncLockGuard
+ * @brief AsyncMutex scopedLock 的等待体，返回 AsyncLockGuard
  */
 class AsyncScopedLockAwaitable
 {
@@ -130,7 +130,7 @@ public:
      * @brief 获取锁并返回 RAII 守卫（推荐使用）
      * @return 可等待对象，await 后返回 AsyncLockGuard
      */
-    AsyncScopedLockAwaitable scoped_lock() {
+    AsyncScopedLockAwaitable scopedLock() {
         return AsyncScopedLockAwaitable(this);
     }
 
@@ -178,7 +178,7 @@ public:
      * @brief 尝试获取锁（非阻塞）
      * @return true 成功获取锁，false 锁被占用
      */
-    bool try_lock() {
+    bool tryLock() {
         bool expected = false;
         return m_locked.compare_exchange_strong(expected, true,
                                                  std::memory_order_acq_rel,
@@ -189,7 +189,7 @@ public:
      * @brief 检查锁是否被占用
      * @return true 锁被占用
      */
-    bool is_locked() const {
+    bool isLocked() const {
         return m_locked.load(std::memory_order_acquire);
     }
 
@@ -197,7 +197,7 @@ public:
      * @brief 获取等待队列中的协程数量（近似值）
      * @return 等待协程数量
      */
-    size_t waiter_count() const {
+    size_t waiterCount() const {
         return m_waiter_count.load(std::memory_order_relaxed);
     }
 
@@ -217,7 +217,7 @@ private:
  *
  * @code
  * Coroutine task() {
- *     auto guard = co_await mutex.scoped_lock();
+ *     auto guard = co_await mutex.scopedLock();
  *     // 临界区操作
  *     // guard 析构时自动释放锁
  * }
@@ -274,7 +274,7 @@ public:
     /**
      * @brief 检查是否持有锁
      */
-    bool owns_lock() const {
+    bool ownsLock() const {
         return m_mutex != nullptr;
     }
 
