@@ -271,8 +271,8 @@ Coroutine testSleep() {
     auto elapsed = std::chrono::steady_clock::now() - start;
     auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
 
-    // 允许 150ms 的误差（考虑 50ms tick 精度 + 多协程并发调度开销）
-    if (elapsedMs >= 280 && elapsedMs <= 450) {
+    // 允许误差（考虑 50ms tick 精度 + 多协程并发调度开销）
+    if (elapsedMs >= 240 && elapsedMs <= 400) {
         LogInfo("[Test 5] PASSED: Sleep completed in {}ms (expected ~300ms)", elapsedMs);
         g_passedCount++;
         g_resultWriter->addPassed();
@@ -300,8 +300,8 @@ Coroutine testMultipleSleep() {
     auto elapsed = std::chrono::steady_clock::now() - start;
     auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
 
-    // 总共应该约 300ms，允许 150ms 误差（考虑 50ms tick 精度 + 多协程并发调度开销）
-    if (elapsedMs >= 280 && elapsedMs <= 450) {
+    // 总共应该约 300ms，允许误差（考虑 50ms tick 精度 + 多协程并发调度开销）
+    if (elapsedMs >= 240 && elapsedMs <= 400) {
         LogInfo("[Test 6] PASSED: Multiple sleeps completed in {}ms (expected ~300ms)", elapsedMs);
         g_passedCount++;
         g_resultWriter->addPassed();

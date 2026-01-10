@@ -76,6 +76,7 @@ std::expected<std::vector<ssize_t>, IOError> AioCommitAwaitable::await_resume()
 
 AioFile::AioFile(int max_events)
     : m_handle(GHandle::invalid())
+    , m_controller(GHandle::invalid())
     , m_aio_ctx(0)
     , m_event_fd(-1)
     , m_max_events(max_events)
@@ -102,6 +103,7 @@ AioFile::~AioFile()
 
 AioFile::AioFile(AioFile&& other) noexcept
     : m_handle(other.m_handle)
+    , m_controller(std::move(other.m_controller))
     , m_aio_ctx(other.m_aio_ctx)
     , m_event_fd(other.m_event_fd)
     , m_max_events(other.m_max_events)
@@ -125,6 +127,7 @@ AioFile& AioFile::operator=(AioFile&& other) noexcept
         }
 
         m_handle = other.m_handle;
+        m_controller = std::move(other.m_controller);
         m_aio_ctx = other.m_aio_ctx;
         m_event_fd = other.m_event_fd;
         m_max_events = other.m_max_events;

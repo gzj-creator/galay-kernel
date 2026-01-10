@@ -121,7 +121,7 @@ void runEpollBenchmark(const BenchConfig& config) {
 
     // 为每个 worker 创建独立的文件
     for (int i = 0; i < config.num_workers; ++i) {
-        auto* file = new galay::async::AioFile(&scheduler);
+        auto* file = new galay::async::AioFile();
         std::string filename = config.test_dir + "/galay_bench_" + std::to_string(i) + ".dat";
 
         auto open_result = file->open(filename, galay::async::AioOpenMode::ReadWrite);
@@ -338,7 +338,7 @@ void runIOUringBenchmark(const BenchConfig& config) {
 
     // 为每个 worker 创建独立的文件
     for (int i = 0; i < config.num_workers; ++i) {
-        auto* file = new galay::async::AsyncFile(&scheduler);
+        auto* file = new galay::async::AsyncFile();
         std::string filename = config.test_dir + "/galay_bench_" + std::to_string(i) + ".dat";
 
         auto open_result = file->open(filename, galay::async::FileOpenMode::ReadWrite);

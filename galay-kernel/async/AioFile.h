@@ -3,7 +3,7 @@
 
 #ifdef USE_EPOLL
 
-#include "galay-kernel/kernel/Scheduler.h"
+#include "galay-kernel/kernel/IOScheduler.hpp"
 #include "galay-kernel/kernel/Waker.h"
 #include "galay-kernel/common/Error.h"
 #include <expected>
