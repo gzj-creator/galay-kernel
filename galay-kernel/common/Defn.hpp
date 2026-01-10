@@ -85,6 +85,8 @@
         FILEWATCH   ,
         RECVFROM    ,
         SENDTO      ,
+        RECV_NOTIFY ,   ///< 仅通知可读，不执行IO操作（用于SSL等自定义IO）
+        SEND_NOTIFY ,   ///< 仅通知可写，不执行IO操作（用于SSL等自定义IO）
     };
 
 #endif
