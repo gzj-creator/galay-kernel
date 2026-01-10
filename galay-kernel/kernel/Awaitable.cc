@@ -215,4 +215,40 @@ std::expected<FileWatchResult, IOError> FileWatchAwaitable::await_resume() {
     return std::move(m_result);
 }
 
+bool RecvNotifyAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_waker = Waker(handle);
+    m_controller->fillAwaitable(RECV_NOTIFY, this);
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addRecvNotify(m_controller) < 0) {
+        return false;
+    }
+    return true;
+}
+
+void RecvNotifyAwaitable::await_resume() {
+    m_controller->removeAwaitable(RECV_NOTIFY);
+}
+
+bool SendNotifyAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_waker = Waker(handle);
+    m_controller->fillAwaitable(SEND_NOTIFY, this);
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addSendNotify(m_controller) < 0) {
+        return false;
+    }
+    return true;
+}
+
+void SendNotifyAwaitable::await_resume() {
+    m_controller->removeAwaitable(SEND_NOTIFY);
+}
+
 }

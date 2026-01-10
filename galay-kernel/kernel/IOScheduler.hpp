@@ -105,6 +105,16 @@ inline auto IOController::getAwaitable() -> FileWatchAwaitable* {
     return static_cast<FileWatchAwaitable*>(m_awaitable[READ]);
 }
 
+template<>
+inline auto IOController::getAwaitable() -> RecvNotifyAwaitable* {
+    return static_cast<RecvNotifyAwaitable*>(m_awaitable[READ]);
+}
+
+template<>
+inline auto IOController::getAwaitable() -> SendNotifyAwaitable* {
+    return static_cast<SendNotifyAwaitable*>(m_awaitable[WRITE]);
+}
+
 /**
  * @brief IO调度器接口
  *
@@ -196,6 +206,22 @@ public:
      */
     virtual int addFileWatch(IOController* controller) = 0;
 
+    /**
+     * @brief 注册Recv通知事件（仅通知可读，不执行IO操作）
+     * @param controller IO控制器
+     * @return 0表示已注册等待，<0表示错误
+     * @note 用于SSL等需要自定义IO处理的场景，事件就绪时只唤醒协程
+     */
+    virtual int addRecvNotify(IOController* controller) = 0;
+
+    /**
+     * @brief 注册Send通知事件（仅通知可写，不执行IO操作）
+     * @param controller IO控制器
+     * @return 0表示已注册等待，<0表示错误
+     * @note 用于SSL等需要自定义IO处理的场景，事件就绪时只唤醒协程
+     */
+    virtual int addSendNotify(IOController* controller) = 0;
+
      /**
      * @brief 删除fd的所有事件
      * @param controller IO控制器
@@ -212,6 +238,7 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
     case IOEventType::RECVFROM:
     case IOEventType::ACCEPT:
     case IOEventType::FILEWATCH:
+    case IOEventType::RECV_NOTIFY:
         m_awaitable[READ] = awaitable;
         ++m_generation[READ];
         break;
@@ -219,6 +246,7 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
     case IOEventType::FILEWRITE:
     case IOEventType::SENDTO:
     case IOEventType::CONNECT:
+    case IOEventType::SEND_NOTIFY:
         m_awaitable[WRITE] = awaitable;
         ++m_generation[WRITE];
         break;
@@ -235,12 +263,14 @@ inline void IOController::removeAwaitable(IOEventType type) {
     case IOEventType::RECVFROM:
     case IOEventType::ACCEPT:
     case IOEventType::FILEWATCH:
+    case IOEventType::RECV_NOTIFY:
         m_awaitable[READ] = nullptr;
         break;
     case IOEventType::SEND:
     case IOEventType::FILEWRITE:
     case IOEventType::SENDTO:
     case IOEventType::CONNECT:
+    case IOEventType::SEND_NOTIFY:
         m_awaitable[WRITE] = nullptr;
         break;
     default:

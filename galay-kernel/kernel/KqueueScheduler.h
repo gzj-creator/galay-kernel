@@ -60,12 +60,14 @@ public:
     int addRecvFrom(IOController* controller) override;
     int addSendTo(IOController* controller) override;
     int addFileWatch(IOController* controller) override;
+    int addRecvNotify(IOController* controller) override;
+    int addSendNotify(IOController* controller) override;
 
     int remove(IOController* controller) override;
     // Coroutine scheduling
     void spawn(Coroutine coro) override;
 
-private:
+protected:
     int m_kqueue_fd;
     std::atomic<bool> m_running;
     std::thread m_thread;

@@ -501,8 +501,23 @@ struct FileWatchResult {
  * @note 由FileWatcher::watch()创建
  */
 struct FileWatchAwaitable: public TimeoutSupport<FileWatchAwaitable> {
+#ifdef USE_KQUEUE
     /**
-     * @brief 构造函数
+     * @brief 构造函数 (kqueue)
+     * @param controller IO控制器
+     * @param buffer 事件缓冲区
+     * @param buffer_size 缓冲区大小
+     * @param events 要监控的事件类型
+     */
+    FileWatchAwaitable(IOController* controller,
+                       char* buffer, size_t buffer_size,
+                       FileWatchEvent events)
+        : m_controller(controller),
+          m_buffer(buffer), m_buffer_size(buffer_size),
+          m_events(events) {}
+#else
+    /**
+     * @brief 构造函数 (Linux)
      * @param controller IO控制器
      * @param buffer 事件缓冲区
      * @param buffer_size 缓冲区大小
@@ -511,6 +526,7 @@ struct FileWatchAwaitable: public TimeoutSupport<FileWatchAwaitable> {
                        char* buffer, size_t buffer_size)
         : m_controller(controller),
           m_buffer(buffer), m_buffer_size(buffer_size) {}
+#endif
 
     /**
      * @brief 检查是否可以立即返回
@@ -534,8 +550,91 @@ struct FileWatchAwaitable: public TimeoutSupport<FileWatchAwaitable> {
     IOController* m_controller;                         ///< IO控制器
     char* m_buffer;                                     ///< 事件缓冲区
     size_t m_buffer_size;                               ///< 缓冲区大小
+#ifdef USE_KQUEUE
+    FileWatchEvent m_events;                            ///< 要监控的事件类型
+#endif
     Waker m_waker;                                      ///< 协程唤醒器
     std::expected<FileWatchResult, IOError> m_result;   ///< 操作结果
+};
+
+/**
+ * @brief Recv通知操作的可等待对象
+ *
+ * @details 仅等待fd可读，不执行实际IO操作。
+ * 用于SSL等需要自定义IO处理的场景。
+ * co_await后协程被唤醒，由调用者自己执行IO操作。
+ *
+ * @note 事件就绪时只唤醒协程，不会调用recv()
+ */
+struct RecvNotifyAwaitable: public TimeoutSupport<RecvNotifyAwaitable> {
+    /**
+     * @brief 构造函数
+     * @param controller IO控制器
+     */
+    RecvNotifyAwaitable(IOController* controller)
+        : m_controller(controller) {}
+
+    /**
+     * @brief 检查是否可以立即返回
+     * @return 始终返回false
+     */
+    bool await_ready() { return false; }
+
+    /**
+     * @brief 挂起协程并注册IO事件
+     * @param handle 当前协程句柄
+     * @return true表示挂起，false表示立即完成
+     */
+    bool await_suspend(std::coroutine_handle<> handle);
+
+    /**
+     * @brief 恢复时返回
+     * @return void（调用者需要自己执行IO操作）
+     */
+    void await_resume();
+
+    IOController* m_controller;                ///< IO控制器
+    Waker m_waker;                             ///< 协程唤醒器
+};
+
+/**
+ * @brief Send通知操作的可等待对象
+ *
+ * @details 仅等待fd可写，不执行实际IO操作。
+ * 用于SSL等需要自定义IO处理的场景。
+ * co_await后协程被唤醒，由调用者自己执行IO操作。
+ *
+ * @note 事件就绪时只唤醒协程，不会调用send()
+ */
+struct SendNotifyAwaitable: public TimeoutSupport<SendNotifyAwaitable> {
+    /**
+     * @brief 构造函数
+     * @param controller IO控制器
+     */
+    SendNotifyAwaitable(IOController* controller)
+        : m_controller(controller) {}
+
+    /**
+     * @brief 检查是否可以立即返回
+     * @return 始终返回false
+     */
+    bool await_ready() { return false; }
+
+    /**
+     * @brief 挂起协程并注册IO事件
+     * @param handle 当前协程句柄
+     * @return true表示挂起，false表示立即完成
+     */
+    bool await_suspend(std::coroutine_handle<> handle);
+
+    /**
+     * @brief 恢复时返回
+     * @return void（调用者需要自己执行IO操作）
+     */
+    void await_resume();
+
+    IOController* m_controller;                ///< IO控制器
+    Waker m_waker;                             ///< 协程唤醒器
 };
 
 } // namespace galay::kernel

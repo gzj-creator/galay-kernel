@@ -189,8 +189,13 @@ std::expected<void, IOError> FileWatcher::removeWatch(int wd)
 
 FileWatchAwaitable FileWatcher::watch()
 {
+#ifdef USE_KQUEUE
+    return FileWatchAwaitable(&m_controller,
+                              m_buffer, BUFFER_SIZE, m_current_events);
+#else
     return FileWatchAwaitable(&m_controller,
                               m_buffer, BUFFER_SIZE);
+#endif
 }
 
 std::string FileWatcher::getPath(int wd) const

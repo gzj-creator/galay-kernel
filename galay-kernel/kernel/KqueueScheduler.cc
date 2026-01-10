@@ -371,6 +371,26 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         }
         break;
     }
+    case RECV_NOTIFY:
+    {
+        // 仅通知可读，不执行IO操作
+        if (ev.filter == EVFILT_READ) {
+            RecvNotifyAwaitable* awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
+            if(awaitable == nullptr) return;
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
+    case SEND_NOTIFY:
+    {
+        // 仅通知可写，不执行IO操作
+        if (ev.filter == EVFILT_WRITE) {
+            SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
+            if(awaitable == nullptr) return;
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
     default:
         break;
     }
@@ -584,12 +604,37 @@ int KqueueScheduler::addFileWatch(IOController* controller)
     FileWatchAwaitable* awaitable = controller->getAwaitable<FileWatchAwaitable>();
     if(awaitable == nullptr) return -1;
 
+    // 将 FileWatchEvent 转换为 kqueue fflags
+    unsigned int fflags = 0;
+    uint32_t events = static_cast<uint32_t>(awaitable->m_events);
+    if (events & static_cast<uint32_t>(FileWatchEvent::Modify))     fflags |= NOTE_WRITE;
+    if (events & static_cast<uint32_t>(FileWatchEvent::DeleteSelf)) fflags |= NOTE_DELETE;
+    if (events & static_cast<uint32_t>(FileWatchEvent::MoveSelf))   fflags |= NOTE_RENAME;
+    if (events & static_cast<uint32_t>(FileWatchEvent::Attrib))     fflags |= NOTE_ATTRIB;
+    // NOTE_EXTEND 也映射到 Modify（文件扩展）
+    if (events & static_cast<uint32_t>(FileWatchEvent::Modify))     fflags |= NOTE_EXTEND;
+
     // kqueue 使用 EVFILT_VNODE 监控文件变化
-    // 需要打开的文件描述符，而不是 inotify fd
     struct kevent ev;
-    // NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_ATTRIB | NOTE_EXTEND
-    unsigned int fflags = NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_ATTRIB | NOTE_EXTEND;
     EV_SET(&ev, controller->m_handle.fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, fflags, 0, controller);
+    return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
+}
+
+int KqueueScheduler::addRecvNotify(IOController* controller)
+{
+    // 仅注册读事件，不执行IO操作
+    // 用于SSL等需要自定义IO处理的场景
+    struct kevent ev;
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, controller);
+    return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
+}
+
+int KqueueScheduler::addSendNotify(IOController* controller)
+{
+    // 仅注册写事件，不执行IO操作
+    // 用于SSL等需要自定义IO处理的场景
+    struct kevent ev;
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 

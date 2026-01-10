@@ -70,3 +70,8 @@ add_executable(test_timing_wheel test_timing_wheel.cc)
 target_link_libraries(test_timing_wheel PRIVATE galay-kernel)
 target_include_directories(test_timing_wheel PRIVATE ${CMAKE_SOURCE_DIR})
 
+# NotifyAwaitable测试 (RecvNotify/SendNotify)
+add_executable(test_notify_awaitable test_notify_awaitable.cc)
+target_link_libraries(test_notify_awaitable PRIVATE galay-kernel)
+target_include_directories(test_notify_awaitable PRIVATE ${CMAKE_SOURCE_DIR})
+
