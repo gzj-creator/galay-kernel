@@ -13,7 +13,15 @@ const char* error_string[] = {
     "Failed to accept connection",
     "Failed to connect to remote host",
     "Failed to bind socket address",
-    "Failed to listen on socket"
+    "Failed to listen on socket",
+    "Failed to open file",
+    "Failed to read file",
+    "Failed to write file",
+    "Failed to get file status",
+    "Failed to sync file",
+    "Failed to seek file",
+    "Operation timeout",
+    "Not running on IO scheduler"
 };
 
 bool IOError::contains(uint64_t error, IOErrorCode code)

@@ -6,8 +6,9 @@
 #ifndef GALAY_KERNEL_MPSC_CHANNEL_H
 #define GALAY_KERNEL_MPSC_CHANNEL_H
 
-#include "../kernel/Coroutine.h"
-#include "../kernel/Scheduler.h"
+#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Scheduler.hpp"
+#include "galay-kernel/kernel/Waker.h"
 #include <concurrentqueue/moodycamel/concurrentqueue.h>
 #include <atomic>
 #include <coroutine>
@@ -45,8 +46,8 @@ template <typename T>
 class MpscRecvBatchAwaitable
 {
 public:
-    explicit MpscRecvBatchAwaitable(MpscChannel<T>* channel, size_t maxCount)
-        : m_channel(channel), m_maxCount(maxCount) {}
+    explicit MpscRecvBatchAwaitable(MpscChannel<T>* channel, size_t max_count)
+        : m_channel(channel), m_maxCount(max_count){}
 
     bool await_ready() const noexcept;
     bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
@@ -68,41 +69,36 @@ public:
 
     static constexpr size_t DEFAULT_BATCH_SIZE = 1024;
 
-    explicit MpscChannel(size_t initialCapacity = 32)
-        : m_queue(initialCapacity) {}
 
+    MpscChannel() {}
     MpscChannel(const MpscChannel&) = delete;
     MpscChannel& operator=(const MpscChannel&) = delete;
     MpscChannel(MpscChannel&&) = delete;
     MpscChannel& operator=(MpscChannel&&) = delete;
 
-    static MpscToken getToken() {
-        return std::this_thread::get_id();
-    }
-
     /**
-     * @brief 发送单条数据（线程安全，支持跨调度器）
+     * @brief 发送单条数据（线程安全，支持跨调度器）,保证一定有对端在recv
      */
-    bool send(T&& value, MpscToken& token) {
+    bool send(T&& value) {
         if (!m_queue.enqueue(std::forward<T>(value))) {
             return false;
         }
         uint32_t prevSize = m_size.fetch_add(1, std::memory_order_acq_rel);
-        if (prevSize == 0) {
-            wakeUpWaiter(token);
+        if (prevSize == 0 ) {
+            m_waker.wakeUp();
         }
         return true;
     }
 
-    bool send(const T& value, MpscToken& token) {
+    bool send(const T& value) {
         T copy = value;
-        return send(std::move(copy), token);
+        return send(std::move(copy));
     }
 
     /**
      * @brief 批量发送数据
      */
-    bool sendBatch(const std::vector<T>& values, MpscToken& token) {
+    bool sendBatch(const std::vector<T>& values) {
         if (values.empty()) return true;
         if (!m_queue.enqueue_bulk(values.data(), values.size())) {
             return false;
@@ -110,12 +106,12 @@ public:
         uint32_t prevSize = m_size.fetch_add(static_cast<uint32_t>(values.size()),
                                               std::memory_order_acq_rel);
         if (prevSize == 0) {
-            wakeUpWaiter(token);
+            m_waker.wakeUp();
         }
         return true;
     }
 
-    bool sendBatch(std::vector<T>&& values, MpscToken& token) {
+    bool sendBatch(std::vector<T>&& values) {
         if (values.empty()) return true;
         size_t count = values.size();
         if (!m_queue.enqueue_bulk(std::make_move_iterator(values.begin()), count)) {
@@ -124,7 +120,7 @@ public:
         uint32_t prevSize = m_size.fetch_add(static_cast<uint32_t>(count),
                                               std::memory_order_acq_rel);
         if (prevSize == 0) {
-            wakeUpWaiter(token);
+            m_waker.wakeUp();
         }
         return true;
     }
@@ -176,32 +172,10 @@ private:
     template <typename U>
     friend class MpscRecvBatchAwaitable;
 
-    void wakeUpWaiter(MpscToken& token) {
-        bool expected = true;
-        if (m_hasWaiter.compare_exchange_strong(expected, false,
-                                                 std::memory_order_acq_rel)) {
-            Coroutine waiterCoro = m_waiterCoro;
-            Scheduler* waiterScheduler = m_waiterScheduler;
-
-            if (waiterCoro.isValid() && waiterScheduler) {
-                // 判断是否同线程：比较当前线程ID和recv协程所属调度器的线程ID
-                if (waiterScheduler->threadId() == token) {
-                    // 同线程，直接恢复协程（高性能路径）
-                    waiterCoro.resume();
-                } else {
-                    // 跨线程，通过调度器队列唤醒
-                    waiterScheduler->spawn(std::move(waiterCoro));
-                }
-            }
-        }
-    }
 
     alignas(64) std::atomic<uint32_t> m_size{0};
     moodycamel::ConcurrentQueue<T> m_queue;
-
-    alignas(64) std::atomic<bool> m_hasWaiter{false};
-    Coroutine m_waiterCoro;
-    Scheduler* m_waiterScheduler = nullptr;
+    Waker m_waker;
 };
 
 // ============================================================================
@@ -216,25 +190,16 @@ inline bool MpscRecvAwaitable<T>::await_ready() const noexcept {
 template <typename T>
 inline bool MpscRecvAwaitable<T>::await_suspend(
     std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
+    // 设置 waker
+    m_channel->m_waker = Waker(handle);
+
+    // 再次检查队列状态，防止竞态条件
+    // 如果在设置 waker 之前已经有数据入队，需要立即返回
     if (m_channel->m_size.load(std::memory_order_acquire) > 0) {
-        return false;
+        return false;  // 不挂起，直接返回
     }
 
-    Coroutine coro = handle.promise().getCoroutine();
-    m_channel->m_waiterScheduler = coro.belongScheduler();
-    m_channel->m_waiterCoro = coro;
-
-    m_channel->m_hasWaiter.store(true, std::memory_order_release);
-
-    if (m_channel->m_size.load(std::memory_order_acquire) > 0) {
-        bool expected = true;
-        if (m_channel->m_hasWaiter.compare_exchange_strong(expected, false,
-                                                            std::memory_order_acq_rel)) {
-            return false;
-        }
-    }
-
-    return true;
+    return true;  // 挂起
 }
 
 template <typename T>
@@ -259,25 +224,16 @@ inline bool MpscRecvBatchAwaitable<T>::await_ready() const noexcept {
 template <typename T>
 inline bool MpscRecvBatchAwaitable<T>::await_suspend(
     std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
+    // 设置 waker
+    m_channel->m_waker = Waker(handle);
+
+    // 再次检查队列状态，防止竞态条件
+    // 如果在设置 waker 之前已经有数据入队，需要立即返回
     if (m_channel->m_size.load(std::memory_order_acquire) > 0) {
-        return false;
+        return false;  // 不挂起，直接返回
     }
 
-    Coroutine coro = handle.promise().getCoroutine();
-    m_channel->m_waiterScheduler = coro.belongScheduler();
-    m_channel->m_waiterCoro = coro;
-
-    m_channel->m_hasWaiter.store(true, std::memory_order_release);
-
-    if (m_channel->m_size.load(std::memory_order_acquire) > 0) {
-        bool expected = true;
-        if (m_channel->m_hasWaiter.compare_exchange_strong(expected, false,
-                                                            std::memory_order_acq_rel)) {
-            return false;
-        }
-    }
-
-    return true;
+    return true;  // 挂起
 }
 
 template <typename T>

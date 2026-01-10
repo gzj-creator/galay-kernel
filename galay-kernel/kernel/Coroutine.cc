@@ -1,5 +1,5 @@
 #include "Coroutine.h"
-#include "Scheduler.h"
+#include "Scheduler.hpp"
 
 namespace galay::kernel
 {
@@ -17,6 +17,13 @@ std::suspend_always PromiseType::yield_value(ReSchedulerType flag) noexcept
         m_coroutine.m_data->m_scheduler->spawn(m_coroutine);
     }
     return {};
+}
+
+void PromiseType::return_void() const noexcept {
+    if(m_coroutine.m_data->m_next.has_value()) {
+        auto next = m_coroutine.m_data->m_next.value();
+        next.belongScheduler()->spawn(next);
+    }
 }
 
 bool WaitResult::await_suspend(std::coroutine_handle<> handle)
@@ -62,35 +69,11 @@ Coroutine& Coroutine::operator=(const Coroutine& other) noexcept
     return *this;
 }
 
-void Coroutine::modToSuspend()
-{
-    if (m_data) {
-        m_data->m_status.store(CoroutineStatus::Suspended, std::memory_order_relaxed);
-    }
-}
-
 void Coroutine::resume()
 {
-    if (m_data && m_data->m_handle) {
-        m_data->m_handle.resume();
+    if (m_data && m_data->m_handle && !m_data->m_handle.done() && m_data->m_scheduler) {
+        m_data->m_scheduler->spawn(*this);
     }
-}
-
-
-bool Coroutine::isRunning() const
-{
-    return m_data->m_status.load(std::memory_order_relaxed) == CoroutineStatus::Running;
-}
-
-
-bool Coroutine::isSuspend() const
-{
-    return m_data->m_status.load(std::memory_order_relaxed) == CoroutineStatus::Suspended;
-}
-
-bool Coroutine::isDone() const
-{
-    return m_data->m_status.load(std::memory_order_relaxed) == CoroutineStatus::Finished;
 }
 
 Scheduler *Coroutine::belongScheduler() const

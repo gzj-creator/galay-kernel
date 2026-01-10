@@ -34,15 +34,8 @@ struct BenchConfig {
 };
 
 // 单个客户端连接的压测协程
-Coroutine benchClient(IOScheduler* scheduler, const BenchConfig& config, int clientId) {
-    TcpSocket client(scheduler);
-
-    auto createResult = client.create(IPType::IPV4);
-    if (!createResult) {
-        g_error_count.fetch_add(1, std::memory_order_relaxed);
-        co_return;
-    }
-
+Coroutine benchClient(const BenchConfig& config, int clientId) {
+    TcpSocket client;
     client.option().handleNonBlock();
 
     Host serverHost(IPType::IPV4, config.host, config.port);
@@ -188,7 +181,7 @@ int main(int argc, char* argv[]) {
     // 启动所有客户端连接
     std::cout << "Starting " << config.connections << " connections..." << std::endl;
     for (int i = 0; i < config.connections; i++) {
-        scheduler.spawn(benchClient(&scheduler, config, i));
+        scheduler.spawn(benchClient(config, i));
     }
 
     // 等待统计线程结束

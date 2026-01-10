@@ -1,5 +1,6 @@
 #include "Awaitable.h"
 #include "common/Defn.hpp"
+#include "galay-kernel/common/Error.h"
 #include "kernel/Waker.h"
 
 #ifdef USE_EPOLL
@@ -16,42 +17,92 @@ namespace galay::kernel
 bool AcceptAwaitable::await_suspend(std::coroutine_handle<> handle) {
     m_waker = Waker(handle);
     m_controller->fillAwaitable(ACCEPT, this);
-    if(m_scheduler->addAccept(m_controller) == OK) {
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addAccept(m_controller) == OK) {
         return false;
     }
     return true;
+}
+
+std::expected<GHandle, IOError> AcceptAwaitable::await_resume() {
+    m_controller->removeAwaitable(ACCEPT);
+    return std::move(m_result);
 }
 
 bool RecvAwaitable::await_suspend(std::coroutine_handle<> handle) {
     m_waker = Waker(handle);
     m_controller->fillAwaitable(RECV, this);
-    if(m_scheduler->addRecv(m_controller) == OK) {
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addRecv(m_controller) == OK) {
         return false;
     }
     return true;
+}
+
+std::expected<Bytes, IOError> RecvAwaitable::await_resume() {
+    m_controller->removeAwaitable(RECV);
+    return std::move(m_result);
 }
 
 bool SendAwaitable::await_suspend(std::coroutine_handle<> handle) {
     m_waker = Waker(handle);
     m_controller->fillAwaitable(SEND, this);
-    if(m_scheduler->addSend(m_controller) == OK) {
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addSend(m_controller) == OK) {
         return false;
     }
     return true;
+}
+
+std::expected<size_t, IOError> SendAwaitable::await_resume() {
+    m_controller->removeAwaitable(SEND);
+    return std::move(m_result);
 }
 
 bool ConnectAwaitable::await_suspend(std::coroutine_handle<> handle) {
     m_waker = Waker(handle);
     m_controller->fillAwaitable(CONNECT, this);
-    if(m_scheduler->addConnect(m_controller) == OK) {
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addConnect(m_controller) == OK) {
         return false;
     }
     return true;
 }
 
+std::expected<void, IOError> ConnectAwaitable::await_resume() {
+    m_controller->removeAwaitable(CONNECT);
+    return std::move(m_result);
+}
+
 bool CloseAwaitable::await_suspend(std::coroutine_handle<> handle) {
     m_waker = Waker(handle);
-    int result = m_scheduler->addClose(m_handle.fd);
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    int result = io_scheduler->addClose(m_controller);
     if(result == 0) {
         m_result = {};  // Success
         return false;
@@ -60,49 +111,108 @@ bool CloseAwaitable::await_suspend(std::coroutine_handle<> handle) {
     return false;
 }
 
+std::expected<void, IOError> CloseAwaitable::await_resume() {
+    return std::move(m_result);
+}
+
 bool FileReadAwaitable::await_suspend(std::coroutine_handle<> handle) {
     m_waker = Waker(handle);
     m_controller->fillAwaitable(FILEREAD, this);
-    if(m_scheduler->addFileRead(m_controller) == OK) {
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addFileRead(m_controller) == OK) {
         return false;
     }
     return true;
+}
+
+std::expected<Bytes, IOError> FileReadAwaitable::await_resume() {
+    m_controller->removeAwaitable(FILEREAD);
+    return std::move(m_result);
 }
 
 bool FileWriteAwaitable::await_suspend(std::coroutine_handle<> handle) {
     m_waker = Waker(handle);
     m_controller->fillAwaitable(FILEWRITE, this);
-    if(m_scheduler->addFileWrite(m_controller) == OK) {
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addFileWrite(m_controller) == OK) {
         return false;
     }
     return true;
+}
+
+std::expected<size_t, IOError> FileWriteAwaitable::await_resume() {
+    m_controller->removeAwaitable(FILEWRITE);
+    return std::move(m_result);
 }
 
 bool RecvFromAwaitable::await_suspend(std::coroutine_handle<> handle) {
     m_waker = Waker(handle);
     m_controller->fillAwaitable(RECVFROM, this);
-    if(m_scheduler->addRecvFrom(m_controller) == OK) {
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addRecvFrom(m_controller) == OK) {
         return false;
     }
     return true;
+}
+
+std::expected<Bytes, IOError> RecvFromAwaitable::await_resume() {
+    m_controller->removeAwaitable(RECVFROM);
+    return std::move(m_result);
 }
 
 bool SendToAwaitable::await_suspend(std::coroutine_handle<> handle) {
     m_waker = Waker(handle);
     m_controller->fillAwaitable(SENDTO, this);
-    if(m_scheduler->addSendTo(m_controller) == OK) {
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addSendTo(m_controller) == OK) {
         return false;
     }
     return true;
 }
 
+std::expected<size_t, IOError> SendToAwaitable::await_resume() {
+    m_controller->removeAwaitable(SENDTO);
+    return std::move(m_result);
+}
+
 bool FileWatchAwaitable::await_suspend(std::coroutine_handle<> handle) {
     m_waker = Waker(handle);
     m_controller->fillAwaitable(FILEWATCH, this);
-    if(m_scheduler->addFileWatch(m_controller) == OK) {
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addFileWatch(m_controller) == OK) {
         return false;
     }
     return true;
+}
+
+std::expected<FileWatchResult, IOError> FileWatchAwaitable::await_resume() {
+    m_controller->removeAwaitable(FILEWATCH);
+    return std::move(m_result);
 }
 
 }

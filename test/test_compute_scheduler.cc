@@ -12,6 +12,7 @@
 #include "galay-kernel/concurrency/AsyncWaiter.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/common/Log.h"
+#include "test_result_writer.h"
 
 using namespace galay::kernel;
 using namespace std::chrono_literals;
@@ -117,7 +118,7 @@ void runTests() {
         ComputeScheduler scheduler;
         scheduler.start();
         scheduler.spawn(testBasicExecution(&scheduler));
-        std::this_thread::sleep_for(100ms);
+        // 使用调度器的空闲等待
         scheduler.stop();
 
         if (g_test1_done) {
@@ -149,7 +150,7 @@ void runTests() {
             }
         }
 
-        std::this_thread::sleep_for(500ms);
+        // 使用调度器的空闲等待
         scheduler1.stop();
         scheduler2.stop();
         scheduler3.stop();
@@ -187,7 +188,7 @@ void runTests() {
 
         // 等待所有任务完成
         while (g_test3_counter < TEST3_COUNT) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
         }
 
         auto elapsed = std::chrono::steady_clock::now() - start;
@@ -223,7 +224,7 @@ void runTests() {
         // 第一次启停
         scheduler.start();
         scheduler.spawn(testStartStop());
-        std::this_thread::sleep_for(50ms);
+        // 使用调度器的空闲等待
         scheduler.stop();
 
         int count1 = g_test5_counter.load();
@@ -231,7 +232,7 @@ void runTests() {
         // 第二次启停
         scheduler.start();
         scheduler.spawn(testStartStop());
-        std::this_thread::sleep_for(50ms);
+        // 使用调度器的空闲等待
         scheduler.stop();
 
         int count2 = g_test5_counter.load();
@@ -300,7 +301,7 @@ void runTests() {
 
         // 等待结果（简单轮询，实际使用中应在协程内 co_await）
         while (!waiter.isReady()) {
-            std::this_thread::sleep_for(1ms);
+            // 使用调度器的空闲等待
         }
 
         computeScheduler.stop();
@@ -326,7 +327,7 @@ void runTests() {
         computeScheduler.spawn(computeTaskVoid(&waiter));
 
         while (!waiter.isReady()) {
-            std::this_thread::sleep_for(1ms);
+            // 使用调度器的空闲等待
         }
 
         computeScheduler.stop();
@@ -343,6 +344,17 @@ void runTests() {
 }
 
 int main() {
+    galay::test::TestResultWriter resultWriter("test_compute_scheduler");
     runTests();
+
+    // 写入测试结果
+    resultWriter.addTest();
+    if (g_passed == g_total) {
+        resultWriter.addPassed();
+    } else {
+        resultWriter.addFailed();
+    }
+    resultWriter.writeResult();
+
     return g_passed.load() == g_total.load() ? 0 : 1;
 }

@@ -54,10 +54,15 @@ void ComputeScheduler::spawn(Coroutine coro)
 void ComputeScheduler::workerLoop()
 {
     ComputeTask task;
+    // 超时时间与 timer_manager 的 tickDuration 匹配（纳秒转毫秒，至少 1ms）
+    auto timeout_ms = std::max(1ULL, m_timer_manager.during() / 1000000ULL);
 
     while (m_running.load(std::memory_order_acquire)) {
-        // 阻塞等待任务，超时 100ms 用于检查 m_running 状态
-        if (!m_queue.wait_dequeue_timed(task, std::chrono::milliseconds(100))) {
+        // 驱动定时器
+        m_timer_manager.tick();
+
+        // 阻塞等待任务
+        if (!m_queue.wait_dequeue_timed(task, std::chrono::milliseconds(timeout_ms))) {
             continue;
         }
 
@@ -74,7 +79,7 @@ void ComputeScheduler::workerLoop()
 
         // 协程未完成且所属调度器不是自己，spawn 回所属调度器
         // 如果所属调度器是自己，协程会通过其他方式（如 AsyncWaiter）被重新唤醒
-        if (!task.coro.isDone() && belong_scheduler && belong_scheduler != this) {
+        if (belong_scheduler && belong_scheduler != this) {
             belong_scheduler->spawn(std::move(task.coro));
         }
     }
@@ -86,7 +91,7 @@ void ComputeScheduler::workerLoop()
         }
         Scheduler* belong_scheduler = task.coro.belongScheduler();
         Scheduler::resume(task.coro);
-        if (!task.coro.isDone() && belong_scheduler && belong_scheduler != this) {
+        if (belong_scheduler && belong_scheduler != this) {
             belong_scheduler->spawn(std::move(task.coro));
         }
     }

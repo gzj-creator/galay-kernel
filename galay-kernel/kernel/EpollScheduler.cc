@@ -3,7 +3,7 @@
 #ifdef USE_EPOLL
 
 #include "Awaitable.h"
-#include "Timeout.h"
+#include "Timeout.hpp"
 #include "galay-kernel/async/AioFile.h"
 #include "galay-kernel/common/Log.h"
 #include <sys/eventfd.h>
@@ -122,10 +122,15 @@ int EpollScheduler::addRecv(IOController* controller)
         return OK;
     }
 
-    RecvAwaitable* awaitable = static_cast<RecvAwaitable*>(controller->m_awaitable);
+    RecvAwaitable* awaitable = static_cast<RecvAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
     struct epoll_event ev;
     ev.events = EPOLLIN | EPOLLET;
     ev.data.ptr = controller;
+
+    // 检查是否需要合并 SEND 事件
+    if (controller->m_type == IOEventType::RECVWITHSEND) {
+        ev.events |= EPOLLOUT;  // 合并写事件
+    }
 
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, awaitable->m_handle.fd, &ev);
     if (ret == -1 && errno == ENOENT) {
@@ -140,10 +145,15 @@ int EpollScheduler::addSend(IOController* controller)
         return OK;
     }
 
-    SendAwaitable* awaitable = static_cast<SendAwaitable*>(controller->m_awaitable);
+    SendAwaitable* awaitable = static_cast<SendAwaitable*>(controller->m_awaitable[IOController::SEND]);
     struct epoll_event ev;
     ev.events = EPOLLOUT | EPOLLET;
     ev.data.ptr = controller;
+
+    // 检查是否需要合并 RECV 事件
+    if (controller->m_type == IOEventType::RECVWITHSEND) {
+        ev.events |= EPOLLIN;  // 合并读事件
+    }
 
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, awaitable->m_handle.fd, &ev);
     if (ret == -1 && errno == ENOENT) {
@@ -285,13 +295,7 @@ void EpollScheduler::eventLoop()
 void EpollScheduler::processEvent(struct epoll_event& ev)
 {
     IOController* controller = static_cast<IOController*>(ev.data.ptr);
-    if (!controller || controller->m_type == IOEventType::INVALID || controller->m_awaitable == nullptr) {
-        return;
-    }
-
-    // 关键：尝试标记为完成状态，如果已被超时处理则跳过
-    if (!controller->tryComplete()) {
-        // 已被超时处理，忽略此 IO 事件
+    if (!controller || controller->m_type == IOEventType::INVALID) {
         return;
     }
 
@@ -299,6 +303,10 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
     {
     case ACCEPT:
     {
+        // 单操作模式：使用 m_awaitable
+        if (!controller->m_awaitable) return;
+        if (!controller->tryComplete()) return;  // 已被超时处理
+
         if (ev.events & EPOLLIN) {
             handleAccept(controller);
             AcceptAwaitable* awaitable = static_cast<AcceptAwaitable*>(controller->m_awaitable);
@@ -308,6 +316,10 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
     }
     case CONNECT:
     {
+        // 单操作模式：使用 m_awaitable
+        if (!controller->m_awaitable) return;
+        if (!controller->tryComplete()) return;
+
         if (ev.events & EPOLLOUT) {
             handleConnect(controller);
             ConnectAwaitable* awaitable = static_cast<ConnectAwaitable*>(controller->m_awaitable);
@@ -317,24 +329,57 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
     }
     case RECV:
     {
+        // 单操作模式：使用 m_recv_awaitable
+        if (!controller->m_recv_awaitable) return;
+        if (!controller->tryRecvComplete()) return;  // 已被超时处理
+
         if (ev.events & EPOLLIN) {
             handleRecv(controller);
-            RecvAwaitable* awaitable = static_cast<RecvAwaitable*>(controller->m_awaitable);
+            RecvAwaitable* awaitable = static_cast<RecvAwaitable*>(controller->m_recv_awaitable);
             awaitable->m_waker.wakeUp();
         }
         break;
     }
     case SEND:
     {
+        // 单操作模式：使用 m_send_awaitable
+        if (!controller->m_send_awaitable) return;
+        if (!controller->trySendComplete()) return;
+
         if (ev.events & EPOLLOUT) {
             handleSend(controller);
-            SendAwaitable* awaitable = static_cast<SendAwaitable*>(controller->m_awaitable);
+            SendAwaitable* awaitable = static_cast<SendAwaitable*>(controller->m_send_awaitable);
             awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
+    case RECVWITHSEND:
+    {
+        // 双操作模式：分别处理读写事件
+        // 处理读事件
+        if ((ev.events & EPOLLIN) && controller->m_recv_awaitable) {
+            if (controller->tryRecvComplete()) {
+                handleRecv(controller);
+                RecvAwaitable* recv_awaitable = static_cast<RecvAwaitable*>(controller->m_recv_awaitable);
+                recv_awaitable->m_waker.wakeUp();
+            }
+        }
+
+        // 处理写事件
+        if ((ev.events & EPOLLOUT) && controller->m_send_awaitable) {
+            if (controller->trySendComplete()) {
+                handleSend(controller);
+                SendAwaitable* send_awaitable = static_cast<SendAwaitable*>(controller->m_send_awaitable);
+                send_awaitable->m_waker.wakeUp();
+            }
         }
         break;
     }
     case FILEREAD:
     {
+        if (!controller->m_awaitable) return;
+        if (!controller->tryComplete()) return;
+
         if (ev.events & EPOLLIN) {
             handleFileRead(controller);
         }
@@ -342,6 +387,9 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
     }
     case FILEWRITE:
     {
+        if (!controller->m_awaitable) return;
+        if (!controller->tryComplete()) return;
+
         if (ev.events & EPOLLIN) {
             handleFileWrite(controller);
         }
@@ -349,6 +397,9 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
     }
     case RECVFROM:
     {
+        if (!controller->m_awaitable) return;
+        if (!controller->tryComplete()) return;
+
         if (ev.events & EPOLLIN) {
             handleRecvFrom(controller);
             RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
@@ -358,6 +409,9 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
     }
     case SENDTO:
     {
+        if (!controller->m_awaitable) return;
+        if (!controller->tryComplete()) return;
+
         if (ev.events & EPOLLOUT) {
             handleSendTo(controller);
             SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
@@ -367,6 +421,9 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
     }
     case FILEWATCH:
     {
+        if (!controller->m_awaitable) return;
+        if (!controller->tryComplete()) return;
+
         if (ev.events & EPOLLIN) {
             FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable);
             // 从 inotify fd 读取事件

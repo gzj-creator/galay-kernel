@@ -28,8 +28,8 @@ void signalHandler(int signum) {
 }
 
 // 处理单个客户端连接
-Coroutine handleClient(IOScheduler* scheduler, GHandle clientHandle) {
-    TcpSocket client(scheduler, clientHandle);
+Coroutine handleClient(GHandle clientHandle) {
+    TcpSocket client(clientHandle);
     client.option().handleNonBlock();
 
     char buffer[4096];
@@ -75,7 +75,7 @@ Coroutine acceptLoop(IOScheduler* scheduler, TcpSocket* listener) {
         g_total_connections.fetch_add(1, std::memory_order_relaxed);
 
         // 启动处理协程
-        scheduler->spawn(handleClient(scheduler, acceptResult.value()));
+        scheduler->spawn(handleClient(acceptResult.value()));
     }
     co_return;
 }
@@ -135,13 +135,7 @@ int main(int argc, char* argv[]) {
 
     scheduler.start();
 
-    TcpSocket listener(&scheduler);
-
-    auto createResult = listener.create(IPType::IPV4);
-    if (!createResult) {
-        LogError("Failed to create socket: {}", createResult.error().message());
-        return 1;
-    }
+    TcpSocket listener;
 
     listener.option().handleReuseAddr();
     listener.option().handleReusePort();

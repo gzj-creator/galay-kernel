@@ -2,6 +2,7 @@
 
 namespace galay::kernel {
 
+
 Waker::Waker(std::coroutine_handle<> handle)
     : m_coroutine(std::coroutine_handle<Coroutine::promise_type>::from_address(handle.address()).promise().getCoroutine())
 {
@@ -13,7 +14,7 @@ Waker::Waker(const Waker& other)
 }
 
 Waker::Waker(Waker&& waker)
-    : m_coroutine(waker.m_coroutine)  // 使用拷贝而不是移动
+    : m_coroutine(waker.m_coroutine) 
 {
 }
 
@@ -31,6 +32,11 @@ Waker& Waker::operator=(Waker&& other)
         m_coroutine = other.m_coroutine;  // 使用拷贝而不是移动
     }
     return *this;
+}
+
+Scheduler* Waker::getScheduler()
+{
+    return m_coroutine.belongScheduler();
 }
 
 void Waker::wakeUp()

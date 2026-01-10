@@ -21,7 +21,7 @@
 #define GALAY_KERNEL_COMPUTE_SCHEDULER_H
 
 #include "Coroutine.h"
-#include "Scheduler.h"
+#include "Scheduler.hpp"
 #include <thread>
 #include <atomic>
 #include <concurrentqueue/moodycamel/blockingconcurrentqueue.h>
@@ -58,6 +58,7 @@ public:
      * @brief 构造函数
      */
     ComputeScheduler();
+    
 
     /**
      * @brief 析构函数
@@ -68,6 +69,11 @@ public:
     // 禁止拷贝
     ComputeScheduler(const ComputeScheduler&) = delete;
     ComputeScheduler& operator=(const ComputeScheduler&) = delete;
+
+
+    SchedulerType type() override {
+        return kComputeScheduler;
+    }
 
     /**
      * @brief 启动调度器

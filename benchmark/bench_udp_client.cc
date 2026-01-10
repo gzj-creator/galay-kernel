@@ -49,18 +49,10 @@ void signalHandler(int signum) {
 }
 
 // UDP客户端协程 - 流水线模式
-Coroutine udpBenchmarkClient(IOScheduler* scheduler, int client_id) {
+Coroutine udpBenchmarkClient(int client_id) {
     g_active_clients.fetch_add(1, std::memory_order_relaxed);
 
-    UdpSocket socket(scheduler);
-
-    auto createResult = socket.create(IPType::IPV4);
-    if (!createResult) {
-        LogError("Client {}: Failed to create socket", client_id);
-        g_active_clients.fetch_sub(1, std::memory_order_relaxed);
-        co_return;
-    }
-
+    UdpSocket socket;
     socket.option().handleNonBlock();
 
     // 设置发送缓冲区大小
@@ -215,7 +207,7 @@ int main(int argc, char* argv[]) {
     // 启动多个客户端
     LogInfo("Starting {} clients...", g_num_clients);
     for (int i = 0; i < g_num_clients; ++i) {
-        scheduler.spawn(udpBenchmarkClient(&scheduler, i));
+        scheduler.spawn(udpBenchmarkClient(i));
     }
 
     // 运行测试

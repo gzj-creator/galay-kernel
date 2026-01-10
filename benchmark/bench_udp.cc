@@ -37,14 +37,8 @@ constexpr int TEST_DURATION_SEC = 5;       // 测试持续时间（秒）
 constexpr int NUM_SERVER_WORKERS = 4;      // 服务器工作协程数量
 
 // UDP Echo服务器工作协程 - 多协程并发处理
-Coroutine udpServerWorker(IOScheduler* scheduler, int worker_id) {
-    UdpSocket socket(scheduler);
-
-    auto createResult = socket.create(IPType::IPV4);
-    if (!createResult) {
-        LogError("Worker {}: Failed to create socket", worker_id);
-        co_return;
-    }
+Coroutine udpServerWorker(int worker_id) {
+    UdpSocket socket;
 
     socket.option().handleReuseAddr();
     socket.option().handleReusePort();  // 关键：允许多个socket绑定同一端口
@@ -96,14 +90,8 @@ Coroutine udpServerWorker(IOScheduler* scheduler, int worker_id) {
 }
 
 // UDP客户端协程 - 流水线模式
-Coroutine udpBenchmarkClient(IOScheduler* scheduler, int client_id) {
-    UdpSocket socket(scheduler);
-
-    auto createResult = socket.create(IPType::IPV4);
-    if (!createResult) {
-        LogError("Client {}: Failed to create socket", client_id);
-        co_return;
-    }
+Coroutine udpBenchmarkClient(int client_id) {
+    UdpSocket socket;
 
     socket.option().handleNonBlock();
 
@@ -214,7 +202,7 @@ int main() {
 
     // 启动多个服务器工作协程
     for (int i = 0; i < NUM_SERVER_WORKERS; ++i) {
-        scheduler.spawn(udpServerWorker(&scheduler, i));
+        scheduler.spawn(udpServerWorker(i));
     }
     LogInfo("Started {} server workers", NUM_SERVER_WORKERS);
 
@@ -224,7 +212,7 @@ int main() {
     // 启动多个客户端
     LogInfo("Starting {} clients...", NUM_CLIENTS);
     for (int i = 0; i < NUM_CLIENTS; ++i) {
-        scheduler.spawn(udpBenchmarkClient(&scheduler, i));
+        scheduler.spawn(udpBenchmarkClient(i));
     }
 
     // 运行测试

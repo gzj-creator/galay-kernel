@@ -52,11 +52,10 @@
 
 #include "galay-kernel/common/Defn.hpp"
 #include "galay-kernel/common/Error.h"
-#include "galay-kernel/common/Bytes.h"
 #include "galay-kernel/common/Host.hpp"
 #include "galay-kernel/common/HandleOption.h"
-#include "galay-kernel/kernel/Scheduler.h"
 #include "galay-kernel/kernel/Awaitable.h"
+#include "galay-kernel/kernel/IOScheduler.hpp"
 #include <expected>
 
 namespace galay::async
@@ -85,19 +84,18 @@ class UdpSocket
 {
 public:
     /**
-     * @brief 构造函数，创建未初始化的Socket
-     * @param scheduler IO调度器指针，不能为nullptr
-     * @note 构造后需调用create()创建底层socket
+     * @brief 构造函数，创建Socket
+     * @param type IP协议类型（IPV4/IPV6）
+     * @note 创建失败会抛出异常
      */
-    explicit UdpSocket(IOScheduler* scheduler);
+    explicit UdpSocket(IPType type = IPType::IPV4);
 
     /**
      * @brief 从已有句柄构造Socket
-     * @param scheduler IO调度器指针，不能为nullptr
      * @param handle 已有的socket句柄
      * @note 用于包装已存在的socket
      */
-    UdpSocket(IOScheduler* scheduler, GHandle handle);
+    explicit UdpSocket(GHandle handle);
 
     /**
      * @brief 析构函数
@@ -127,7 +125,7 @@ public:
      * @brief 获取底层socket句柄
      * @return GHandle 底层句柄，可用于底层操作
      */
-    GHandle handle() const { return m_handle; }
+    GHandle handle() const { return m_controller.m_handle; }
 
     /**
      * @brief 获取IO控制器指针
@@ -135,30 +133,6 @@ public:
      */
     IOController* controller() { return &m_controller; }
 
-    /**
-     * @brief 检查socket是否有效
-     * @return true 如果socket已创建且未关闭
-     * @return false 如果socket未创建或已关闭
-     */
-    bool isValid() const { return m_handle.fd >= 0; }
-
-    /**
-     * @brief 创建底层socket
-     *
-     * @param type IP协议类型，默认IPv4
-     * @return std::expected<void, IOError> 成功返回void，失败返回IOError
-     *
-     * @note 必须在bind/sendto/recvfrom之前调用
-     *
-     * @code
-     * UdpSocket socket(scheduler);
-     * auto result = socket.create(IPType::IPV4);
-     * if (!result) {
-     *     // 处理错误
-     * }
-     * @endcode
-     */
-    std::expected<void, IOError> create(IPType type = IPType::IPV4);
 
     /**
      * @brief 绑定本地地址
@@ -184,7 +158,7 @@ public:
      * socket.option().handleNonBlock();   // 设置非阻塞
      * @endcode
      */
-    HandleOption option() { return HandleOption(m_handle); }
+    HandleOption option() { return HandleOption(m_controller.m_handle); }
 
     /**
      * @brief 异步接收数据报
@@ -247,10 +221,10 @@ public:
      * @endcode
      */
     CloseAwaitable close();
+private:
+    GHandle create(IPType type);
 
 private:
-    GHandle m_handle;           ///< 底层socket句柄
-    IOScheduler* m_scheduler;   ///< IO调度器指针
     IOController m_controller;  ///< IO事件控制器
 };
 

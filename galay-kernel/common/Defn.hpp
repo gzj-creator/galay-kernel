@@ -25,6 +25,9 @@
     struct GHandle {
         static GHandle invalid() { return GHandle{}; }
         int fd = -1;
+
+        bool operator==(const GHandle& other) { return fd == other.fd; }
+        bool operator==(GHandle&& other) { return fd == other.fd; }
     };
 
     #include <sys/epoll.h>
@@ -41,6 +44,9 @@
     struct GHandle {
         static GHandle invalid() { return GHandle{}; }
         int fd = -1;
+
+        bool operator==(const GHandle& other) { return fd == other.fd; }
+        bool operator==(GHandle&& other) { return fd == other.fd; }
     };
 
     #include <sys/event.h>
@@ -55,6 +61,9 @@
     struct GHandle {
         static GHandle invalid() { return GHandle{INVALID_SOCKET}; }
         SOCKET fd = INVALID_SOCKET;
+
+        bool operator==(const GHandle& other) { return fd == other.fd; }
+        bool operator==(GHandle&& other) { return fd == other.fd; }
     };
 
     // Windows-specific type definitions
@@ -66,18 +75,16 @@
 #endif
 
     enum IOEventType: uint32_t {
-        INVALID         = 0,
-        ACCEPT          = 1,
-        CONNECT         = 2,
-        RECV            = 3,
-        SEND            = 4,
-        RECVWITHSEND    = 5,
-        FILEREAD        = 6,
-        FILEWRITE       = 7,
-        FILEWATCH       = 8,
-        RECVFROM        = 9,
-        SENDTO          = 10,
-        SLEEP           = 11,
+        INVALID     = 0,
+        ACCEPT      ,
+        CONNECT     ,
+        RECV        ,
+        SEND        ,
+        FILEREAD    ,
+        FILEWRITE   ,
+        FILEWATCH   ,
+        RECVFROM    ,
+        SENDTO      ,
     };
 
 #endif

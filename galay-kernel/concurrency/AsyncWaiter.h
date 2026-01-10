@@ -26,8 +26,9 @@
 #ifndef GALAY_KERNEL_ASYNC_WAITER_H
 #define GALAY_KERNEL_ASYNC_WAITER_H
 
-#include "../kernel/Coroutine.h"
-#include "../kernel/Scheduler.h"
+#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Scheduler.hpp"
+#include "galay-kernel/kernel/Waker.h"
 #include <atomic>
 #include <optional>
 #include <coroutine>
@@ -124,10 +125,7 @@ public:
         if (m_waiting.compare_exchange_strong(expected, false,
                                               std::memory_order_acq_rel,
                                               std::memory_order_acquire)) {
-            if (m_scheduler && m_waiting_coro.isValid()) {
-                m_waiting_coro.belongScheduler(m_scheduler);
-                m_scheduler->spawn(std::move(m_waiting_coro));
-            }
+            m_waker.wakeUp();
         }
         return true;
     }
@@ -154,8 +152,7 @@ private:
     std::optional<T> m_result;                  ///< 结果
     std::atomic<bool> m_waiting{false};         ///< 是否有协程在等待
     std::atomic<bool> m_ready{false};           ///< 结果是否就绪
-    Coroutine m_waiting_coro;                   ///< 等待中的协程
-    Scheduler* m_scheduler = nullptr;           ///< 原调度器
+    Waker m_waker;
 };
 
 /**
@@ -190,10 +187,7 @@ public:
         if (m_waiting.compare_exchange_strong(expected, false,
                                               std::memory_order_acq_rel,
                                               std::memory_order_acquire)) {
-            if (m_scheduler && m_waiting_coro.isValid()) {
-                m_waiting_coro.belongScheduler(m_scheduler);
-                m_scheduler->spawn(std::move(m_waiting_coro));
-            }
+            m_waker.wakeUp();
         }
         return true;
     }
@@ -211,8 +205,7 @@ private:
 
     std::atomic<bool> m_waiting{false};
     std::atomic<bool> m_ready{false};
-    Coroutine m_waiting_coro;
-    Scheduler* m_scheduler = nullptr;
+    Waker m_waker;
 };
 
 // AsyncWaiterAwaitable<T> 实现
@@ -223,10 +216,7 @@ bool AsyncWaiterAwaitable<T>::await_ready() const noexcept {
 
 template<typename T>
 bool AsyncWaiterAwaitable<T>::await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
-    // 保存等待协程和调度器
-    Coroutine coro = handle.promise().getCoroutine();
-    m_waiter->m_scheduler = coro.belongScheduler();
-    m_waiter->m_waiting_coro = coro;
+    m_waiter->m_waker = Waker(handle);
 
     // 设置等待状态
     bool expected = false;
@@ -256,10 +246,7 @@ inline bool AsyncWaiterAwaitable<void>::await_ready() const noexcept {
 }
 
 inline bool AsyncWaiterAwaitable<void>::await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
-    Coroutine coro = handle.promise().getCoroutine();
-    m_waiter->m_scheduler = coro.belongScheduler();
-    m_waiter->m_waiting_coro = coro;
-
+    m_waiter->m_waker = Waker(handle);
     bool expected = false;
     if (!m_waiter->m_waiting.compare_exchange_strong(expected, true,
                                                      std::memory_order_acq_rel,

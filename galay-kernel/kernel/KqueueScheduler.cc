@@ -1,12 +1,9 @@
 #include "KqueueScheduler.h"
-#include "Scheduler.h"
-#include "Timeout.h"
-#include "common/Defn.hpp"
-#include "common/Error.h"
+#include "galay-kernel/common/Error.h"
+#include <atomic>
 
 #ifdef USE_KQUEUE
 
-#include "Awaitable.h"
 #include <sys/time.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -41,7 +38,7 @@ KqueueScheduler::KqueueScheduler(int max_events, int batch_size, int check_inter
 
     // Add pipe read end to kqueue for notification
     struct kevent ev;
-    EV_SET(&ev, m_notify_pipe[0], EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, nullptr);
+    EV_SET(&ev, m_notify_pipe[0], EVFILT_READ, EV_ADD, 0, 0, nullptr);
     kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 
     m_events.resize(m_max_events);
@@ -89,14 +86,15 @@ void KqueueScheduler::notify()
     write(m_notify_pipe[1], &buf, 1);
 }
 
-int KqueueScheduler::addAccept(IOController* event)
+int KqueueScheduler::addAccept(IOController* controller)
 {
-    if(handleAccept(event)) {
+    if(handleAccept(controller)) {
         return OK;
     }
-    AcceptAwaitable* awaitable = static_cast<AcceptAwaitable*>(event->m_awaitable);
+    auto awaitable = controller->getAwaitable<AcceptAwaitable>();
+    if(awaitable == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, awaitable->m_listen_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, event);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -108,9 +106,10 @@ int KqueueScheduler::addConnect(IOController* controller)
     }
 
     // 连接正在进行中，注册到 kqueue
-    ConnectAwaitable* awaitable = static_cast<ConnectAwaitable*>(controller->m_awaitable);
+    auto awaitable = controller->getAwaitable<ConnectAwaitable>();
+    if(awaitable == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, awaitable->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -122,9 +121,10 @@ int KqueueScheduler::addRecv(IOController* controller)
     }
 
     // 需要等待数据，注册到 kqueue
-    RecvAwaitable* awaitable = static_cast<RecvAwaitable*>(controller->m_awaitable);
+    auto awaitable = controller->getAwaitable<RecvAwaitable>();
+    if(awaitable == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, awaitable->m_handle.fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -136,16 +136,17 @@ int KqueueScheduler::addSend(IOController* controller)
     }
 
     // 需要等待可写，注册到 kqueue
-    SendAwaitable* awaitable = static_cast<SendAwaitable*>(controller->m_awaitable);
+    SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
+    if(awaitable == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, awaitable->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
-int KqueueScheduler::addClose(int fd)
+int KqueueScheduler::addClose(IOController* contoller)
 {
-    close(fd);
-    remove(fd);
+    close(contoller->m_handle.fd);
+    remove(contoller);
     return 0;
 }
 
@@ -154,9 +155,10 @@ int KqueueScheduler::addFileRead(IOController* controller)
     if (handleFileRead(controller)) {
         return OK;
     }
-    FileReadAwaitable* awaitable = static_cast<FileReadAwaitable*>(controller->m_awaitable);
+    auto awaitable = controller->getAwaitable<FileReadAwaitable>();
+    if(awaitable == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, awaitable->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -165,17 +167,18 @@ int KqueueScheduler::addFileWrite(IOController* controller)
     if (handleFileWrite(controller)) {
         return OK;
     }
-    FileWriteAwaitable* awaitable = static_cast<FileWriteAwaitable*>(controller->m_awaitable);
+    auto awaitable = controller->getAwaitable<FileWriteAwaitable>();
+    if(awaitable == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, awaitable->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
-int KqueueScheduler::remove(int fd)
+int KqueueScheduler::remove(IOController* controller)
 {
     struct kevent evs[2];
-    EV_SET(&evs[0], fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
-    EV_SET(&evs[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
+    EV_SET(&evs[0], controller->m_handle.fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
+    EV_SET(&evs[1], controller->m_handle.fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
     return kevent(m_kqueue_fd, evs, 2, nullptr, 0, nullptr);
 }
 
@@ -207,15 +210,19 @@ void KqueueScheduler::processPendingCoroutines()
 
 void KqueueScheduler::eventLoop()
 {
-    while (m_running.load(std::memory_order_acquire)) {
+    // kevent 超时时间公式：timeout = tickDuration / 2
+    // 使用时间轮精度的一半作为超时，确保定时器最大误差不超过半个 tick
+    // 例如：tickDuration = 50ms 时，timeout = 25ms，最大误差 ≤ 25ms
+    uint64_t tick_duration_ns = m_timer_manager.during();
+    uint64_t timeout_ns = tick_duration_ns / 2;
+    struct timespec timeout;
+    timeout.tv_sec = timeout_ns / 1000000000ULL;
+    timeout.tv_nsec = timeout_ns % 1000000000ULL;
+
+    while (m_running.load(std::memory_order_relaxed)) {
         // Process pending coroutines
         processPendingCoroutines();
-
-        // Wait for events with timeout
-        struct timespec timeout;
-        timeout.tv_sec = 0;
-        timeout.tv_nsec = m_check_interval_ms * 1000000; // Convert ms to ns
-
+        m_timer_manager.tick();
         int nev = kevent(m_kqueue_fd, nullptr, 0, m_events.data(), m_max_events, &timeout);
 
         if (nev < 0) {
@@ -238,25 +245,6 @@ void KqueueScheduler::eventLoop()
                 continue;
             }
 
-            // 检查是否是定时器事件（最低位为1）
-            uintptr_t ptr_val = reinterpret_cast<uintptr_t>(ev.udata);
-            if (ptr_val & 1) {
-                // 定时器事件
-                TimerController* timer_ctrl = reinterpret_cast<TimerController*>(ptr_val & ~1UL);
-                if (timer_ctrl && !timer_ctrl->m_cancelled) {
-                    // 尝试标记为超时
-                    if (timer_ctrl->m_io_controller &&
-                        timer_ctrl->m_generation == timer_ctrl->m_io_controller->m_generation &&
-                        timer_ctrl->m_io_controller->tryTimeout()) {
-                        // 成功标记超时，唤醒协程
-                        if (timer_ctrl->m_waker) {
-                            timer_ctrl->m_waker->wakeUp();
-                        }
-                    }
-                }
-                continue;
-            }
-
             processEvent(ev);
         }
     }
@@ -265,13 +253,7 @@ void KqueueScheduler::eventLoop()
 void KqueueScheduler::processEvent(struct kevent& ev)
 {
     IOController* controller = static_cast<IOController*>(ev.udata);
-    if (!controller || controller->m_type == IOEventType::INVALID || controller->m_awaitable == nullptr) {
-        return;
-    }
-
-    // 关键：尝试标记为完成状态，如果已被超时处理则跳过
-    if (!controller->tryComplete()) {
-        // 已被超时处理，忽略此 IO 事件
+    if (!controller || controller->m_type == IOEventType::INVALID) {
         return;
     }
 
@@ -288,7 +270,8 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         // Accept 需要 EVFILT_READ 事件
         if (ev.filter == EVFILT_READ) {
             handleAccept(controller);
-            AcceptAwaitable* awaitable = static_cast<AcceptAwaitable*>(controller->m_awaitable);
+            AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
+            if(awaitable == nullptr) return;
             awaitable->m_waker.wakeUp();
         }
         break;
@@ -298,7 +281,8 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         // Connect 需要 EVFILT_WRITE 事件
         if (ev.filter == EVFILT_WRITE) {
             handleConnect(controller);
-            ConnectAwaitable* awaitable = static_cast<ConnectAwaitable*>(controller->m_awaitable);
+            ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
+            if(awaitable == nullptr) return;
             awaitable->m_waker.wakeUp();
         }
         break;
@@ -308,7 +292,8 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         // Recv 需要 EVFILT_READ 事件
         if (ev.filter == EVFILT_READ) {
             handleRecv(controller);
-            RecvAwaitable* awaitable = static_cast<RecvAwaitable*>(controller->m_awaitable);
+            RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
+            if(awaitable == nullptr) return;
             awaitable->m_waker.wakeUp();
         }
         break;
@@ -318,7 +303,8 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         // Send 需要 EVFILT_WRITE 事件
         if (ev.filter == EVFILT_WRITE) {
             handleSend(controller);
-            SendAwaitable* awaitable = static_cast<SendAwaitable*>(controller->m_awaitable);
+            SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
+            if(awaitable == nullptr) return;
             awaitable->m_waker.wakeUp();
         }
         break;
@@ -327,7 +313,8 @@ void KqueueScheduler::processEvent(struct kevent& ev)
     {
         if (ev.filter == EVFILT_READ) {
             handleFileRead(controller);
-            FileReadAwaitable* awaitable = static_cast<FileReadAwaitable*>(controller->m_awaitable);
+            FileReadAwaitable* awaitable = controller->getAwaitable<FileReadAwaitable>();
+            if(awaitable == nullptr) return;
             awaitable->m_waker.wakeUp();
         }
         break;
@@ -336,7 +323,8 @@ void KqueueScheduler::processEvent(struct kevent& ev)
     {
         if (ev.filter == EVFILT_WRITE) {
             handleFileWrite(controller);
-            FileWriteAwaitable* awaitable = static_cast<FileWriteAwaitable*>(controller->m_awaitable);
+            FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
+            if(awaitable == nullptr) return;
             awaitable->m_waker.wakeUp();
         }
         break;
@@ -345,7 +333,8 @@ void KqueueScheduler::processEvent(struct kevent& ev)
     {
         if (ev.filter == EVFILT_READ) {
             handleRecvFrom(controller);
-            RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+            RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
+            if(awaitable == nullptr) return;
             awaitable->m_waker.wakeUp();
         }
         break;
@@ -354,7 +343,8 @@ void KqueueScheduler::processEvent(struct kevent& ev)
     {
         if (ev.filter == EVFILT_WRITE) {
             handleSendTo(controller);
-            SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
+            SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
+            if(awaitable == nullptr) return;
             awaitable->m_waker.wakeUp();
         }
         break;
@@ -362,7 +352,8 @@ void KqueueScheduler::processEvent(struct kevent& ev)
     case FILEWATCH:
     {
         if (ev.filter == EVFILT_VNODE) {
-            FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable);
+            FileWatchAwaitable* awaitable = controller->getAwaitable<FileWatchAwaitable>();
+            if(awaitable == nullptr) return;
             FileWatchResult result;
             result.isDir = false;  // kqueue 不直接提供此信息
 
@@ -385,13 +376,14 @@ void KqueueScheduler::processEvent(struct kevent& ev)
     }
 }
 
-bool KqueueScheduler::handleAccept(IOController* event)
+bool KqueueScheduler::handleAccept(IOController* controller)
 {
-    AcceptAwaitable* awaitable = static_cast<AcceptAwaitable*>(event->m_awaitable);
+    AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
+    if(awaitable == nullptr) return false;
     sockaddr_storage addr{};
     socklen_t addr_len = sizeof(addr);
     GHandle handle {
-        .fd = accept(awaitable->m_listen_handle.fd, reinterpret_cast<sockaddr*>(&addr), &addr_len),
+        .fd = accept(controller->m_handle.fd, reinterpret_cast<sockaddr*>(&addr), &addr_len),
     };
     if( handle.fd < 0 ) {
         if( static_cast<uint32_t>(errno) == EAGAIN || static_cast<uint32_t>(errno) == EWOULDBLOCK || static_cast<uint32_t>(errno) == EINTR ) {
@@ -407,11 +399,12 @@ bool KqueueScheduler::handleAccept(IOController* event)
     return true;
 }
 
-bool KqueueScheduler::handleRecv(IOController* event)
+bool KqueueScheduler::handleRecv(IOController* controller)
 {
-    RecvAwaitable* awaitable = static_cast<RecvAwaitable*>(event->m_awaitable);
+    RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
+    if(awaitable == nullptr) return false;
     Bytes bytes;
-    int recvBytes = recv(awaitable->m_handle.fd, awaitable->m_buffer, awaitable->m_length, 0);
+    int recvBytes = recv(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length, 0);
     if (recvBytes > 0) {
         bytes = Bytes::fromCString(awaitable->m_buffer, recvBytes, recvBytes);
         awaitable->m_result = std::move(bytes);
@@ -429,8 +422,9 @@ bool KqueueScheduler::handleRecv(IOController* event)
 
 bool KqueueScheduler::handleSend(IOController* controller)
 {
-    SendAwaitable* awaitable = static_cast<SendAwaitable*>(controller->m_awaitable);
-    ssize_t sentBytes = send(awaitable->m_handle.fd, awaitable->m_buffer, awaitable->m_length, 0);
+    SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
+    if(awaitable == nullptr) return false;
+    ssize_t sentBytes = send(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length, 0);
 
     if (sentBytes >= 0) {
         awaitable->m_result = static_cast<size_t>(sentBytes);
@@ -446,10 +440,11 @@ bool KqueueScheduler::handleSend(IOController* controller)
 
 bool KqueueScheduler::handleConnect(IOController* controller)
 {
-    ConnectAwaitable* awaitable = static_cast<ConnectAwaitable*>(controller->m_awaitable);
+    ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
+    if(awaitable == nullptr) return false;
 
     const Host& host = awaitable->m_host;
-    int result = ::connect(awaitable->m_handle.fd, host.sockAddr(), host.addrLen());
+    int result = ::connect(controller->m_handle.fd, host.sockAddr(), host.addrLen());
 
     if (result == 0) {
         awaitable->m_result = {};
@@ -468,8 +463,9 @@ bool KqueueScheduler::handleConnect(IOController* controller)
 
 bool KqueueScheduler::handleFileRead(IOController* controller)
 {
-    FileReadAwaitable* awaitable = static_cast<FileReadAwaitable*>(controller->m_awaitable);
-    ssize_t readBytes = pread(awaitable->m_handle.fd, awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
+    FileReadAwaitable* awaitable = controller->getAwaitable<FileReadAwaitable>();
+    if(awaitable == nullptr) return false;
+    ssize_t readBytes = pread(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
 
     if (readBytes > 0) {
         Bytes bytes = Bytes::fromCString(awaitable->m_buffer, readBytes, readBytes);
@@ -490,8 +486,9 @@ bool KqueueScheduler::handleFileRead(IOController* controller)
 
 bool KqueueScheduler::handleFileWrite(IOController* controller)
 {
-    FileWriteAwaitable* awaitable = static_cast<FileWriteAwaitable*>(controller->m_awaitable);
-    ssize_t writtenBytes = pwrite(awaitable->m_handle.fd, awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
+    FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
+    if(awaitable == nullptr) return false;
+    ssize_t writtenBytes = pwrite(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
 
     if (writtenBytes >= 0) {
         awaitable->m_result = static_cast<size_t>(writtenBytes);
@@ -511,9 +508,10 @@ int KqueueScheduler::addRecvFrom(IOController* controller)
         return OK;
     }
 
-    RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+    RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
+    if(awaitable == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, awaitable->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -523,19 +521,21 @@ int KqueueScheduler::addSendTo(IOController* controller)
         return OK;
     }
 
-    SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
+    SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
+    if(awaitable == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, awaitable->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
 bool KqueueScheduler::handleRecvFrom(IOController* controller)
 {
-    RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+    RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
+    if(awaitable == nullptr) return false;
     sockaddr_storage addr{};
     socklen_t addr_len = sizeof(addr);
 
-    ssize_t recvBytes = recvfrom(awaitable->m_handle.fd, awaitable->m_buffer, awaitable->m_length,
+    ssize_t recvBytes = recvfrom(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length,
                                   0, reinterpret_cast<sockaddr*>(&addr), &addr_len);
 
     if (recvBytes > 0) {
@@ -560,10 +560,11 @@ bool KqueueScheduler::handleRecvFrom(IOController* controller)
 
 bool KqueueScheduler::handleSendTo(IOController* controller)
 {
-    SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
+    SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
+    if(awaitable == nullptr) return false;
     const Host& to = awaitable->m_to;
 
-    ssize_t sentBytes = sendto(awaitable->m_handle.fd, awaitable->m_buffer, awaitable->m_length,
+    ssize_t sentBytes = sendto(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length,
                                 0, to.sockAddr(), to.addrLen());
 
     if (sentBytes >= 0) {
@@ -580,33 +581,18 @@ bool KqueueScheduler::handleSendTo(IOController* controller)
 
 int KqueueScheduler::addFileWatch(IOController* controller)
 {
-    FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable);
+    FileWatchAwaitable* awaitable = controller->getAwaitable<FileWatchAwaitable>();
+    if(awaitable == nullptr) return -1;
 
     // kqueue 使用 EVFILT_VNODE 监控文件变化
     // 需要打开的文件描述符，而不是 inotify fd
     struct kevent ev;
     // NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_ATTRIB | NOTE_EXTEND
     unsigned int fflags = NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_ATTRIB | NOTE_EXTEND;
-    EV_SET(&ev, awaitable->m_inotify_fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, fflags, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, fflags, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
-int KqueueScheduler::addTimer(int timeout_ms, TimerController* timer_ctrl)
-{
-    // macOS/BSD 使用 EVFILT_TIMER，不需要 timerfd
-    // timeout_ms 参数在 kqueue 中表示超时时间（毫秒）
-    struct kevent ev;
-    // 使用 timer_ctrl 指针的最低位设为1来标记这是定时器事件
-    void* udata = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(timer_ctrl) | 1);
-    // 使用 timer_ctrl 的地址作为唯一标识符
-    uintptr_t ident = reinterpret_cast<uintptr_t>(timer_ctrl);
-    // 存储 ident 到 IOController 以便后续取消
-    if (timer_ctrl->m_io_controller) {
-        timer_ctrl->m_io_controller->m_timer_ident = ident;
-    }
-    EV_SET(&ev, ident, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_USECONDS, timeout_ms * 1000, udata);
-    return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
-}
 
 }
 

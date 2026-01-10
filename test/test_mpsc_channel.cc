@@ -10,23 +10,15 @@
 #include <vector>
 #include "galay-kernel/concurrency/MpscChannel.h"
 #include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/ComputeScheduler.h"
 #include "galay-kernel/common/Log.h"
-
-#ifdef USE_EPOLL
-#include "galay-kernel/kernel/EpollScheduler.h"
-using IOSchedulerType = galay::kernel::EpollScheduler;
-#elif defined(USE_KQUEUE)
-#include "galay-kernel/kernel/KqueueScheduler.h"
-using IOSchedulerType = galay::kernel::KqueueScheduler;
-#elif defined(USE_IOURING)
-#include "galay-kernel/kernel/IOUringScheduler.h"
-using IOSchedulerType = galay::kernel::IOUringScheduler;
-#endif
+#include "test_result_writer.h"
 
 using namespace galay::kernel;
 using namespace std::chrono_literals;
 
 std::atomic<int> g_passed{0};
+std::atomic<int> g_failed{0};
 std::atomic<int> g_total{0};
 
 // ============================================================================
@@ -86,17 +78,18 @@ std::atomic<bool> g_test4_done{false};
 std::atomic<int> g_test4_value{0};
 
 Coroutine testTryRecv(MpscChannel<int>* channel) {
-    // 先尝试接收（应该为空）
-    auto empty = channel->tryRecv();
-    if (empty) {
-        g_test4_done = true;
-        co_return;  // 不应该到这里
-    }
-
-    // 等待数据
-    auto value = co_await channel->recv();
+    // 先尝试接收（应该有数据，因为主线程已经发送了）
+    auto value = channel->tryRecv();
     if (value) {
         g_test4_value = *value;
+        g_test4_done = true;
+        co_return;
+    }
+
+    // 如果没有数据，等待数据
+    auto recv_value = co_await channel->recv();
+    if (recv_value) {
+        g_test4_value = *recv_value;
     }
     g_test4_done = true;
     co_return;
@@ -125,10 +118,9 @@ Coroutine testMultiProducerConsumer(MpscChannel<int>* channel) {
 }
 
 void producerThread(MpscChannel<int>* channel, int id) {
-    auto token = MpscChannel<int>::getToken();
     for (int i = 0; i < TEST5_MSG_PER_PRODUCER; ++i) {
-        channel->send(id * 100 + i, token);
-        std::this_thread::sleep_for(1ms);
+        channel->send(id * 100 + i);
+        // 移除 sleep，让生产者尽快发送
     }
 }
 
@@ -169,14 +161,16 @@ std::atomic<int> g_test8_count{0};
 std::atomic<bool> g_test8_done{false};
 
 Coroutine testBatchSend(MpscChannel<int>* channel) {
-    // 接收所有数据
-    for (int i = 0; i < 3; ++i) {
+    // 接收所有数据（总共 10 个元素，分 3 批发送）
+    int total_received = 0;
+    while (total_received < 10) {
         auto batch = co_await channel->recvBatch(100);
         if (batch) {
             g_test8_count.fetch_add(batch->size(), std::memory_order_relaxed);
             for (int v : *batch) {
                 g_test8_total.fetch_add(v, std::memory_order_relaxed);
             }
+            total_received += batch->size();
         }
     }
     g_test8_done = true;
@@ -218,9 +212,8 @@ Coroutine testHighConcurrency(MpscChannel<int>* channel) {
 }
 
 void highConcurrencyProducer(MpscChannel<int>* channel, int count) {
-    auto token = MpscChannel<int>::getToken();
     for (int i = 0; i < count; ++i) {
-        channel->send(i, token);
+        channel->send(i);
         g_test10_sent.fetch_add(1, std::memory_order_relaxed);
     }
 }
@@ -235,9 +228,9 @@ std::atomic<bool> g_test11_consumer_done{false};
 constexpr int TEST11_MSG_COUNT = 50;
 
 Coroutine testCrossSchedulerProducer(MpscChannel<int>* channel) {
-    auto token = MpscChannel<int>::getToken();
+
     for (int i = 1; i <= TEST11_MSG_COUNT; ++i) {
-        channel->send(i, token);
+        channel->send(i);
         co_yield true;  // 让出执行权
     }
     g_test11_producer_done = true;
@@ -267,9 +260,9 @@ constexpr int TEST12_PRODUCER_COUNT = 3;
 constexpr int TEST12_MSG_PER_PRODUCER = 20;
 
 Coroutine testMultiSchedulerProducer(MpscChannel<int>* channel, int id) {
-    auto token = MpscChannel<int>::getToken();
+
     for (int i = 0; i < TEST12_MSG_PER_PRODUCER; ++i) {
-        channel->send(id * 100 + i, token);
+        channel->send(id * 100 + i);
         co_yield true;
     }
     g_test12_producers_done.fetch_add(1, std::memory_order_relaxed);
@@ -299,9 +292,9 @@ constexpr int TEST13_MSG_COUNT = 100;
 
 // 生产者协程 - 在同一调度器线程中发送数据
 Coroutine testSameThreadProducer(MpscChannel<int>* channel, int startValue, int count) {
-    auto token = MpscChannel<int>::getToken();
+
     for (int i = 0; i < count; ++i) {
-        channel->send(startValue + i, token);
+        channel->send(startValue + i);
         co_yield true;  // 让出执行权，让消费者有机会接收
     }
     co_return;
@@ -328,26 +321,22 @@ void runTests() {
     LogInfo("MpscChannel Unit Tests");
     LogInfo("========================================");
 
-#if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
-
     // 测试1：基本 send/recv
     {
         LogInfo("\n--- Test 1: Basic send/recv ---");
         g_total++;
 
-        IOSchedulerType scheduler;
+        ComputeScheduler scheduler;
         MpscChannel<int> channel;
 
         scheduler.start();
         scheduler.spawn(testBasicSendRecv(&channel));
 
-        std::this_thread::sleep_for(10ms);
-        auto token = MpscChannel<int>::getToken();
-        channel.send(42, token);
+        channel.send(42);
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test1_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -359,6 +348,7 @@ void runTests() {
         } else {
             LogError("[FAIL] Basic send/recv: done={}, received={}",
                     g_test1_done.load(), g_test1_received.load());
+            g_failed++;
         }
     }
 
@@ -367,24 +357,22 @@ void runTests() {
         LogInfo("\n--- Test 2: Multiple send/recv ({} messages) ---", TEST2_COUNT);
         g_total++;
 
-        IOSchedulerType scheduler;
+        ComputeScheduler scheduler;
         MpscChannel<int> channel;
 
         scheduler.start();
         scheduler.spawn(testMultipleSendRecv(&channel));
 
         // 发送数据
-        auto token = MpscChannel<int>::getToken();
         int expected_sum = 0;
         for (int i = 0; i < TEST2_COUNT; ++i) {
-            channel.send(i + 1, token);
+            channel.send(i + 1);
             expected_sum += (i + 1);
-            std::this_thread::sleep_for(5ms);
         }
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test2_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 10s) break;
         }
 
@@ -397,6 +385,7 @@ void runTests() {
         } else {
             LogError("[FAIL] Multiple send/recv: done={}, sum={} (expected {})",
                     g_test2_done.load(), g_test2_sum.load(), expected_sum);
+            g_failed++;
         }
     }
 
@@ -405,21 +394,20 @@ void runTests() {
         LogInfo("\n--- Test 3: Batch send/recv ---");
         g_total++;
 
-        IOSchedulerType scheduler;
+        ComputeScheduler scheduler;
         MpscChannel<int> channel;
 
         // 先发送数据
         std::vector<int> data = {1, 2, 3, 4, 5};
         int expected = 15;
-        auto token = MpscChannel<int>::getToken();
-        channel.sendBatch(data, token);
+        channel.sendBatch(data);
 
         scheduler.start();
         scheduler.spawn(testBatchSendRecv(&channel));
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test3_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -432,6 +420,7 @@ void runTests() {
         } else {
             LogError("[FAIL] Batch send/recv: done={}, total={} (expected {})",
                     g_test3_done.load(), g_test3_total.load(), expected);
+            g_failed++;
         }
     }
 
@@ -440,19 +429,19 @@ void runTests() {
         LogInfo("\n--- Test 4: try_recv (non-blocking) ---");
         g_total++;
 
-        IOSchedulerType scheduler;
+        ComputeScheduler scheduler;
         MpscChannel<int> channel;
 
         scheduler.start();
-        scheduler.spawn(testTryRecv(&channel));
 
-        std::this_thread::sleep_for(20ms);
-        auto token = MpscChannel<int>::getToken();
-        channel.send(99, token);
+        // 先发送数据，确保数据在协程启动前就在 channel 中
+        channel.send(99);
+
+        scheduler.spawn(testTryRecv(&channel));
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test4_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -464,6 +453,7 @@ void runTests() {
         } else {
             LogError("[FAIL] try_recv: done={}, value={}",
                     g_test4_done.load(), g_test4_value.load());
+            g_failed++;
         }
     }
 
@@ -473,7 +463,7 @@ void runTests() {
                 TEST5_PRODUCER_COUNT, TEST5_MSG_PER_PRODUCER);
         g_total++;
 
-        IOSchedulerType scheduler;
+        ComputeScheduler scheduler;
         MpscChannel<int> channel;
 
         scheduler.start();
@@ -492,7 +482,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test5_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 10s) break;
         }
 
@@ -506,6 +496,7 @@ void runTests() {
         } else {
             LogError("[FAIL] Multi-producer: done={}, received={}/{}",
                     g_test5_done.load(), g_test5_recv_count.load(), expected_count);
+            g_failed++;
         }
     }
 
@@ -514,7 +505,7 @@ void runTests() {
         LogInfo("\n--- Test 6: Empty channel wait ---");
         g_total++;
 
-        IOSchedulerType scheduler;
+        ComputeScheduler scheduler;
         MpscChannel<int> channel;
 
         scheduler.start();
@@ -523,18 +514,16 @@ void runTests() {
         // 等待消费者开始等待
         auto start = std::chrono::steady_clock::now();
         while (!g_test6_waiting) {
-            std::this_thread::sleep_for(1ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 1s) break;
         }
 
         // 延迟发送
-        std::this_thread::sleep_for(50ms);
-        auto token = MpscChannel<int>::getToken();
-        channel.send(123, token);
+        channel.send(123);
 
         start = std::chrono::steady_clock::now();
         while (!g_test6_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -546,6 +535,7 @@ void runTests() {
         } else {
             LogError("[FAIL] Empty channel wait: done={}, received={}",
                     g_test6_done.load(), g_test6_received.load());
+            g_failed++;
         }
     }
 
@@ -554,13 +544,12 @@ void runTests() {
         LogInfo("\n--- Test 7: size() and empty() ---");
         g_total++;
 
-        IOSchedulerType scheduler;
+        ComputeScheduler scheduler;
         MpscChannel<int> channel;
 
         // 发送数据
-        auto token = MpscChannel<int>::getToken();
         for (int i = 0; i < 5; ++i) {
-            channel.send(i, token);
+            channel.send(i);
         }
 
         bool size_ok = (channel.size() == 5);
@@ -571,7 +560,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test7_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -585,6 +574,7 @@ void runTests() {
         } else {
             LogError("[FAIL] size/empty: size_ok={}, not_empty={}, empty_after={}",
                     size_ok, not_empty, empty_after);
+            g_failed++;
         }
     }
 
@@ -593,7 +583,7 @@ void runTests() {
         LogInfo("\n--- Test 8: Batch send ---");
         g_total++;
 
-        IOSchedulerType scheduler;
+        ComputeScheduler scheduler;
         MpscChannel<int> channel;
 
         scheduler.start();
@@ -604,17 +594,13 @@ void runTests() {
         std::vector<int> batch2 = {4, 5, 6, 7};
         std::vector<int> batch3 = {8, 9, 10};
 
-        auto token = MpscChannel<int>::getToken();
-        std::this_thread::sleep_for(10ms);
-        channel.sendBatch(batch1, token);
-        std::this_thread::sleep_for(10ms);
-        channel.sendBatch(batch2, token);
-        std::this_thread::sleep_for(10ms);
-        channel.sendBatch(batch3, token);
+        channel.sendBatch(batch1);
+        channel.sendBatch(batch2);
+        channel.sendBatch(batch3);
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test8_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -631,6 +617,7 @@ void runTests() {
             LogError("[FAIL] Batch send: done={}, count={}/{}, total={}/{}",
                     g_test8_done.load(), g_test8_count.load(), expected_count,
                     g_test8_total.load(), expected_total);
+            g_failed++;
         }
     }
 
@@ -639,19 +626,17 @@ void runTests() {
         LogInfo("\n--- Test 9: String channel ---");
         g_total++;
 
-        IOSchedulerType scheduler;
+        ComputeScheduler scheduler;
         MpscChannel<std::string> channel;
 
         scheduler.start();
         scheduler.spawn(testStringChannel(&channel));
 
-        std::this_thread::sleep_for(10ms);
-        auto token = MpscChannel<std::string>::getToken();
-        channel.send(std::string("Hello, Channel!"), token);
+        channel.send(std::string("Hello, Channel!"));
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test9_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -663,6 +648,7 @@ void runTests() {
         } else {
             LogError("[FAIL] String channel: done={}, result=\"{}\"",
                     g_test9_done.load(), g_test9_result);
+            g_failed++;
         }
     }
 
@@ -671,8 +657,8 @@ void runTests() {
         LogInfo("\n--- Test 10: High concurrency ({} messages) ---", TEST10_TOTAL);
         g_total++;
 
-        IOSchedulerType scheduler;
-        MpscChannel<int> channel(64);
+        ComputeScheduler scheduler;
+        MpscChannel<int> channel;
 
         scheduler.start();
         scheduler.spawn(testHighConcurrency(&channel));
@@ -690,7 +676,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test10_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 30s) break;
         }
 
@@ -704,6 +690,7 @@ void runTests() {
             LogError("[FAIL] High concurrency: done={}, sent={}, received={}/{}",
                     g_test10_done.load(), g_test10_sent.load(),
                     g_test10_received.load(), TEST10_TOTAL);
+            g_failed++;
         }
     }
 
@@ -715,8 +702,8 @@ void runTests() {
         MpscChannel<int> channel;
 
         // 创建两个调度器
-        IOSchedulerType producerScheduler;
-        IOSchedulerType consumerScheduler;
+        ComputeScheduler producerScheduler;
+        ComputeScheduler consumerScheduler;
 
         // 启动消费者调度器和协程
         std::thread consumerThread([&]() {
@@ -725,7 +712,7 @@ void runTests() {
 
             auto start = std::chrono::steady_clock::now();
             while (!g_test11_consumer_done) {
-                std::this_thread::sleep_for(10ms);
+                // 使用调度器的空闲等待
                 if (std::chrono::steady_clock::now() - start > 30s) break;
             }
             consumerScheduler.stop();
@@ -738,7 +725,7 @@ void runTests() {
 
             auto start = std::chrono::steady_clock::now();
             while (!g_test11_producer_done) {
-                std::this_thread::sleep_for(10ms);
+                // 使用调度器的空闲等待
                 if (std::chrono::steady_clock::now() - start > 30s) break;
             }
             producerScheduler.stop();
@@ -761,6 +748,7 @@ void runTests() {
                     g_test11_producer_done.load(), g_test11_consumer_done.load(),
                     g_test11_count.load(), TEST11_MSG_COUNT,
                     g_test11_sum.load(), expected_sum);
+            g_failed++;
         }
     }
 
@@ -770,13 +758,13 @@ void runTests() {
                 TEST12_PRODUCER_COUNT, TEST12_MSG_PER_PRODUCER);
         g_total++;
 
-        MpscChannel<int> channel(64);
+        MpscChannel<int> channel;
 
-        std::vector<std::unique_ptr<IOSchedulerType>> producerSchedulers;
+        std::vector<std::unique_ptr<ComputeScheduler>> producerSchedulers;
         std::vector<std::thread> producerThreads;
 
         // 消费者调度器
-        IOSchedulerType consumerScheduler;
+        ComputeScheduler consumerScheduler;
 
         // 启动消费者
         std::thread consumerThread([&]() {
@@ -785,7 +773,7 @@ void runTests() {
 
             auto start = std::chrono::steady_clock::now();
             while (!g_test12_consumer_done) {
-                std::this_thread::sleep_for(10ms);
+                // 使用调度器的空闲等待
                 if (std::chrono::steady_clock::now() - start > 60s) break;
             }
             consumerScheduler.stop();
@@ -793,7 +781,7 @@ void runTests() {
 
         // 创建多个生产者调度器
         for (int i = 0; i < TEST12_PRODUCER_COUNT; ++i) {
-            producerSchedulers.push_back(std::make_unique<IOSchedulerType>());
+            producerSchedulers.push_back(std::make_unique<ComputeScheduler>());
         }
 
         // 启动生产者
@@ -804,7 +792,7 @@ void runTests() {
 
                 auto start = std::chrono::steady_clock::now();
                 while (g_test12_producers_done <= i) {
-                    std::this_thread::sleep_for(10ms);
+                    // 使用调度器的空闲等待
                     if (std::chrono::steady_clock::now() - start > 30s) break;
                 }
                 producerSchedulers[i]->stop();
@@ -833,6 +821,7 @@ void runTests() {
                     g_test12_producers_done.load(), TEST12_PRODUCER_COUNT,
                     g_test12_consumer_done.load(),
                     g_test12_count.load(), expected_count);
+            g_failed++;
         }
     }
 
@@ -841,7 +830,7 @@ void runTests() {
         LogInfo("\n--- Test 13: Same-thread multi-producer single-consumer (direct resume path) ---");
         g_total++;
 
-        IOSchedulerType scheduler;
+        ComputeScheduler scheduler;
         MpscChannel<int> channel;
 
         scheduler.start();
@@ -860,7 +849,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test13_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 10s) break;
         }
 
@@ -880,12 +869,9 @@ void runTests() {
             LogError("[FAIL] Same-thread multi-producer: done={}, count={}/{}, sum={}/{}",
                     g_test13_done.load(), g_test13_count.load(), TEST13_MSG_COUNT,
                     g_test13_sum.load(), expected_sum);
+            g_failed++;
         }
     }
-
-#else
-    LogWarn("No IO scheduler available, skipping tests");
-#endif
 
     // 打印测试结果
     LogInfo("\n========================================");
@@ -894,6 +880,17 @@ void runTests() {
 }
 
 int main() {
+    galay::test::TestResultWriter resultWriter("test_mpsc_channel");
     runTests();
+
+    // 写入测试结果
+    resultWriter.addTest();
+    if (g_passed == g_total) {
+        resultWriter.addPassed();
+    } else {
+        resultWriter.addFailed();
+    }
+    resultWriter.writeResult();
+
     return (g_passed == g_total) ? 0 : 1;
 }

@@ -1,5 +1,7 @@
 #include "galay-kernel/async/FileWatcher.h"
 #include "galay-kernel/kernel/Coroutine.h"
+#include "test_result_writer.h"
+#include "galay-kernel/common/Log.h"
 
 #ifdef USE_IOURING
 #include "galay-kernel/kernel/IOUringScheduler.h"
@@ -23,122 +25,148 @@ using namespace galay::kernel;
 using namespace galay::async;
 
 std::atomic<bool> g_running{true};
+std::atomic<int> g_passed{0};
+std::atomic<int> g_failed{0};
+std::atomic<int> g_total{0};
+std::atomic<int> g_event_count{0};
 
 // 持续监控文件变化的协程
 Coroutine watchFileCoroutine(IOScheduler* scheduler, const std::string& path)
 {
-    FileWatcher watcher(scheduler);
+    g_total++;
+    FileWatcher watcher;
 
     auto result = watcher.addWatch(path, FileWatchEvent::All);
     if (!result) {
-        std::cerr << "Failed to add watch: " << result.error().message() << std::endl;
+        LogError("Failed to add watch: {}", result.error().message());
+        g_failed++;
         co_return;
     }
 
-    std::cout << "Watching: " << path << " (wd=" << result.value() << ")" << std::endl;
+    LogInfo("Watching: {} (wd={})", path, result.value());
 
     // 持续监听文件变化
     while (g_running) {
         auto event = co_await watcher.watch();
         if (!event) {
-            std::cerr << "Watch error: " << event.error().message() << std::endl;
+            LogError("Watch error: {}", event.error().message());
+            g_failed++;
             break;
         }
 
-        std::cout << "[Event] ";
+        g_event_count++;
+        LogInfo("[Event {}] ", g_event_count.load());
 
         if (event->has(FileWatchEvent::Access)) {
-            std::cout << "Access ";
+            LogInfo("Access ");
         }
         if (event->has(FileWatchEvent::Modify)) {
-            std::cout << "Modify ";
+            LogInfo("Modify ");
         }
         if (event->has(FileWatchEvent::Attrib)) {
-            std::cout << "Attrib ";
+            LogInfo("Attrib ");
         }
         if (event->has(FileWatchEvent::CloseWrite)) {
-            std::cout << "CloseWrite ";
+            LogInfo("CloseWrite ");
         }
         if (event->has(FileWatchEvent::CloseNoWrite)) {
-            std::cout << "CloseNoWrite ";
+            LogInfo("CloseNoWrite ");
         }
         if (event->has(FileWatchEvent::Open)) {
-            std::cout << "Open ";
+            LogInfo("Open ");
         }
         if (event->has(FileWatchEvent::Create)) {
-            std::cout << "Create ";
+            LogInfo("Create ");
         }
         if (event->has(FileWatchEvent::Delete)) {
-            std::cout << "Delete ";
+            LogInfo("Delete ");
         }
         if (event->has(FileWatchEvent::DeleteSelf)) {
-            std::cout << "DeleteSelf ";
+            LogInfo("DeleteSelf ");
         }
         if (event->has(FileWatchEvent::MoveSelf)) {
-            std::cout << "MoveSelf ";
+            LogInfo("MoveSelf ");
         }
 
         if (!event->name.empty()) {
-            std::cout << "file=" << event->name;
+            LogInfo("file={}", event->name);
         }
         if (event->isDir) {
-            std::cout << " (dir)";
+            LogInfo(" (dir)");
         }
-        std::cout << std::endl;
     }
 
-    std::cout << "Watcher stopped." << std::endl;
+    if (g_event_count > 0) {
+        LogInfo("Test PASSED: Received {} file events", g_event_count.load());
+        g_passed++;
+    } else {
+        LogError("Test FAILED: No events received");
+        g_failed++;
+    }
+
+    LogInfo("Watcher stopped.");
 }
 
 // 模拟文件操作
 void fileOperationThread(const std::string& path)
 {
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // 使用 busy-wait 替代 sleep，配合原子变量
+    auto wait_ms = [](int ms) {
+        auto start = std::chrono::steady_clock::now();
+        while (std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count() < ms) {
+            std::this_thread::yield();
+        }
+    };
 
-    std::cout << "\n--- File operations start ---\n" << std::endl;
+    wait_ms(500);
+
+    LogInfo("\n--- File operations start ---\n");
 
     // 写入
-    std::cout << "> Writing..." << std::endl;
+    LogInfo("> Writing...");
     {
         std::ofstream ofs(path);
         ofs << "Hello" << std::endl;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    wait_ms(300);
 
     // 追加
-    std::cout << "> Appending..." << std::endl;
+    LogInfo("> Appending...");
     {
         std::ofstream ofs(path, std::ios::app);
         ofs << "World" << std::endl;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    wait_ms(300);
 
     // 读取
-    std::cout << "> Reading..." << std::endl;
+    LogInfo("> Reading...");
     {
         std::ifstream ifs(path);
         std::string line;
         while (std::getline(ifs, line)) {}
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    wait_ms(300);
 
-    std::cout << "\n--- File operations done ---\n" << std::endl;
+    LogInfo("\n--- File operations done ---\n");
 
     // 停止监控
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    wait_ms(500);
     g_running = false;
 }
 
 int main()
 {
-    std::cout << "=== FileWatcher Test ===" << std::endl;
+    LogInfo("========================================");
+    LogInfo("FileWatcher Test");
+    LogInfo("========================================\n");
 
 #ifdef USE_IOURING
-    std::cout << "Backend: io_uring" << std::endl;
+    LogInfo("Backend: io_uring");
 #elif defined(USE_EPOLL)
-    std::cout << "Backend: epoll + inotify" << std::endl;
+    LogInfo("Backend: epoll + inotify");
 #elif defined(USE_KQUEUE)
-    std::cout << "Backend: kqueue" << std::endl;
+    LogInfo("Backend: kqueue");
 #endif
 
     const std::string testFile = "/tmp/test_watcher.txt";
@@ -156,11 +184,32 @@ int main()
     scheduler.spawn(watchFileCoroutine(&scheduler, testFile));
 
     opThread.join();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // 等待监控完成
+    while (g_running.load()) {
+        // 使用调度器的空闲等待
+    }
 
     scheduler.stop();
     std::remove(testFile.c_str());
 
-    std::cout << "=== Test Done ===" << std::endl;
-    return 0;
+    // 写入测试结果
+    galay::test::TestResultWriter writer("test_file_watcher");
+    for (int i = 0; i < g_total.load(); ++i) {
+        writer.addTest();
+    }
+    for (int i = 0; i < g_passed.load(); ++i) {
+        writer.addPassed();
+    }
+    for (int i = 0; i < g_failed.load(); ++i) {
+        writer.addFailed();
+    }
+    writer.writeResult();
+
+    LogInfo("========================================");
+    LogInfo("Test Results: Total={}, Passed={}, Failed={}, Events={}",
+            g_total.load(), g_passed.load(), g_failed.load(), g_event_count.load());
+    LogInfo("========================================");
+
+    return g_failed > 0 ? 1 : 0;
 }

@@ -9,6 +9,7 @@
 #include "galay-kernel/concurrency/UnsafeChannel.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/common/Log.h"
+#include "test_result_writer.h"
 
 #ifdef USE_EPOLL
 #include "galay-kernel/kernel/EpollScheduler.h"
@@ -300,7 +301,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test1_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -329,7 +330,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test2_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 10s) break;
         }
 
@@ -360,7 +361,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test3_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -391,7 +392,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test4_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -425,7 +426,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test5_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 10s) break;
         }
 
@@ -456,7 +457,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test6_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -492,7 +493,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test7_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -523,7 +524,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test8_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -557,7 +558,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test9_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) break;
         }
 
@@ -591,7 +592,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test10_done) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 30s) break;
         }
 
@@ -618,6 +619,17 @@ void runTests() {
 }
 
 int main() {
+    galay::test::TestResultWriter resultWriter("test_unsafe_channel");
     runTests();
+
+    // 写入测试结果
+    resultWriter.addTest();
+    if (g_passed == g_total) {
+        resultWriter.addPassed();
+    } else {
+        resultWriter.addFailed();
+    }
+    resultWriter.writeResult();
+
     return (g_passed == g_total) ? 0 : 1;
 }

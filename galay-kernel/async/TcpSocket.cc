@@ -1,64 +1,54 @@
 #include "TcpSocket.h"
+#include "common/Defn.hpp"
 #include <cerrno>
 #include <unistd.h>
 
 namespace galay::async
 {
 
-TcpSocket::TcpSocket(IOScheduler* scheduler)
-    : m_handle(GHandle::invalid())
-    , m_scheduler(scheduler)
-    , m_controller()
+TcpSocket::TcpSocket(IPType type)
+    : m_controller(create(type))
 {
+    if(m_controller.m_handle == GHandle::invalid()) {
+        throw std::runtime_error(strerror(errno));
+    }
 }
 
-TcpSocket::TcpSocket(IOScheduler* scheduler, GHandle handle)
-    : m_handle(handle)
-    , m_scheduler(scheduler)
-    , m_controller()
+TcpSocket::TcpSocket(GHandle handle)
+    : m_controller(handle)
 {
 }
 
 TcpSocket::~TcpSocket()
 {
-    // 不在析构函数中关闭，由用户显式调用close()
 }
 
 TcpSocket::TcpSocket(TcpSocket&& other) noexcept
-    : m_handle(other.m_handle)
-    , m_scheduler(other.m_scheduler)
-    , m_controller(std::move(other.m_controller))
+    : m_controller(std::move(other.m_controller))
 {
-    other.m_handle = GHandle::invalid();
-    other.m_scheduler = nullptr;
 }
 
 TcpSocket& TcpSocket::operator=(TcpSocket&& other) noexcept
 {
     if (this != &other) {
-        m_handle = other.m_handle;
-        m_scheduler = other.m_scheduler;
         m_controller = std::move(other.m_controller);
-        other.m_handle = GHandle::invalid();
-        other.m_scheduler = nullptr;
     }
     return *this;
 }
 
-std::expected<void, IOError> TcpSocket::create(IPType type)
+GHandle TcpSocket::create(IPType type)
 {
     int domain = (type == IPType::IPV4) ? AF_INET : AF_INET6;
     int fd = socket(domain, SOCK_STREAM, 0);
     if (fd < 0) {
-        return std::unexpected(IOError(kBindFailed, errno));
+        return GHandle::invalid();
     }
-    m_handle.fd = fd;
-    return {};
+    return {.fd = fd};
 }
 
 std::expected<void, IOError> TcpSocket::bind(const Host& host)
 {
-    if (::bind(m_handle.fd, host.sockAddr(), host.addrLen()) < 0) {
+    if (::bind(m_controller.m_handle.fd, host.sockAddr(), host.addrLen()) < 0) {
         return std::unexpected(IOError(kBindFailed, errno));
     }
     return {};
@@ -66,7 +56,7 @@ std::expected<void, IOError> TcpSocket::bind(const Host& host)
 
 std::expected<void, IOError> TcpSocket::listen(int backlog)
 {
-    if (::listen(m_handle.fd, backlog) < 0) {
+    if (::listen(m_controller.m_handle.fd, backlog) < 0) {
         return std::unexpected(IOError(kListenFailed, errno));
     }
     return {};
@@ -74,27 +64,27 @@ std::expected<void, IOError> TcpSocket::listen(int backlog)
 
 AcceptAwaitable TcpSocket::accept(Host* clientHost)
 {
-    return AcceptAwaitable(m_scheduler, &m_controller, m_handle, clientHost);
+    return AcceptAwaitable(&m_controller, clientHost);
 }
 
 ConnectAwaitable TcpSocket::connect(const Host& host)
 {
-    return ConnectAwaitable(m_scheduler, &m_controller, m_handle, host);
+    return ConnectAwaitable(&m_controller, host);
 }
 
 RecvAwaitable TcpSocket::recv(char* buffer, size_t length)
 {
-    return RecvAwaitable(m_scheduler, &m_controller, m_handle, buffer, length);
+    return RecvAwaitable(&m_controller, buffer, length);
 }
 
 SendAwaitable TcpSocket::send(const char* buffer, size_t length)
 {
-    return SendAwaitable(m_scheduler, &m_controller, m_handle, buffer, length);
+    return SendAwaitable(&m_controller, buffer, length);
 }
 
 CloseAwaitable TcpSocket::close()
 {
-    return CloseAwaitable(m_scheduler, m_handle);
+    return CloseAwaitable(&m_controller);
 }
 
 }

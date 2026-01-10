@@ -2,8 +2,7 @@
 #define GALAY_KERNEL_KQUEUE_SCHEDULER_H
 
 #include "Coroutine.h"
-#include "galay-kernel/common/Defn.hpp"
-#include "Scheduler.h"
+#include "IOScheduler.hpp"
 
 #ifdef USE_KQUEUE
 
@@ -51,21 +50,18 @@ public:
     void notify();
 
     // 返回1表示不用阻塞
-    int addAccept(IOController* event) override;
-    int addConnect(IOController* event) override;
-    int addRecv(IOController* event) override;
-    int addSend(IOController* event) override;
-    int addClose(int fd) override;
-    int addFileRead(IOController* event) override;
-    int addFileWrite(IOController* event) override;
-    int addRecvFrom(IOController* event) override;
-    int addSendTo(IOController* event) override;
-    int addFileWatch(IOController* event) override;
-    int addTimer(int timer_fd, struct TimerController* timer_ctrl) override;
+    int addAccept(IOController* controller) override;
+    int addConnect(IOController* controller) override;
+    int addRecv(IOController* controller) override;
+    int addSend(IOController* controller) override;
+    int addClose(IOController* controller) override;
+    int addFileRead(IOController* controller) override;
+    int addFileWrite(IOController* controller) override;
+    int addRecvFrom(IOController* controller) override;
+    int addSendTo(IOController* controller) override;
+    int addFileWatch(IOController* controller) override;
 
-    // Remove events (only need fd)
-    int remove(int fd);
-
+    int remove(IOController* controller) override;
     // Coroutine scheduling
     void spawn(Coroutine coro) override;
 
@@ -87,7 +83,6 @@ private:
     std::vector<struct kevent> m_events;
     // Coroutine buffer for batch processing
     std::vector<Coroutine> m_coro_buffer;
-
 private:
 
     bool handleAccept(IOController* controller);
@@ -99,7 +94,7 @@ private:
     bool handleRecvFrom(IOController* controller);
     bool handleSendTo(IOController* controller);
 
-    // Main event loop
+    // Main controller loop
     void eventLoop();
     void processPendingCoroutines();
     void processEvent(struct kevent& ev);

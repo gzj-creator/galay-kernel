@@ -4,6 +4,7 @@
 #include "galay-kernel/common/Defn.hpp"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/common/Log.h"
+#include "test_result_writer.h"
 
 #ifdef USE_KQUEUE
 #include "galay-kernel/kernel/KqueueScheduler.h"
@@ -25,6 +26,10 @@ using namespace galay::kernel;
 const char* TEST_FILE = "/tmp/galay_test_file.txt";
 const char* TEST_CONTENT = "Hello, Galay Kernel File IO Test!\nThis is line 2.\nThis is line 3.\n";
 
+std::atomic<int> g_passed{0};
+std::atomic<int> g_failed{0};
+std::atomic<int> g_total{0};
+
 // 创建测试文件
 void createTestFile() {
     std::ofstream ofs(TEST_FILE);
@@ -41,16 +46,18 @@ void cleanupTestFile() {
 
 #ifdef USE_KQUEUE
 // Kqueue 平台测试 - 所有测试在一个协程中完成
-Coroutine testKqueueFileIO(KqueueScheduler* scheduler, std::atomic<bool>* done) {
+Coroutine testKqueueFileIO(std::atomic<bool>* done) {
     LogInfo("=== Kqueue (macOS) File IO Test ===");
 
     // 测试1: 读取已有文件
     {
+        g_total++;
         LogInfo("[Kqueue] Test 1: File read...");
-        galay::async::AsyncFile file(scheduler);
+        galay::async::AsyncFile file;
         auto openResult = file.open(TEST_FILE, galay::async::FileOpenMode::Read);
         if (!openResult) {
             LogError("[Kqueue] Failed to open file for read: {}", openResult.error().message());
+            g_failed++;
             *done = true;
             co_return;
         }
@@ -60,26 +67,31 @@ Coroutine testKqueueFileIO(KqueueScheduler* scheduler, std::atomic<bool>* done) 
 
         if (!result) {
             LogError("[Kqueue] Read failed: {}", result.error().message());
+            g_failed++;
         } else {
             auto& bytes = result.value();
             LogInfo("[Kqueue] Read {} bytes: {}", bytes.size(), bytes.toStringView());
             if (bytes.toStringView() == TEST_CONTENT) {
                 LogInfo("[Kqueue] Test 1 PASSED: Content matches");
+                g_passed++;
             } else {
                 LogError("[Kqueue] Test 1 FAILED: Content mismatch");
+                g_failed++;
             }
         }
     }
 
     // 测试2: 写入文件然后读回验证
     {
+        g_total++;
         LogInfo("[Kqueue] Test 2: File write and read back...");
         const char* writeTestFile = "/tmp/galay_kqueue_write_test.txt";
 
-        galay::async::AsyncFile file(scheduler);
+        galay::async::AsyncFile file;
         auto openResult = file.open(writeTestFile, galay::async::FileOpenMode::ReadWrite);
         if (!openResult) {
             LogError("[Kqueue] Failed to open file for write: {}", openResult.error().message());
+            g_failed++;
             *done = true;
             co_return;
         }
@@ -89,6 +101,7 @@ Coroutine testKqueueFileIO(KqueueScheduler* scheduler, std::atomic<bool>* done) 
 
         if (!writeResult) {
             LogError("[Kqueue] Write failed: {}", writeResult.error().message());
+            g_failed++;
         } else {
             LogInfo("[Kqueue] Written {} bytes", writeResult.value());
 
@@ -103,13 +116,16 @@ Coroutine testKqueueFileIO(KqueueScheduler* scheduler, std::atomic<bool>* done) 
                 std::string_view readBack = readResult.value().toStringView();
                 if (readBack.substr(0, written.size()) == written) {
                     LogInfo("[Kqueue] Test 2 PASSED: Write and read back successful");
+                    g_passed++;
                 } else {
                     LogError("[Kqueue] Test 2 FAILED: Content mismatch");
                     LogError("[Kqueue] Expected: {}", written);
                     LogError("[Kqueue] Got: {}", readBack);
+                    g_failed++;
                 }
             } else {
                 LogError("[Kqueue] Test 2 FAILED: Read back error: {}", readResult.error().message());
+                g_failed++;
             }
         }
 
@@ -126,11 +142,11 @@ void runKqueueTest() {
     scheduler.start();
 
     std::atomic<bool> done{false};
-    scheduler.spawn(testKqueueFileIO(&scheduler, &done));
+    scheduler.spawn(testKqueueFileIO(&done));
 
     // 等待协程完成
     while (!done.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // 使用调度器的空闲等待，而不是 sleep
     }
 
     scheduler.stop();
@@ -139,7 +155,7 @@ void runKqueueTest() {
 
 #ifdef USE_EPOLL
 // Epoll 平台测试 - 所有测试在一个协程中完成
-Coroutine testEpollFileIO(EpollScheduler* scheduler, std::atomic<bool>* done) {
+Coroutine testEpollFileIO(std::atomic<bool>* done) {
     LogInfo("=== Epoll (Linux libaio) File IO Test ===");
 
     // 创建测试文件用于 O_DIRECT
@@ -157,11 +173,13 @@ Coroutine testEpollFileIO(EpollScheduler* scheduler, std::atomic<bool>* done) {
 
     // 测试1: 单次读取
     {
+        g_total++;
         LogInfo("[Epoll/AIO] Test 1: Single read...");
-        galay::async::AioFile file(scheduler);
+        galay::async::AioFile file;
         auto openResult = file.open(aioTestFile, galay::async::AioOpenMode::Read);
         if (!openResult) {
             LogError("[Epoll/AIO] Failed to open file: {}", openResult.error().message());
+            g_failed++;
             *done = true;
             co_return;
         }
@@ -169,6 +187,7 @@ Coroutine testEpollFileIO(EpollScheduler* scheduler, std::atomic<bool>* done) {
         char* buffer = galay::async::AioFile::allocAlignedBuffer(4096);
         if (!buffer) {
             LogError("[Epoll/AIO] Failed to allocate aligned buffer");
+            g_failed++;
             *done = true;
             co_return;
         }
@@ -178,14 +197,17 @@ Coroutine testEpollFileIO(EpollScheduler* scheduler, std::atomic<bool>* done) {
 
         if (!result) {
             LogError("[Epoll/AIO] Read failed: {}", result.error().message());
+            g_failed++;
         } else {
             auto& results = result.value();
             if (!results.empty() && results[0] > 0) {
                 buffer[results[0]] = '\0';
                 LogInfo("[Epoll/AIO] Read {} bytes: {}", results[0], buffer);
                 LogInfo("[Epoll/AIO] Test 1 PASSED");
+                g_passed++;
             } else {
                 LogError("[Epoll/AIO] Test 1 FAILED: No data read");
+                g_failed++;
             }
         }
 
@@ -194,11 +216,13 @@ Coroutine testEpollFileIO(EpollScheduler* scheduler, std::atomic<bool>* done) {
 
     // 测试2: 批量读取
     {
+        g_total++;
         LogInfo("[Epoll/AIO] Test 2: Batch read (3 requests)...");
-        galay::async::AioFile file(scheduler);
+        galay::async::AioFile file;
         auto openResult = file.open(aioTestFile, galay::async::AioOpenMode::Read);
         if (!openResult) {
             LogError("[Epoll/AIO] Failed to open file: {}", openResult.error().message());
+            g_failed++;
             *done = true;
             co_return;
         }
@@ -209,6 +233,7 @@ Coroutine testEpollFileIO(EpollScheduler* scheduler, std::atomic<bool>* done) {
 
         if (!buffer1 || !buffer2 || !buffer3) {
             LogError("[Epoll/AIO] Failed to allocate aligned buffers");
+            g_failed++;
             *done = true;
             co_return;
         }
@@ -221,6 +246,7 @@ Coroutine testEpollFileIO(EpollScheduler* scheduler, std::atomic<bool>* done) {
 
         if (!result) {
             LogError("[Epoll/AIO] Batch read failed: {}", result.error().message());
+            g_failed++;
         } else {
             auto& results = result.value();
             LogInfo("[Epoll/AIO] Batch read completed with {} results", results.size());
@@ -228,6 +254,7 @@ Coroutine testEpollFileIO(EpollScheduler* scheduler, std::atomic<bool>* done) {
                 LogInfo("[Epoll/AIO] Result[{}]: {} bytes", i, results[i]);
             }
             LogInfo("[Epoll/AIO] Test 2 PASSED");
+            g_passed++;
         }
 
         galay::async::AioFile::freeAlignedBuffer(buffer1);
@@ -237,12 +264,14 @@ Coroutine testEpollFileIO(EpollScheduler* scheduler, std::atomic<bool>* done) {
 
     // 测试3: 写入
     {
+        g_total++;
         LogInfo("[Epoll/AIO] Test 3: Write...");
         const char* writeTestFile = "/tmp/galay_aio_write_test.dat";
-        galay::async::AioFile file(scheduler);
+        galay::async::AioFile file;
         auto openResult = file.open(writeTestFile, galay::async::AioOpenMode::Write);
         if (!openResult) {
             LogError("[Epoll/AIO] Failed to open file for write: {}", openResult.error().message());
+            g_failed++;
             *done = true;
             co_return;
         }
@@ -250,6 +279,7 @@ Coroutine testEpollFileIO(EpollScheduler* scheduler, std::atomic<bool>* done) {
         char* buffer = galay::async::AioFile::allocAlignedBuffer(4096);
         if (!buffer) {
             LogError("[Epoll/AIO] Failed to allocate aligned buffer");
+            g_failed++;
             *done = true;
             co_return;
         }
@@ -263,13 +293,16 @@ Coroutine testEpollFileIO(EpollScheduler* scheduler, std::atomic<bool>* done) {
 
         if (!result) {
             LogError("[Epoll/AIO] Write failed: {}", result.error().message());
+            g_failed++;
         } else {
             auto& results = result.value();
             if (!results.empty() && results[0] >= 0) {
                 LogInfo("[Epoll/AIO] Written {} bytes", results[0]);
                 LogInfo("[Epoll/AIO] Test 3 PASSED");
+                g_passed++;
             } else {
                 LogError("[Epoll/AIO] Test 3 FAILED");
+                g_failed++;
             }
         }
 
@@ -288,11 +321,11 @@ void runEpollTest() {
     scheduler.start();
 
     std::atomic<bool> done{false};
-    scheduler.spawn(testEpollFileIO(&scheduler, &done));
+    scheduler.spawn(testEpollFileIO(&done));
 
     // 等待协程完成
     while (!done.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // 使用调度器的空闲等待，而不是 sleep
     }
 
     scheduler.stop();
@@ -301,16 +334,18 @@ void runEpollTest() {
 
 #ifdef USE_IOURING
 // io_uring 平台测试 - 所有测试在一个协程中完成
-Coroutine testIOUringFileIO(IOUringScheduler* scheduler, std::atomic<bool>* done) {
+Coroutine testIOUringFileIO(std::atomic<bool>* done) {
     LogInfo("=== io_uring (Linux) File IO Test ===");
 
     // 测试1: 读取已有文件
     {
+        g_total++;
         LogInfo("[io_uring] Test 1: File read...");
-        galay::async::AsyncFile file(scheduler);
+        galay::async::AsyncFile file;
         auto openResult = file.open(TEST_FILE, galay::async::FileOpenMode::Read);
         if (!openResult) {
             LogError("[io_uring] Failed to open file for read: {}", openResult.error().message());
+            g_failed++;
             *done = true;
             co_return;
         }
@@ -320,26 +355,31 @@ Coroutine testIOUringFileIO(IOUringScheduler* scheduler, std::atomic<bool>* done
 
         if (!result) {
             LogError("[io_uring] Read failed: {}", result.error().message());
+            g_failed++;
         } else {
             auto& bytes = result.value();
             LogInfo("[io_uring] Read {} bytes: {}", bytes.size(), bytes.toStringView());
             if (bytes.toStringView() == TEST_CONTENT) {
                 LogInfo("[io_uring] Test 1 PASSED: Content matches");
+                g_passed++;
             } else {
                 LogError("[io_uring] Test 1 FAILED: Content mismatch");
+                g_failed++;
             }
         }
     }
 
     // 测试2: 写入文件然后读回验证
     {
+        g_total++;
         LogInfo("[io_uring] Test 2: File write and read back...");
         const char* writeTestFile = "/tmp/galay_iouring_write_test.txt";
 
-        galay::async::AsyncFile file(scheduler);
+        galay::async::AsyncFile file;
         auto openResult = file.open(writeTestFile, galay::async::FileOpenMode::ReadWrite);
         if (!openResult) {
             LogError("[io_uring] Failed to open file for write: {}", openResult.error().message());
+            g_failed++;
             *done = true;
             co_return;
         }
@@ -349,6 +389,7 @@ Coroutine testIOUringFileIO(IOUringScheduler* scheduler, std::atomic<bool>* done
 
         if (!writeResult) {
             LogError("[io_uring] Write failed: {}", writeResult.error().message());
+            g_failed++;
         } else {
             LogInfo("[io_uring] Written {} bytes", writeResult.value());
 
@@ -363,13 +404,16 @@ Coroutine testIOUringFileIO(IOUringScheduler* scheduler, std::atomic<bool>* done
                 std::string_view readBack = readResult.value().toStringView();
                 if (readBack.substr(0, written.size()) == written) {
                     LogInfo("[io_uring] Test 2 PASSED: Write and read back successful");
+                    g_passed++;
                 } else {
                     LogError("[io_uring] Test 2 FAILED: Content mismatch");
                     LogError("[io_uring] Expected: {}", written);
                     LogError("[io_uring] Got: {}", readBack);
+                    g_failed++;
                 }
             } else {
                 LogError("[io_uring] Test 2 FAILED: Read back error: {}", readResult.error().message());
+                g_failed++;
             }
         }
 
@@ -386,11 +430,11 @@ void runIOUringTest() {
     scheduler.start();
 
     std::atomic<bool> done{false};
-    scheduler.spawn(testIOUringFileIO(&scheduler, &done));
+    scheduler.spawn(testIOUringFileIO(&done));
 
     // 等待协程完成
     while (!done.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // 使用调度器的空闲等待，而不是 sleep
     }
 
     scheduler.stop();
@@ -417,6 +461,20 @@ int main() {
 
     // 清理
     cleanupTestFile();
+
+    galay::test::TestResultWriter writer("test_file_io");
+    for (int i = 0; i < g_total.load(); ++i) {
+        writer.addTest();
+    }
+    for (int i = 0; i < g_passed.load(); ++i) {
+        writer.addPassed();
+    }
+    for (int i = 0; i < g_failed.load(); ++i) {
+        writer.addFailed();
+    }
+    writer.writeResult();
+
+    LogInfo("Test Results: Total={}, Passed={}, Failed={}", g_total.load(), g_passed.load(), g_failed.load());
 
     LogInfo("========================================");
     LogInfo("All File IO Tests Completed");

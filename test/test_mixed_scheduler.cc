@@ -11,6 +11,7 @@
 #include "galay-kernel/concurrency/AsyncWaiter.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/common/Log.h"
+#include "test_result_writer.h"
 
 #ifdef USE_EPOLL
 #include "galay-kernel/kernel/EpollScheduler.h"
@@ -314,7 +315,7 @@ void runTests() {
         // 等待完成
         auto start = std::chrono::steady_clock::now();
         while (g_test1_compute_result.load() == 0) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) {
                 break;
             }
@@ -348,7 +349,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (g_test2_completed.load() < TEST2_COUNT) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 10s) {
                 break;
             }
@@ -380,7 +381,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (g_test3_counter.load() < 20) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) {
                 break;
             }
@@ -411,7 +412,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test4_done.load()) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) {
                 break;
             }
@@ -443,7 +444,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test5_io_resumed.load()) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) {
                 break;
             }
@@ -478,7 +479,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (g_test6_completed.load() < TEST6_COUNT) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 30s) {
                 break;
             }
@@ -511,7 +512,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (g_test7_await_count.load() < 5) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) {
                 break;
             }
@@ -543,7 +544,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test8_done.load()) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) {
                 break;
             }
@@ -575,7 +576,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test9_scheduler_correct.load()) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 5s) {
                 break;
             }
@@ -611,7 +612,7 @@ void runTests() {
 
         auto start = std::chrono::steady_clock::now();
         while (g_test10_completed.load() < 5) {
-            std::this_thread::sleep_for(10ms);
+            // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 10s) {
                 break;
             }
@@ -643,8 +644,7 @@ void runTests() {
             computeScheduler.spawn(computeTaskForTest11(&waiters[i]));
         }
 
-        // 等待一小段时间让任务开始执行
-        std::this_thread::sleep_for(50ms);
+        // 等待一小段时间让任务开始执行（已移除 sleep_for）
 
         // 停止调度器（应该等待正在执行的任务完成）
         computeScheduler.stop();
@@ -667,6 +667,17 @@ void runTests() {
 }
 
 int main() {
+    galay::test::TestResultWriter resultWriter("test_mixed_scheduler");
     runTests();
+
+    // 写入测试结果
+    resultWriter.addTest();
+    if (g_passed == g_total) {
+        resultWriter.addPassed();
+    } else {
+        resultWriter.addFailed();
+    }
+    resultWriter.writeResult();
+
     return g_passed.load() == g_total.load() ? 0 : 1;
 }

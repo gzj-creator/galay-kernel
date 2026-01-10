@@ -1,4 +1,5 @@
 #include "FileWatcher.h"
+#include "common/Defn.hpp"
 
 #if defined(USE_IOURING) || defined(USE_EPOLL) || defined(USE_KQUEUE)
 
@@ -42,27 +43,26 @@ static uint32_t toInotifyMask(FileWatchEvent events)
 }
 #endif
 
-FileWatcher::FileWatcher(IOScheduler* scheduler)
-    : m_watch_fd(-1)
-    , m_scheduler(scheduler)
+FileWatcher::FileWatcher()
+    : m_controller(GHandle::invalid())
 #ifdef USE_KQUEUE
     , m_current_events(FileWatchEvent::None)
 #endif
 {
 #if defined(USE_IOURING) || defined(USE_EPOLL)
-    m_watch_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    m_controller.m_handle.fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 #endif
-    // macOS: m_watch_fd 在 addWatch 时设置为第一个监控的文件 fd
+    // macOS: m_controller 在 addWatch 时设置为第一个监控的文件 fd
 }
 
 FileWatcher::~FileWatcher()
 {
 #if defined(USE_IOURING) || defined(USE_EPOLL)
-    if (m_watch_fd >= 0) {
+    if (m_controller.m_handle.fd >= 0) {
         for (const auto& [wd, path] : m_watches) {
-            inotify_rm_watch(m_watch_fd, wd);
+            inotify_rm_watch(m_controller.m_handle.fd, wd);
         }
-        close(m_watch_fd);
+        close(m_controller.m_handle.fd);
     }
 #else
     // macOS: 关闭所有打开的文件描述符
@@ -73,16 +73,13 @@ FileWatcher::~FileWatcher()
 }
 
 FileWatcher::FileWatcher(FileWatcher&& other) noexcept
-    : m_watch_fd(other.m_watch_fd)
-    , m_scheduler(other.m_scheduler)
-    , m_controller(std::move(other.m_controller))
+    : m_controller(std::move(other.m_controller))
     , m_watches(std::move(other.m_watches))
 #ifdef USE_KQUEUE
     , m_current_events(other.m_current_events)
 #endif
 {
-    other.m_watch_fd = -1;
-    other.m_scheduler = nullptr;
+    other.m_controller.m_handle.fd = -1;
 }
 
 FileWatcher& FileWatcher::operator=(FileWatcher&& other) noexcept
@@ -90,11 +87,11 @@ FileWatcher& FileWatcher::operator=(FileWatcher&& other) noexcept
     if (this != &other) {
         // 清理当前资源
 #if defined(USE_IOURING) || defined(USE_EPOLL)
-        if (m_watch_fd >= 0) {
+        if (m_controller.m_handle.fd >= 0) {
             for (const auto& [wd, path] : m_watches) {
-                inotify_rm_watch(m_watch_fd, wd);
+                inotify_rm_watch(m_controller.m_handle.fd, wd);
             }
-            close(m_watch_fd);
+            close(m_controller.m_handle.fd);
         }
 #else
         for (const auto& [fd, path] : m_watches) {
@@ -103,16 +100,14 @@ FileWatcher& FileWatcher::operator=(FileWatcher&& other) noexcept
 #endif
 
         // 移动资源
-        m_watch_fd = other.m_watch_fd;
-        m_scheduler = other.m_scheduler;
+        m_controller.m_handle.fd = other.m_controller.m_handle.fd;
         m_controller = std::move(other.m_controller);
         m_watches = std::move(other.m_watches);
 #ifdef USE_KQUEUE
         m_current_events = other.m_current_events;
 #endif
 
-        other.m_watch_fd = -1;
-        other.m_scheduler = nullptr;
+        other.m_controller.m_handle.fd = -1;
     }
     return *this;
 }
@@ -120,12 +115,12 @@ FileWatcher& FileWatcher::operator=(FileWatcher&& other) noexcept
 std::expected<int, IOError> FileWatcher::addWatch(const std::string& path, FileWatchEvent events)
 {
 #if defined(USE_IOURING) || defined(USE_EPOLL)
-    if (m_watch_fd < 0) {
+    if (m_controller.m_handle.fd < 0) {
         return std::unexpected(IOError(kOpenFailed, EBADF));
     }
 
     uint32_t mask = toInotifyMask(events);
-    int wd = inotify_add_watch(m_watch_fd, path.c_str(), mask);
+    int wd = inotify_add_watch(m_controller.m_handle.fd, path.c_str(), mask);
     if (wd < 0) {
         return std::unexpected(IOError(kOpenFailed, errno));
     }
@@ -143,8 +138,8 @@ std::expected<int, IOError> FileWatcher::addWatch(const std::string& path, FileW
     m_current_events = events;
 
     // 设置第一个监控的 fd 作为 watch_fd
-    if (m_watch_fd < 0) {
-        m_watch_fd = fd;
+    if (m_controller.m_handle.fd < 0) {
+        m_controller.m_handle.fd = fd;
     }
 
     return fd;
@@ -154,7 +149,7 @@ std::expected<int, IOError> FileWatcher::addWatch(const std::string& path, FileW
 std::expected<void, IOError> FileWatcher::removeWatch(int wd)
 {
 #if defined(USE_IOURING) || defined(USE_EPOLL)
-    if (m_watch_fd < 0) {
+    if (m_controller.m_handle.fd < 0) {
         return std::unexpected(IOError(kOpenFailed, EBADF));
     }
 
@@ -163,7 +158,7 @@ std::expected<void, IOError> FileWatcher::removeWatch(int wd)
         return std::unexpected(IOError(kOpenFailed, EINVAL));
     }
 
-    if (inotify_rm_watch(m_watch_fd, wd) < 0) {
+    if (inotify_rm_watch(m_controller.m_handle.fd, wd) < 0) {
         return std::unexpected(IOError(kOpenFailed, errno));
     }
 
@@ -180,11 +175,11 @@ std::expected<void, IOError> FileWatcher::removeWatch(int wd)
     m_watches.erase(it);
 
     // 如果删除的是当前 watch_fd，更新为下一个
-    if (wd == m_watch_fd) {
+    if (wd == m_controller.m_handle.fd) {
         if (!m_watches.empty()) {
-            m_watch_fd = m_watches.begin()->first;
+            m_controller.m_handle.fd = m_watches.begin()->first;
         } else {
-            m_watch_fd = -1;
+            m_controller.m_handle.fd = -1;
         }
     }
 
@@ -194,7 +189,7 @@ std::expected<void, IOError> FileWatcher::removeWatch(int wd)
 
 FileWatchAwaitable FileWatcher::watch()
 {
-    return FileWatchAwaitable(m_scheduler, &m_controller, m_watch_fd,
+    return FileWatchAwaitable(&m_controller,
                               m_buffer, BUFFER_SIZE);
 }
 

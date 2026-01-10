@@ -1,9 +1,7 @@
 #ifndef GALAY_KERNEL_EPOLL_SCHEDULER_H
 #define GALAY_KERNEL_EPOLL_SCHEDULER_H
 
-#include "Coroutine.h"
-#include "galay-kernel/common/Defn.hpp"
-#include "Scheduler.h"
+#include "IOScheduler.hpp"
 
 #ifdef USE_EPOLL
 

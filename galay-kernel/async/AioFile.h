@@ -33,7 +33,7 @@ class AioFile;
  * @brief AIO 提交结果的可等待对象
  */
 struct AioCommitAwaitable {
-    AioCommitAwaitable(EpollScheduler* scheduler, IOController* controller,
+    AioCommitAwaitable(IOController* controller,
                        io_context_t aio_ctx, int event_fd,
                        std::vector<struct iocb*>&& pending_ptrs, size_t pending_count);
 
@@ -41,7 +41,6 @@ struct AioCommitAwaitable {
     bool await_suspend(std::coroutine_handle<> handle);
     std::expected<std::vector<ssize_t>, IOError> await_resume();
 
-    EpollScheduler* m_scheduler;
     IOController* m_controller;
     io_context_t m_aio_ctx;
     int m_event_fd;
@@ -69,7 +68,7 @@ struct AioCommitAwaitable {
 class AioFile
 {
 public:
-    AioFile(EpollScheduler* scheduler, int max_events = 64);
+    AioFile(int max_events = 64);
     ~AioFile();
 
     // 禁止拷贝
@@ -122,7 +121,6 @@ public:
 
 private:
     GHandle m_handle;
-    EpollScheduler* m_scheduler;
     IOController m_controller;
 
     // libaio 相关

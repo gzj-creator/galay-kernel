@@ -9,7 +9,7 @@
 #ifndef GALAY_KERNEL_UNSAFE_CHANNEL_H
 #define GALAY_KERNEL_UNSAFE_CHANNEL_H
 
-#include "../kernel/Coroutine.h"
+#include "galay-kernel/kernel/Coroutine.h"
 #include <queue>
 #include <optional>
 #include <vector>

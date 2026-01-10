@@ -1,3 +1,4 @@
+#include <exception>
 #include <iostream>
 #include <cstring>
 #include "galay-kernel/async/TcpSocket.h"
@@ -22,16 +23,7 @@ using namespace galay::kernel;
 // Echo服务器协程
 Coroutine echoServer(IOScheduler* scheduler) {
     LogInfo("Server starting...");
-    TcpSocket listener(scheduler);
-
-    // 创建socket
-    auto createResult = listener.create(IPType::IPV4);
-    if (!createResult) {
-        LogError("Failed to create socket: {}", createResult.error().message());
-        co_return;
-    }
-    LogDebug("Socket created, fd={}", listener.handle().fd);
-
+    TcpSocket listener;
     // 设置选项
     auto optResult = listener.option().handleReuseAddr();
     if (!optResult) {
@@ -75,7 +67,7 @@ Coroutine echoServer(IOScheduler* scheduler) {
     LogInfo("Client connected from {}:{}", clientHost.ip(), clientHost.port());
 
     // 创建客户端socket
-    TcpSocket client(scheduler, acceptResult.value());
+    TcpSocket client(acceptResult.value());
     client.option().handleNonBlock();
 
     // Echo循环
@@ -113,14 +105,7 @@ Coroutine echoServer(IOScheduler* scheduler) {
 // 客户端协程
 Coroutine echoClient(IOScheduler* scheduler) {
     LogInfo("Client starting...");
-    TcpSocket client(scheduler);
-
-    // 创建socket
-    auto createResult = client.create(IPType::IPV4);
-    if (!createResult) {
-        LogError("Client: Failed to create socket");
-        co_return;
-    }
+    TcpSocket client;
     LogDebug("Client socket created, fd={}", client.handle().fd);
 
     client.option().handleNonBlock();

@@ -1,3 +1,4 @@
+#include <exception>
 #include <iostream>
 #include <cstring>
 #include "galay-kernel/async/UdpSocket.h"
@@ -20,16 +21,9 @@ using namespace galay::async;
 using namespace galay::kernel;
 
 // UDP Echo服务器协程
-Coroutine udpEchoServer(IOScheduler* scheduler) {
+Coroutine udpEchoServer() {
     LogInfo("UDP Server starting...");
-    UdpSocket socket(scheduler);
-
-    // 创建socket
-    auto createResult = socket.create(IPType::IPV4);
-    if (!createResult) {
-        LogError("Failed to create socket: {}", createResult.error().message());
-        co_return;
-    }
+    UdpSocket socket;
     LogDebug("Socket created, fd={}", socket.handle().fd);
 
     // 设置选项
@@ -85,16 +79,9 @@ Coroutine udpEchoServer(IOScheduler* scheduler) {
 }
 
 // UDP客户端协程
-Coroutine udpEchoClient(IOScheduler* scheduler) {
+Coroutine udpEchoClient() {
     LogInfo("UDP Client starting...");
-    UdpSocket socket(scheduler);
-
-    // 创建socket
-    auto createResult = socket.create(IPType::IPV4);
-    if (!createResult) {
-        LogError("Client: Failed to create socket");
-        co_return;
-    }
+    UdpSocket socket;
     LogDebug("Client socket created, fd={}", socket.handle().fd);
 
     socket.option().handleNonBlock();
@@ -148,14 +135,14 @@ int main() {
     LogDebug("Scheduler started");
 
     // 启动服务器
-    scheduler.spawn(udpEchoServer(&scheduler));
+    scheduler.spawn(udpEchoServer());
     LogDebug("Server coroutine spawned");
 
     // 等待一下让服务器启动
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // 启动客户端
-    scheduler.spawn(udpEchoClient(&scheduler));
+    scheduler.spawn(udpEchoClient());
     LogDebug("Client coroutine spawned");
 
     // 运行一段时间
@@ -170,14 +157,14 @@ int main() {
     LogDebug("Scheduler started");
 
     // 启动服务器
-    scheduler.spawn(udpEchoServer(&scheduler));
+    scheduler.spawn(udpEchoServer());
     LogDebug("Server coroutine spawned");
 
     // 等待一下让服务器启动
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // 启动客户端
-    scheduler.spawn(udpEchoClient(&scheduler));
+    scheduler.spawn(udpEchoClient());
     LogDebug("Client coroutine spawned");
 
     // 运行一段时间
@@ -192,14 +179,14 @@ int main() {
     LogDebug("Scheduler started");
 
     // 启动服务器
-    scheduler.spawn(udpEchoServer(&scheduler));
+    scheduler.spawn(udpEchoServer());
     LogDebug("Server coroutine spawned");
 
     // 等待一下让服务器启动
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // 启动客户端
-    scheduler.spawn(udpEchoClient(&scheduler));
+    scheduler.spawn(udpEchoClient());
     LogDebug("Client coroutine spawned");
 
     // 运行一段时间

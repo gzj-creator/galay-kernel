@@ -27,9 +27,9 @@
 #ifndef GALAY_KERNEL_COROUTINE_H
 #define GALAY_KERNEL_COROUTINE_H
 
-#include <atomic>
 #include <coroutine>
 #include <memory>
+#include <optional>
 #include <thread>
 
 namespace galay::kernel
@@ -40,15 +40,6 @@ class CoroutineData;
 class WaitResult;
 class Waker;
 class Scheduler;
-
-/**
- * @brief 协程状态枚举
- */
-enum class CoroutineStatus: uint8_t {
-    Suspended,  ///< 挂起状态，等待恢复
-    Running,    ///< 运行中
-    Finished,   ///< 已完成
-};
 
 /**
  * @brief 协程类
@@ -115,24 +106,6 @@ public:
     Coroutine& operator=(const Coroutine& other) noexcept;
 
     /**
-     * @brief 检查协程是否正在运行
-     * @return true 如果协程正在运行
-     */
-    bool isRunning() const;
-
-    /**
-     * @brief 检查协程是否挂起
-     * @return true 如果协程已挂起
-     */
-    bool isSuspend() const;
-
-    /**
-     * @brief 检查协程是否已完成
-     * @return true 如果协程已完成
-     */
-    bool isDone() const;
-
-    /**
      * @brief 检查协程是否有效
      * @return true 如果协程数据有效
      */
@@ -176,17 +149,11 @@ public:
      */
     void threadId(std::thread::id id);
 
-private:
-    /**
-     * @brief 修改状态为挂起
-     */
-    void modToSuspend();
-
-    /**
+     /**
      * @brief 恢复协程执行
-     * @note 仅供Waker和Scheduler调用
+     * @note 仅供Waker和Scheduler调用，会在协程所属的scheduler上spawn
      */
-    void resume();
+     void resume();
 
 private:
     std::shared_ptr<CoroutineData> m_data;  ///< 协程数据，使用shared_ptr管理生命周期
@@ -249,11 +216,17 @@ struct alignas(64) CoroutineData
 {
     CoroutineData() = default;
 
-    std::atomic<CoroutineStatus> m_status = CoroutineStatus::Suspended;  ///< 协程状态
+    ~CoroutineData() {
+        // 协程完成后由 shared_ptr 最后一个引用释放时销毁句柄
+        if (m_handle) {
+            m_handle.destroy();
+        }
+    }
+
     std::coroutine_handle<Coroutine::promise_type> m_handle = nullptr;   ///< 底层协程句柄
     Scheduler* m_scheduler = nullptr;                                     ///< 所属调度器
     std::thread::id m_threadId;                                           ///< 所属线程ID
-    Coroutine m_next;                                                     ///< 后续协程（用于链式执行）
+    std::optional<Coroutine> m_next;                                      ///< 后续协程（用于链式执行）
 };
 
 /**
@@ -298,9 +271,9 @@ public:
 
     /**
      * @brief 最终挂起点
-     * @return suspend_never 协程完成后不挂起
+     * @return suspend_always 协程完成后保持挂起，由 CoroutineData 析构时销毁
      */
-    std::suspend_never final_suspend() noexcept { return {}; }
+    std::suspend_always final_suspend() noexcept { return {}; }
 
     /**
      * @brief 未捕获异常处理
@@ -310,7 +283,7 @@ public:
     /**
      * @brief 协程返回（无返回值）
      */
-    void return_void() const noexcept {}
+    void return_void() const noexcept;
 
     /**
      * @brief 获取关联的Coroutine对象
@@ -318,7 +291,7 @@ public:
      */
     Coroutine getCoroutine() { return m_coroutine; }
 
-    ~PromiseType() {}
+    ~PromiseType() = default;
 
 private:
     Coroutine m_coroutine;  ///< 关联的Coroutine对象

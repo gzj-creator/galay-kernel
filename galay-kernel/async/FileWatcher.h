@@ -1,7 +1,6 @@
 #ifndef GALAY_ASYNC_FILE_WATCHER_H
 #define GALAY_ASYNC_FILE_WATCHER_H
 
-#include "galay-kernel/common/Defn.hpp"
 
 // FileWatcher 支持:
 // - Linux: inotify (io_uring/epoll)
@@ -9,7 +8,7 @@
 
 #if defined(USE_IOURING) || defined(USE_EPOLL) || defined(USE_KQUEUE)
 
-#include "galay-kernel/kernel/Scheduler.h"
+#include "galay-kernel/kernel/IOScheduler.hpp"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/common/Error.h"
 #include <expected>
@@ -54,9 +53,8 @@ class FileWatcher
 public:
     /**
      * @brief 构造函数
-     * @param scheduler IO调度器
      */
-    explicit FileWatcher(IOScheduler* scheduler);
+    FileWatcher();
 
     /**
      * @brief 析构函数
@@ -118,7 +116,6 @@ public:
 
 private:
     int m_watch_fd;                                ///< Linux: inotify fd, macOS: 当前监控的 fd
-    IOScheduler* m_scheduler;                      ///< IO调度器
     IOController m_controller;                     ///< IO控制器
     std::unordered_map<int, std::string> m_watches; ///< wd/fd -> path 映射
 

@@ -24,6 +24,7 @@ enum IOErrorCode : uint32_t {
     kSyncFailed = 12,
     kSeekFailed = 13,
     kTimeout = 14,              ///< 操作超时
+    kNotRunningOnIOScheduler = 15
 };
 
 /**

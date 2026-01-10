@@ -1,12 +1,8 @@
 #include "IOUringScheduler.h"
-#include "Scheduler.h"
-#include "Timeout.h"
-#include "common/Defn.hpp"
-#include "common/Error.h"
-#include "common/Log.h"
 
 #ifdef USE_IOURING
-
+#include "galay-kernel/common/Error.h"
+#include "galay-kernel/common/Log.h"
 #include "Awaitable.h"
 #include <sys/eventfd.h>
 #include <sys/inotify.h>
@@ -99,7 +95,7 @@ void IOUringScheduler::notify()
 
 int IOUringScheduler::addAccept(IOController* controller)
 {
-    AcceptAwaitable* awaitable = static_cast<AcceptAwaitable*>(controller->m_awaitable);
+    AcceptAwaitable* awaitable = static_cast<AcceptAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
@@ -116,7 +112,7 @@ int IOUringScheduler::addAccept(IOController* controller)
 
 int IOUringScheduler::addConnect(IOController* controller)
 {
-    ConnectAwaitable* awaitable = static_cast<ConnectAwaitable*>(controller->m_awaitable);
+    ConnectAwaitable* awaitable = static_cast<ConnectAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
@@ -133,7 +129,7 @@ int IOUringScheduler::addConnect(IOController* controller)
 
 int IOUringScheduler::addRecv(IOController* controller)
 {
-    RecvAwaitable* awaitable = static_cast<RecvAwaitable*>(controller->m_awaitable);
+    RecvAwaitable* awaitable = static_cast<RecvAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
@@ -149,7 +145,7 @@ int IOUringScheduler::addRecv(IOController* controller)
 
 int IOUringScheduler::addSend(IOController* controller)
 {
-    SendAwaitable* awaitable = static_cast<SendAwaitable*>(controller->m_awaitable);
+    SendAwaitable* awaitable = static_cast<SendAwaitable*>(controller->m_awaitable[IOController::SEND]);
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
@@ -179,7 +175,7 @@ int IOUringScheduler::addClose(int fd)
 
 int IOUringScheduler::addFileRead(IOController* controller)
 {
-    FileReadAwaitable* awaitable = static_cast<FileReadAwaitable*>(controller->m_awaitable);
+    FileReadAwaitable* awaitable = static_cast<FileReadAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
@@ -196,7 +192,7 @@ int IOUringScheduler::addFileRead(IOController* controller)
 
 int IOUringScheduler::addFileWrite(IOController* controller)
 {
-    FileWriteAwaitable* awaitable = static_cast<FileWriteAwaitable*>(controller->m_awaitable);
+    FileWriteAwaitable* awaitable = static_cast<FileWriteAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
@@ -213,7 +209,7 @@ int IOUringScheduler::addFileWrite(IOController* controller)
 
 int IOUringScheduler::addRecvFrom(IOController* controller)
 {
-    RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+    RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
@@ -240,7 +236,7 @@ int IOUringScheduler::addRecvFrom(IOController* controller)
 
 int IOUringScheduler::addSendTo(IOController* controller)
 {
-    SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
+    SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable[IOController::SEND]);
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
@@ -266,7 +262,7 @@ int IOUringScheduler::addSendTo(IOController* controller)
 
 int IOUringScheduler::addFileWatch(IOController* controller)
 {
-    FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable);
+    FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
@@ -406,37 +402,38 @@ void IOUringScheduler::eventLoop()
                             if (cqe->res == -ETIME && controller->tryTimeout()) {
                                 // 超时触发，需要唤醒协程
                                 // 从 awaitable 中获取 waker
-                                if (controller->m_awaitable) {
+                                if (controller->m_awaitable[IOController::RECV_OR_SINGLE]) {
                                     // 通用方式：所有 Awaitable 都有 m_waker 成员
                                     // 使用 IOEventType 来确定具体类型
                                     switch (controller->m_type) {
                                     case ACCEPT: {
-                                        auto* aw = static_cast<AcceptAwaitable*>(controller->m_awaitable);
+                                        auto* aw = static_cast<AcceptAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
                                         aw->m_waker.wakeUp();
                                         break;
                                     }
                                     case CONNECT: {
-                                        auto* aw = static_cast<ConnectAwaitable*>(controller->m_awaitable);
+                                        auto* aw = static_cast<ConnectAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
                                         aw->m_waker.wakeUp();
                                         break;
                                     }
                                     case RECV: {
-                                        auto* aw = static_cast<RecvAwaitable*>(controller->m_awaitable);
+                                        auto* aw = static_cast<RecvAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
                                         aw->m_waker.wakeUp();
                                         break;
                                     }
-                                    case SEND: {
-                                        auto* aw = static_cast<SendAwaitable*>(controller->m_awaitable);
+                                    case SEND:
+                        auto* aw = static_cast<SendAwaitable*>(controller->m_awaitable[IOController::SEND]); {
+                                        auto* aw = static_cast<SendAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
                                         aw->m_waker.wakeUp();
                                         break;
                                     }
                                     case RECVFROM: {
-                                        auto* aw = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+                                        auto* aw = static_cast<RecvFromAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
                                         aw->m_waker.wakeUp();
                                         break;
                                     }
                                     case SENDTO: {
-                                        auto* aw = static_cast<SendToAwaitable*>(controller->m_awaitable);
+                                        auto* aw = static_cast<SendToAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
                                         aw->m_waker.wakeUp();
                                         break;
                                     }
@@ -503,7 +500,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     {
     case ACCEPT:
     {
-        AcceptAwaitable* awaitable = static_cast<AcceptAwaitable*>(controller->m_awaitable);
+        AcceptAwaitable* awaitable = static_cast<AcceptAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
         if (res >= 0) {
             GHandle handle { .fd = res };
             awaitable->m_result = handle;
@@ -515,7 +512,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case CONNECT:
     {
-        ConnectAwaitable* awaitable = static_cast<ConnectAwaitable*>(controller->m_awaitable);
+        ConnectAwaitable* awaitable = static_cast<ConnectAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
         if (res == 0) {
             awaitable->m_result = {};
         } else {
@@ -526,7 +523,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case RECV:
     {
-        RecvAwaitable* awaitable = static_cast<RecvAwaitable*>(controller->m_awaitable);
+        RecvAwaitable* awaitable = static_cast<RecvAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
         if (res > 0) {
             Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
             awaitable->m_result = std::move(bytes);
@@ -539,8 +536,9 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         break;
     }
     case SEND:
+                        auto* aw = static_cast<SendAwaitable*>(controller->m_awaitable[IOController::SEND]);
     {
-        SendAwaitable* awaitable = static_cast<SendAwaitable*>(controller->m_awaitable);
+        SendAwaitable* awaitable = static_cast<SendAwaitable*>(controller->m_awaitable[IOController::SEND]);
         if (res >= 0) {
             awaitable->m_result = static_cast<size_t>(res);
         } else {
@@ -551,7 +549,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case FILEREAD:
     {
-        FileReadAwaitable* awaitable = static_cast<FileReadAwaitable*>(controller->m_awaitable);
+        FileReadAwaitable* awaitable = static_cast<FileReadAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
         if (res > 0) {
             Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
             awaitable->m_result = std::move(bytes);
@@ -565,7 +563,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case FILEWRITE:
     {
-        FileWriteAwaitable* awaitable = static_cast<FileWriteAwaitable*>(controller->m_awaitable);
+        FileWriteAwaitable* awaitable = static_cast<FileWriteAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
         if (res >= 0) {
             awaitable->m_result = static_cast<size_t>(res);
         } else {
@@ -576,7 +574,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case RECVFROM:
     {
-        RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable);
+        RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
         if (res > 0) {
             Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
             awaitable->m_result = std::move(bytes);
@@ -594,7 +592,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case SENDTO:
     {
-        SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable);
+        SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable[IOController::SEND]);
         if (res >= 0) {
             awaitable->m_result = static_cast<size_t>(res);
         } else {
@@ -605,7 +603,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case FILEWATCH:
     {
-        FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable);
+        FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
         if (res > 0) {
             // 解析 inotify 事件
             struct inotify_event* event = reinterpret_cast<struct inotify_event*>(awaitable->m_buffer);
@@ -642,7 +640,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     {
         // io_uring timeout 完成，res == -ETIME 表示正常超时
         // 直接唤醒协程，SleepAwaitable::await_resume 无需返回值
-        SleepAwaitable* awaitable = static_cast<SleepAwaitable*>(controller->m_awaitable);
+        SleepAwaitable* awaitable = static_cast<SleepAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
         awaitable->m_waker.wakeUp();
         break;
     }

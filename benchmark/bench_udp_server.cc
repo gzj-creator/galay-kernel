@@ -43,14 +43,8 @@ void signalHandler(int signum) {
 }
 
 // UDP Echo服务器工作协程 - 多协程并发处理
-Coroutine udpServerWorker(IOScheduler* scheduler, int worker_id) {
-    UdpSocket socket(scheduler);
-
-    auto createResult = socket.create(IPType::IPV4);
-    if (!createResult) {
-        LogError("Worker {}: Failed to create socket", worker_id);
-        co_return;
-    }
+Coroutine udpServerWorker(int worker_id) {
+    UdpSocket socket;
 
     socket.option().handleReuseAddr();
     socket.option().handleReusePort();  // 关键：允许多个socket绑定同一端口
@@ -171,7 +165,7 @@ int main() {
 
     // 启动多个服务器工作协程
     for (int i = 0; i < NUM_SERVER_WORKERS; ++i) {
-        scheduler.spawn(udpServerWorker(&scheduler, i));
+        scheduler.spawn(udpServerWorker(i));
     }
     LogInfo("Started {} server workers", NUM_SERVER_WORKERS);
 

@@ -6,7 +6,7 @@
 
 #if defined(USE_KQUEUE) || defined(USE_IOURING)
 
-#include "galay-kernel/kernel/Scheduler.h"
+#include "galay-kernel/kernel/IOScheduler.hpp"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/common/Error.h"
 #include <expected>
@@ -34,7 +34,7 @@ enum class FileOpenMode : int {
 class AsyncFile
 {
 public:
-    AsyncFile(IOScheduler* scheduler);
+    AsyncFile();
     ~AsyncFile();
 
     // 禁止拷贝
@@ -58,10 +58,8 @@ public:
     CloseAwaitable close();
 
     // 获取文件句柄
-    GHandle handle() const { return m_handle; }
+    GHandle handle() const { return m_controller.m_handle; }
 
-    // 检查是否有效
-    bool isValid() const { return m_handle.fd >= 0; }
 
     // 获取文件大小
     std::expected<size_t, IOError> size() const;
@@ -70,8 +68,6 @@ public:
     std::expected<void, IOError> sync();
 
 private:
-    GHandle m_handle;
-    IOScheduler* m_scheduler;
     IOController m_controller;
 };
 

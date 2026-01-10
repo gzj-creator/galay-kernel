@@ -10,10 +10,8 @@
 namespace galay::async
 {
 
-AsyncFile::AsyncFile(IOScheduler* scheduler)
-    : m_handle(GHandle::invalid())
-    , m_scheduler(scheduler)
-    , m_controller()
+AsyncFile::AsyncFile()
+    : m_controller(GHandle::invalid())
 {
 }
 
@@ -22,23 +20,14 @@ AsyncFile::~AsyncFile()
 }
 
 AsyncFile::AsyncFile(AsyncFile&& other) noexcept
-    : m_handle(other.m_handle)
-    , m_scheduler(other.m_scheduler)
-    , m_controller(std::move(other.m_controller))
+    : m_controller(std::move(other.m_controller))
 {
-    other.m_handle = GHandle::invalid();
-    other.m_scheduler = nullptr;
 }
 
 AsyncFile& AsyncFile::operator=(AsyncFile&& other) noexcept
 {
     if (this != &other) {
-        m_handle = other.m_handle;
-        m_scheduler = other.m_scheduler;
         m_controller = std::move(other.m_controller);
-
-        other.m_handle = GHandle::invalid();
-        other.m_scheduler = nullptr;
     }
     return *this;
 }
@@ -50,29 +39,29 @@ std::expected<void, IOError> AsyncFile::open(const std::string& path, FileOpenMo
     if (fd < 0) {
         return std::unexpected(IOError(kOpenFailed, errno));
     }
-    m_handle.fd = fd;
+    m_controller.m_handle.fd = fd;
     return {};
 }
 
 FileReadAwaitable AsyncFile::read(char* buffer, size_t length, off_t offset)
 {
-    return FileReadAwaitable(m_scheduler, &m_controller, m_handle, buffer, length, offset);
+    return FileReadAwaitable(&m_controller, buffer, length, offset);
 }
 
 FileWriteAwaitable AsyncFile::write(const char* buffer, size_t length, off_t offset)
 {
-    return FileWriteAwaitable(m_scheduler, &m_controller, m_handle, buffer, length, offset);
+    return FileWriteAwaitable(&m_controller, buffer, length, offset);
 }
 
 CloseAwaitable AsyncFile::close()
 {
-    return CloseAwaitable(m_scheduler, m_handle);
+    return CloseAwaitable(&m_controller);
 }
 
 std::expected<size_t, IOError> AsyncFile::size() const
 {
     struct stat st;
-    if (fstat(m_handle.fd, &st) < 0) {
+    if (fstat(m_controller.m_handle.fd, &st) < 0) {
         return std::unexpected(IOError(kStatFailed, errno));
     }
     return static_cast<size_t>(st.st_size);
@@ -80,7 +69,7 @@ std::expected<size_t, IOError> AsyncFile::size() const
 
 std::expected<void, IOError> AsyncFile::sync()
 {
-    if (fsync(m_handle.fd) < 0) {
+    if (fsync(m_controller.m_handle.fd) < 0) {
         return std::unexpected(IOError(kSyncFailed, errno));
     }
     return {};

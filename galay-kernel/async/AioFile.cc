@@ -16,11 +16,10 @@ namespace galay::async
 
 // AioCommitAwaitable 实现
 
-AioCommitAwaitable::AioCommitAwaitable(EpollScheduler* scheduler, IOController* controller,
+AioCommitAwaitable::AioCommitAwaitable(IOController* controller,
                                        io_context_t aio_ctx, int event_fd,
                                        std::vector<struct iocb*>&& pending_ptrs, size_t pending_count)
-    : m_scheduler(scheduler)
-    , m_controller(controller)
+    : m_controller(controller)
     , m_aio_ctx(aio_ctx)
     , m_event_fd(event_fd)
     , m_pending_ptrs(std::move(pending_ptrs))
@@ -52,8 +51,14 @@ bool AioCommitAwaitable::await_suspend(std::coroutine_handle<> handle)
 
     // 注册到 epoll 等待完成
     m_controller->fillAwaitable(FILEREAD, this);
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
     LogDebug("[AioCommit] calling addFileRead, controller={}", (void*)m_controller);
-    if (m_scheduler->addFileRead(m_controller) != OK) {
+    if (io_scheduler->addFileRead(m_controller) != OK) {
         LogError("[AioCommit] addFileRead failed: {}", strerror(errno));
         m_result = std::unexpected(IOError(kReadFailed, errno));
         return false;
@@ -69,9 +74,8 @@ std::expected<std::vector<ssize_t>, IOError> AioCommitAwaitable::await_resume()
 
 // AioFile 实现
 
-AioFile::AioFile(EpollScheduler* scheduler, int max_events)
+AioFile::AioFile(int max_events)
     : m_handle(GHandle::invalid())
-    , m_scheduler(scheduler)
     , m_aio_ctx(0)
     , m_event_fd(-1)
     , m_max_events(max_events)
@@ -98,7 +102,6 @@ AioFile::~AioFile()
 
 AioFile::AioFile(AioFile&& other) noexcept
     : m_handle(other.m_handle)
-    , m_scheduler(other.m_scheduler)
     , m_aio_ctx(other.m_aio_ctx)
     , m_event_fd(other.m_event_fd)
     , m_max_events(other.m_max_events)
@@ -106,7 +109,6 @@ AioFile::AioFile(AioFile&& other) noexcept
     , m_pending_ptrs(std::move(other.m_pending_ptrs))
 {
     other.m_handle = GHandle::invalid();
-    other.m_scheduler = nullptr;
     other.m_aio_ctx = 0;
     other.m_event_fd = -1;
 }
@@ -123,7 +125,6 @@ AioFile& AioFile::operator=(AioFile&& other) noexcept
         }
 
         m_handle = other.m_handle;
-        m_scheduler = other.m_scheduler;
         m_aio_ctx = other.m_aio_ctx;
         m_event_fd = other.m_event_fd;
         m_max_events = other.m_max_events;
@@ -131,7 +132,6 @@ AioFile& AioFile::operator=(AioFile&& other) noexcept
         m_pending_ptrs = std::move(other.m_pending_ptrs);
 
         other.m_handle = GHandle::invalid();
-        other.m_scheduler = nullptr;
         other.m_aio_ctx = 0;
         other.m_event_fd = -1;
     }
@@ -196,7 +196,7 @@ AioCommitAwaitable AioFile::commit()
 
     // 移动 pending_ptrs 的所有权给 awaitable，避免生命周期问题
     std::vector<struct iocb*> ptrs_copy = m_pending_ptrs;
-    return AioCommitAwaitable(m_scheduler, &m_controller, m_aio_ctx, m_event_fd, std::move(ptrs_copy), pending_count);
+    return AioCommitAwaitable(&m_controller, m_aio_ctx, m_event_fd, std::move(ptrs_copy), pending_count);
 }
 
 void AioFile::clear()
