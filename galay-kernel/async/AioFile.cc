@@ -32,22 +32,20 @@ bool AioCommitAwaitable::await_suspend(std::coroutine_handle<> handle)
     m_waker = Waker(handle);
 
     if (m_pending_count == 0) {
-        LogDebug("[AioCommit] pending_count=0, return immediately");
         m_result = std::vector<ssize_t>{};
         return false;
     }
 
-    LogDebug("[AioCommit] await_suspend: pending_count={}, aio_ctx={}, event_fd={}",
-             m_pending_count, (void*)m_aio_ctx, m_event_fd);
-
     // 提交 AIO 请求
     int ret = io_submit(m_aio_ctx, m_pending_count, m_pending_ptrs.data());
-    LogDebug("[AioCommit] io_submit returned: {}", ret);
     if (ret < 0) {
         LogError("[AioCommit] io_submit failed: {}", strerror(-ret));
         m_result = std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(-ret)));
         return false;
     }
+
+    // 设置 controller 的 handle 为 eventfd，这样 epoll 才能监听到 AIO 完成事件
+    m_controller->m_handle.fd = m_event_fd;
 
     // 注册到 epoll 等待完成
     m_controller->fillAwaitable(FILEREAD, this);
@@ -57,13 +55,11 @@ bool AioCommitAwaitable::await_suspend(std::coroutine_handle<> handle)
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    LogDebug("[AioCommit] calling addFileRead, controller={}", (void*)m_controller);
-    if (io_scheduler->addFileRead(m_controller) != OK) {
+    if (io_scheduler->addFileRead(m_controller) < 0) {
         LogError("[AioCommit] addFileRead failed: {}", strerror(errno));
         m_result = std::unexpected(IOError(kReadFailed, errno));
         return false;
     }
-    LogDebug("[AioCommit] addFileRead success, suspending coroutine");
     return true;
 }
 

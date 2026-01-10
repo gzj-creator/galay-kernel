@@ -3,6 +3,7 @@
 #ifdef USE_EPOLL
 
 #include "galay-kernel/common/Error.h"
+#include "galay-kernel/async/AioFile.h"
 #include <sys/eventfd.h>
 #include <sys/inotify.h>
 #include <sys/socket.h>
@@ -162,11 +163,7 @@ int EpollScheduler::addClose(IOController* controller)
 
 int EpollScheduler::addFileRead(IOController* controller)
 {
-    if (handleFileRead(controller)) {
-        return OK;
-    }
-    auto awaitable = controller->getAwaitable<FileReadAwaitable>();
-    if (awaitable == nullptr) return -1;
+    // epoll 下 FILEREAD 仅用于 AIO eventfd 监听，不调用 handleFileRead
     struct epoll_event ev;
     ev.events = EPOLLIN | EPOLLET;
     ev.data.ptr = controller;
@@ -175,11 +172,7 @@ int EpollScheduler::addFileRead(IOController* controller)
 
 int EpollScheduler::addFileWrite(IOController* controller)
 {
-    if (handleFileWrite(controller)) {
-        return OK;
-    }
-    auto awaitable = controller->getAwaitable<FileWriteAwaitable>();
-    if (awaitable == nullptr) return -1;
+    // epoll 下 FILEWRITE 仅用于 AIO eventfd 监听，不调用 handleFileWrite
     struct epoll_event ev;
     ev.events = EPOLLOUT | EPOLLET;
     ev.data.ptr = controller;
@@ -304,10 +297,33 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
     case FILEREAD:
     {
         if (ev.events & EPOLLIN) {
-            handleFileRead(controller);
-            FileReadAwaitable* awaitable = controller->getAwaitable<FileReadAwaitable>();
-            if (awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+            // AIO eventfd 处理：读取 eventfd 获取完成的事件数
+            auto* aioAwaitable = static_cast<galay::async::AioCommitAwaitable*>(controller->m_awaitable[IOController::READ]);
+            if (aioAwaitable == nullptr) return;
+
+            uint64_t completed = 0;
+            ssize_t n = read(controller->m_handle.fd, &completed, sizeof(completed));
+            if (n == sizeof(completed) && completed > 0) {
+                // 获取 AIO 结果
+                std::vector<struct io_event> events(aioAwaitable->m_pending_count);
+                int num_events = io_getevents(aioAwaitable->m_aio_ctx, 1, aioAwaitable->m_pending_count,
+                                               events.data(), nullptr);
+                if (num_events > 0) {
+                    std::vector<ssize_t> results;
+                    results.reserve(num_events);
+                    for (int i = 0; i < num_events; ++i) {
+                        results.push_back(events[i].res);
+                    }
+                    aioAwaitable->m_result = std::move(results);
+                } else {
+                    aioAwaitable->m_result = std::unexpected(IOError(kReadFailed, errno));
+                }
+            } else {
+                aioAwaitable->m_result = std::unexpected(IOError(kReadFailed, errno));
+            }
+            // 从 epoll 移除 eventfd
+            epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, controller->m_handle.fd, nullptr);
+            aioAwaitable->m_waker.wakeUp();
         }
         break;
     }
