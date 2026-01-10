@@ -1,11 +1,10 @@
 #ifndef GALAY_KERNEL_IOURING_SCHEDULER_H
 #define GALAY_KERNEL_IOURING_SCHEDULER_H
 
+#include "Coroutine.h"
 #include "IOScheduler.hpp"
 
 #ifdef USE_IOURING
-
-#include "Coroutine.h"
 
 #include <liburing.h>
 
@@ -50,19 +49,22 @@ public:
     void stop();
     void notify();
 
-    int addAccept(IOController* event) override;
-    int addConnect(IOController* event) override;
-    int addRecv(IOController* event) override;
-    int addSend(IOController* event) override;
-    int addClose(int fd) override;
-    int addFileRead(IOController* event) override;
-    int addFileWrite(IOController* event) override;
-    int addRecvFrom(IOController* event) override;
-    int addSendTo(IOController* event) override;
-    int addFileWatch(IOController* event) override;
-    int addTimer(int timer_fd, struct TimerController* timer_ctrl) override;
+    int addAccept(IOController* controller) override;
+    int addConnect(IOController* controller) override;
+    int addRecv(IOController* controller) override;
+    int addSend(IOController* controller) override;
+    int addClose(IOController* controller) override;
+    int addFileRead(IOController* controller) override;
+    int addFileWrite(IOController* controller) override;
+    int addRecvFrom(IOController* controller) override;
+    int addSendTo(IOController* controller) override;
+    int addFileWatch(IOController* controller) override;
 
-    int remove(int fd);
+    // 通知事件（用于SSL等自定义IO处理）
+    int addRecvNotify(IOController* controller) override;
+    int addSendNotify(IOController* controller) override;
+
+    int remove(IOController* controller) override;
 
     void spawn(Coroutine coro) override;
 

@@ -3,10 +3,10 @@
 #ifdef USE_IOURING
 #include "galay-kernel/common/Error.h"
 #include "galay-kernel/common/Log.h"
-#include "Awaitable.h"
 #include <sys/eventfd.h>
 #include <sys/inotify.h>
 #include <sys/socket.h>
+#include <sys/poll.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -29,18 +29,13 @@ IOUringScheduler::IOUringScheduler(int queue_depth, int batch_size)
 
     struct io_uring_params params;
     std::memset(&params, 0, sizeof(params));
-    // 注意：不能使用 IORING_SETUP_SINGLE_ISSUER，因为协程的 await_suspend
-    // 可能在用户线程中调用 io_uring_get_sqe()，而 io_uring_submit() 在事件循环线程中调用
-    // SINGLE_ISSUER 要求所有操作必须在同一个线程，否则会返回 -EEXIST
     params.flags = IORING_SETUP_SQPOLL | IORING_SETUP_COOP_TASKRUN;
-    params.sq_thread_idle = 1000;  // 内核线程空闲 1 秒后休眠
+    params.sq_thread_idle = 1000;
 
     if (io_uring_queue_init_params(m_queue_depth, &m_ring, &params) < 0) {
-        // 降级：不使用 SQPOLL
         std::memset(&params, 0, sizeof(params));
         params.flags = IORING_SETUP_COOP_TASKRUN;
         if (io_uring_queue_init_params(m_queue_depth, &m_ring, &params) < 0) {
-            // 最后降级：使用默认配置
             std::memset(&params, 0, sizeof(params));
             if (io_uring_queue_init_params(m_queue_depth, &m_ring, &params) < 0) {
                 close(m_event_fd);
@@ -68,7 +63,7 @@ void IOUringScheduler::start()
     }
 
     m_thread = std::thread([this]() {
-        m_threadId = std::this_thread::get_id();  // 设置调度器线程ID
+        m_threadId = std::this_thread::get_id();
         eventLoop();
     });
 }
@@ -88,135 +83,131 @@ void IOUringScheduler::stop()
 
 void IOUringScheduler::notify()
 {
-    // 使用 eventfd 唤醒事件循环，避免多线程竞争 io_uring
     uint64_t val = 1;
     write(m_event_fd, &val, sizeof(val));
 }
 
 int IOUringScheduler::addAccept(IOController* controller)
 {
-    AcceptAwaitable* awaitable = static_cast<AcceptAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+    auto awaitable = controller->getAwaitable<AcceptAwaitable>();
+    if (awaitable == nullptr) return -1;
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         return -EAGAIN;
     }
 
-    io_uring_prep_accept(sqe, awaitable->m_listen_handle.fd,
+    io_uring_prep_accept(sqe, controller->m_handle.fd,
                          awaitable->m_host->sockAddr(),
                          awaitable->m_host->addrLen(), 0);
     io_uring_sqe_set_data(sqe, controller);
-    // SQE 已准备，由事件循环统一调用 io_uring_submit() 批量提交
     return 0;
 }
 
 int IOUringScheduler::addConnect(IOController* controller)
 {
-    ConnectAwaitable* awaitable = static_cast<ConnectAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+    auto awaitable = controller->getAwaitable<ConnectAwaitable>();
+    if (awaitable == nullptr) return -1;
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         return -EAGAIN;
     }
 
-    io_uring_prep_connect(sqe, awaitable->m_handle.fd,
+    io_uring_prep_connect(sqe, controller->m_handle.fd,
                           awaitable->m_host.sockAddr(),
                           *awaitable->m_host.addrLen());
     io_uring_sqe_set_data(sqe, controller);
-    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
 int IOUringScheduler::addRecv(IOController* controller)
 {
-    RecvAwaitable* awaitable = static_cast<RecvAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+    auto awaitable = controller->getAwaitable<RecvAwaitable>();
+    if (awaitable == nullptr) return -1;
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         return -EAGAIN;
     }
 
-    io_uring_prep_recv(sqe, awaitable->m_handle.fd,
+    io_uring_prep_recv(sqe, controller->m_handle.fd,
                        awaitable->m_buffer, awaitable->m_length, 0);
     io_uring_sqe_set_data(sqe, controller);
-    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
 int IOUringScheduler::addSend(IOController* controller)
 {
-    SendAwaitable* awaitable = static_cast<SendAwaitable*>(controller->m_awaitable[IOController::SEND]);
+    auto awaitable = controller->getAwaitable<SendAwaitable>();
+    if (awaitable == nullptr) return -1;
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         return -EAGAIN;
     }
 
-    io_uring_prep_send(sqe, awaitable->m_handle.fd,
+    io_uring_prep_send(sqe, controller->m_handle.fd,
                        awaitable->m_buffer, awaitable->m_length, 0);
     io_uring_sqe_set_data(sqe, controller);
-    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
-int IOUringScheduler::addClose(int fd)
+int IOUringScheduler::addClose(IOController* controller)
 {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        close(fd);
+        close(controller->m_handle.fd);
         return 0;
     }
 
-    io_uring_prep_close(sqe, fd);
+    io_uring_prep_close(sqe, controller->m_handle.fd);
     io_uring_sqe_set_data(sqe, nullptr);
-    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
 int IOUringScheduler::addFileRead(IOController* controller)
 {
-    FileReadAwaitable* awaitable = static_cast<FileReadAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+    auto awaitable = controller->getAwaitable<FileReadAwaitable>();
+    if (awaitable == nullptr) return -1;
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         return -EAGAIN;
     }
 
-    // io_uring 原生支持文件读取
-    io_uring_prep_read(sqe, awaitable->m_handle.fd,
+    io_uring_prep_read(sqe, controller->m_handle.fd,
                        awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
     io_uring_sqe_set_data(sqe, controller);
-    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
 int IOUringScheduler::addFileWrite(IOController* controller)
 {
-    FileWriteAwaitable* awaitable = static_cast<FileWriteAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+    auto awaitable = controller->getAwaitable<FileWriteAwaitable>();
+    if (awaitable == nullptr) return -1;
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         return -EAGAIN;
     }
 
-    // io_uri
-    io_uring_prep_write(sqe, awaitable->m_handle.fd,
+    io_uring_prep_write(sqe, controller->m_handle.fd,
                         awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
     io_uring_sqe_set_data(sqe, controller);
-    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
 int IOUringScheduler::addRecvFrom(IOController* controller)
 {
-    RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+    auto awaitable = controller->getAwaitable<RecvFromAwaitable>();
+    if (awaitable == nullptr) return -1;
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         return -EAGAIN;
     }
 
-    // 使用 awaitable 中的持久化结构体
     std::memset(&awaitable->m_msg, 0, sizeof(awaitable->m_msg));
     std::memset(&awaitable->m_addr, 0, sizeof(awaitable->m_addr));
 
@@ -228,22 +219,21 @@ int IOUringScheduler::addRecvFrom(IOController* controller)
     awaitable->m_msg.msg_name = &awaitable->m_addr;
     awaitable->m_msg.msg_namelen = sizeof(awaitable->m_addr);
 
-    io_uring_prep_recvmsg(sqe, awaitable->m_handle.fd, &awaitable->m_msg, 0);
+    io_uring_prep_recvmsg(sqe, controller->m_handle.fd, &awaitable->m_msg, 0);
     io_uring_sqe_set_data(sqe, controller);
-    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
 int IOUringScheduler::addSendTo(IOController* controller)
 {
-    SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable[IOController::SEND]);
+    auto awaitable = controller->getAwaitable<SendToAwaitable>();
+    if (awaitable == nullptr) return -1;
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         return -EAGAIN;
     }
 
-    // 使用 awaitable 中的持久化结构体
     std::memset(&awaitable->m_msg, 0, sizeof(awaitable->m_msg));
 
     awaitable->m_iov.iov_base = const_cast<char*>(awaitable->m_buffer);
@@ -254,15 +244,15 @@ int IOUringScheduler::addSendTo(IOController* controller)
     awaitable->m_msg.msg_name = const_cast<sockaddr*>(awaitable->m_to.sockAddr());
     awaitable->m_msg.msg_namelen = *awaitable->m_to.addrLen();
 
-    io_uring_prep_sendmsg(sqe, awaitable->m_handle.fd, &awaitable->m_msg, 0);
+    io_uring_prep_sendmsg(sqe, controller->m_handle.fd, &awaitable->m_msg, 0);
     io_uring_sqe_set_data(sqe, controller);
-    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
 int IOUringScheduler::addFileWatch(IOController* controller)
 {
-    FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+    auto awaitable = controller->getAwaitable<FileWatchAwaitable>();
+    if (awaitable == nullptr) return -1;
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
@@ -270,53 +260,56 @@ int IOUringScheduler::addFileWatch(IOController* controller)
     }
 
     // inotify fd 是可读的，当有事件时读取
-    io_uring_prep_read(sqe, awaitable->m_inotify_fd,
+    io_uring_prep_read(sqe, controller->m_handle.fd,
                        awaitable->m_buffer, awaitable->m_buffer_size, 0);
     io_uring_sqe_set_data(sqe, controller);
-    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
-int IOUringScheduler::addTimer(int timer_fd, TimerController* timer_ctrl)
+int IOUringScheduler::addRecvNotify(IOController* controller)
+{
+    // 仅注册读事件，不执行IO操作
+    // 用于SSL等需要自定义IO处理的场景
+    // io_uring 使用 poll 来监听可读事件
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    if (!sqe) {
+        return -EAGAIN;
+    }
+
+    io_uring_prep_poll_add(sqe, controller->m_handle.fd, POLLIN);
+    io_uring_sqe_set_data(sqe, controller);
+    return 0;
+}
+
+int IOUringScheduler::addSendNotify(IOController* controller)
+{
+    // 仅注册写事件，不执行IO操作
+    // 用于SSL等需要自定义IO处理的场景
+    // io_uring 使用 poll 来监听可写事件
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    if (!sqe) {
+        return -EAGAIN;
+    }
+
+    io_uring_prep_poll_add(sqe, controller->m_handle.fd, POLLOUT);
+    io_uring_sqe_set_data(sqe, controller);
+    return 0;
+}
+
+int IOUringScheduler::remove(IOController* controller)
 {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         return -EAGAIN;
     }
 
-    if (timer_fd == -1) {
-        // io_uring 原生超时：timer_ctrl 实际上是 IOController*
-        IOController* controller = reinterpret_cast<IOController*>(timer_ctrl);
-        // 使用独立的 timeout 操作
-        io_uring_prep_timeout(sqe, &controller->m_timeout_ts, 0, 0);
-        // 使用特殊标记：最低两位为 11 (3) 表示 IO 超时
-        io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(controller) | 3));
-    } else {
-        // 传统 timerfd 方式（epoll 兼容）
-        io_uring_prep_read(sqe, timer_fd, &timer_ctrl->m_generation, sizeof(uint64_t), 0);
-        // 使用特殊标记：最低位为 1 表示 timerfd 事件
-        io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(timer_ctrl) | 1));
-    }
-    // 延迟提交：由事件循环批量提交
-    return 0;
-}
-
-int IOUringScheduler::remove(int fd)
-{
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    io_uring_prep_cancel_fd(sqe, fd, 0);
+    io_uring_prep_cancel_fd(sqe, controller->m_handle.fd, 0);
     io_uring_sqe_set_data(sqe, nullptr);
-    // 延迟提交：由事件循环批量提交
     return 0;
 }
 
 void IOUringScheduler::spawn(Coroutine coro)
 {
-    // 如果协程未绑定 scheduler，绑定到当前 scheduler
     if (!coro.belongScheduler()) {
         coro.belongScheduler(this);
         coro.threadId(m_threadId);
@@ -327,7 +320,6 @@ void IOUringScheduler::spawn(Coroutine coro)
 
 void IOUringScheduler::processPendingCoroutines()
 {
-    // 循环处理直到队列为空，因为resume可能会spawn新协程
     while (true) {
         size_t count = m_coro_queue.try_dequeue_bulk(m_coro_buffer.data(), m_batch_size);
         if (count == 0) {
@@ -346,38 +338,31 @@ void IOUringScheduler::eventLoop()
     timeout.tv_sec = 0;
     timeout.tv_nsec = GALAY_IOURING_WAIT_TIMEOUT_NS;
 
-    // 添加 eventfd 到 io_uring 监听（SQPOLL 会自动提交）
+    // 添加 eventfd 到 io_uring 监听
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (sqe) {
         io_uring_prep_read(sqe, m_event_fd, &m_eventfd_buf, sizeof(m_eventfd_buf), 0);
-        io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(-1)); // 特殊标记
+        io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(-1));
     }
 
     while (m_running.load(std::memory_order_acquire)) {
-        // 1. 处理待执行的协程
         processPendingCoroutines();
+        m_timer_manager.tick();
 
-        // 2. 提交所有待处理的 SQE
-        // 即使在 SQPOLL 模式下，也需要调用 io_uring_submit() 来更新 SQ tail 指针
-        // 让内核线程能看到新的 SQE。io_uring_submit() 会自动检查 NEED_WAKEUP 标志
-        // 并在需要时唤醒内核线程，不会产生不必要的系统调用
         int submitted = io_uring_submit(&m_ring);
         if (submitted < 0 && submitted != -EBUSY) {
             LogError("io_uring_submit failed: {}", submitted);
         }
 
-        // 3. 等待完成事件（带超时）
         int ret = io_uring_wait_cqe_timeout(&m_ring, &cqe, &timeout);
         if (ret < 0) {
             if (ret == -EINTR || ret == -ETIME) {
-                // 超时或被中断，继续循环检查协程队列
                 continue;
             }
             LogError("io_uring_wait_cqe_timeout failed: {}", ret);
             break;
         }
 
-        // 4. 批量收割所有完成事件
         unsigned head;
         unsigned count = 0;
         bool eventfd_triggered = false;
@@ -385,83 +370,10 @@ void IOUringScheduler::eventLoop()
         io_uring_for_each_cqe(&m_ring, head, cqe) {
             void* user_data = io_uring_cqe_get_data(cqe);
 
-            // 检查是否是 eventfd 事件
             if (user_data == reinterpret_cast<void*>(-1)) {
-                // eventfd 被触发，数据已经被 io_uring 读取到 m_eventfd_buf
-                // 标记需要重新提交监听
                 eventfd_triggered = true;
             } else if (user_data != nullptr) {
-                // 检查是否是定时器事件（最低位为1）
-                uintptr_t ptr_val = reinterpret_cast<uintptr_t>(user_data);
-                if (ptr_val & 1) [[unlikely]] {
-                    if ((ptr_val & 3) == 3) {
-                        // IO 超时事件（最低两位都是1）
-                        IOController* controller = reinterpret_cast<IOController*>(ptr_val & ~3UL);
-                        if (controller && !controller->m_timer_cancelled) {
-                            // 检查 CQE 结果：-ETIME 表示超时触发
-                            if (cqe->res == -ETIME && controller->tryTimeout()) {
-                                // 超时触发，需要唤醒协程
-                                // 从 awaitable 中获取 waker
-                                if (controller->m_awaitable[IOController::RECV_OR_SINGLE]) {
-                                    // 通用方式：所有 Awaitable 都有 m_waker 成员
-                                    // 使用 IOEventType 来确定具体类型
-                                    switch (controller->m_type) {
-                                    case ACCEPT: {
-                                        auto* aw = static_cast<AcceptAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
-                                        aw->m_waker.wakeUp();
-                                        break;
-                                    }
-                                    case CONNECT: {
-                                        auto* aw = static_cast<ConnectAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
-                                        aw->m_waker.wakeUp();
-                                        break;
-                                    }
-                                    case RECV: {
-                                        auto* aw = static_cast<RecvAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
-                                        aw->m_waker.wakeUp();
-                                        break;
-                                    }
-                                    case SEND:
-                        auto* aw = static_cast<SendAwaitable*>(controller->m_awaitable[IOController::SEND]); {
-                                        auto* aw = static_cast<SendAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
-                                        aw->m_waker.wakeUp();
-                                        break;
-                                    }
-                                    case RECVFROM: {
-                                        auto* aw = static_cast<RecvFromAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
-                                        aw->m_waker.wakeUp();
-                                        break;
-                                    }
-                                    case SENDTO: {
-                                        auto* aw = static_cast<SendToAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
-                                        aw->m_waker.wakeUp();
-                                        break;
-                                    }
-                                    default:
-                                        break;
-                                    }
-                                }
-                            }
-                            // 其他结果（如 -ECANCELED）表示超时被取消，不需要处理
-                        }
-                    } else {
-                        // 传统 timerfd 事件（只有最低位是1）
-                        TimerController* timer_ctrl = reinterpret_cast<TimerController*>(ptr_val & ~1UL);
-                        if (timer_ctrl && !timer_ctrl->m_cancelled) {
-                            // 尝试标记为超时（需检查 generation 防止过期定时器）
-                            if (timer_ctrl->m_io_controller &&
-                                timer_ctrl->m_generation == timer_ctrl->m_io_controller->m_generation &&
-                                timer_ctrl->m_io_controller->tryTimeout()) {
-                                // 成功标记超时，唤醒协程
-                                if (timer_ctrl->m_waker) {
-                                    timer_ctrl->m_waker->wakeUp();
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    processCompletion(cqe);
-                }
+                processCompletion(cqe);
             }
             ++count;
         }
@@ -470,7 +382,6 @@ void IOUringScheduler::eventLoop()
             io_uring_cq_advance(&m_ring, count);
         }
 
-        // 5. 如果 eventfd 被触发，重新提交监听（SQPOLL 会自动提交）
         if (eventfd_triggered) {
             struct io_uring_sqe* new_sqe = io_uring_get_sqe(&m_ring);
             if (new_sqe) {
@@ -488,19 +399,14 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         return;
     }
 
-    // 关键：尝试标记为完成状态，如果已被超时处理则跳过
-    if (!controller->tryComplete()) {
-        // 已被超时处理，忽略此 IO 事件
-        return;
-    }
-
     int res = cqe->res;
 
     switch (controller->m_type)
     {
     case ACCEPT:
     {
-        AcceptAwaitable* awaitable = static_cast<AcceptAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+        AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
+        if (awaitable == nullptr) return;
         if (res >= 0) {
             GHandle handle { .fd = res };
             awaitable->m_result = handle;
@@ -512,7 +418,8 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case CONNECT:
     {
-        ConnectAwaitable* awaitable = static_cast<ConnectAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+        ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
+        if (awaitable == nullptr) return;
         if (res == 0) {
             awaitable->m_result = {};
         } else {
@@ -523,7 +430,8 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case RECV:
     {
-        RecvAwaitable* awaitable = static_cast<RecvAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+        RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
+        if (awaitable == nullptr) return;
         if (res > 0) {
             Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
             awaitable->m_result = std::move(bytes);
@@ -536,9 +444,9 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         break;
     }
     case SEND:
-                        auto* aw = static_cast<SendAwaitable*>(controller->m_awaitable[IOController::SEND]);
     {
-        SendAwaitable* awaitable = static_cast<SendAwaitable*>(controller->m_awaitable[IOController::SEND]);
+        SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
+        if (awaitable == nullptr) return;
         if (res >= 0) {
             awaitable->m_result = static_cast<size_t>(res);
         } else {
@@ -549,7 +457,8 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case FILEREAD:
     {
-        FileReadAwaitable* awaitable = static_cast<FileReadAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+        FileReadAwaitable* awaitable = controller->getAwaitable<FileReadAwaitable>();
+        if (awaitable == nullptr) return;
         if (res > 0) {
             Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
             awaitable->m_result = std::move(bytes);
@@ -563,7 +472,8 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case FILEWRITE:
     {
-        FileWriteAwaitable* awaitable = static_cast<FileWriteAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+        FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
+        if (awaitable == nullptr) return;
         if (res >= 0) {
             awaitable->m_result = static_cast<size_t>(res);
         } else {
@@ -574,11 +484,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case RECVFROM:
     {
-        RecvFromAwaitable* awaitable = static_cast<RecvFromAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+        RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
+        if (awaitable == nullptr) return;
         if (res > 0) {
             Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
             awaitable->m_result = std::move(bytes);
-            // 从 msghdr 中提取源地址信息
             if (awaitable->m_from) {
                 *awaitable->m_from = Host::fromSockAddr(awaitable->m_addr);
             }
@@ -592,7 +502,8 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case SENDTO:
     {
-        SendToAwaitable* awaitable = static_cast<SendToAwaitable*>(controller->m_awaitable[IOController::SEND]);
+        SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
+        if (awaitable == nullptr) return;
         if (res >= 0) {
             awaitable->m_result = static_cast<size_t>(res);
         } else {
@@ -603,16 +514,15 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case FILEWATCH:
     {
-        FileWatchAwaitable* awaitable = static_cast<FileWatchAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+        FileWatchAwaitable* awaitable = controller->getAwaitable<FileWatchAwaitable>();
+        if (awaitable == nullptr) return;
         if (res > 0) {
-            // 解析 inotify 事件
             struct inotify_event* event = reinterpret_cast<struct inotify_event*>(awaitable->m_buffer);
             FileWatchResult result;
             result.isDir = (event->mask & IN_ISDIR) != 0;
             if (event->len > 0) {
                 result.name = std::string(event->name);
             }
-            // 转换 inotify 事件掩码到 FileWatchEvent
             uint32_t mask = 0;
             if (event->mask & IN_ACCESS)      mask |= static_cast<uint32_t>(FileWatchEvent::Access);
             if (event->mask & IN_MODIFY)      mask |= static_cast<uint32_t>(FileWatchEvent::Modify);
@@ -636,11 +546,19 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         awaitable->m_waker.wakeUp();
         break;
     }
-    case SLEEP:
+    case RECV_NOTIFY:
     {
-        // io_uring timeout 完成，res == -ETIME 表示正常超时
-        // 直接唤醒协程，SleepAwaitable::await_resume 无需返回值
-        SleepAwaitable* awaitable = static_cast<SleepAwaitable*>(controller->m_awaitable[IOController::RECV_OR_SINGLE]);
+        // poll 完成，仅唤醒协程，不执行IO操作
+        RecvNotifyAwaitable* awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
+        if (awaitable == nullptr) return;
+        awaitable->m_waker.wakeUp();
+        break;
+    }
+    case SEND_NOTIFY:
+    {
+        // poll 完成，仅唤醒协程，不执行IO操作
+        SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
+        if (awaitable == nullptr) return;
         awaitable->m_waker.wakeUp();
         break;
     }

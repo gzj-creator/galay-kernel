@@ -1,12 +1,12 @@
 #ifndef GALAY_KERNEL_EPOLL_SCHEDULER_H
 #define GALAY_KERNEL_EPOLL_SCHEDULER_H
 
+#include "Coroutine.h"
 #include "IOScheduler.hpp"
 
 #ifdef USE_EPOLL
 
 #include <sys/epoll.h>
-#include <libaio.h>
 #include <vector>
 #include <atomic>
 #include <thread>
@@ -48,27 +48,28 @@ public:
     void notify();
 
     // 网络 IO
-    int addAccept(IOController* event) override;
-    int addConnect(IOController* event) override;
-    int addRecv(IOController* event) override;
-    int addSend(IOController* event) override;
-    int addClose(int fd) override;
+    int addAccept(IOController* controller) override;
+    int addConnect(IOController* controller) override;
+    int addRecv(IOController* controller) override;
+    int addSend(IOController* controller) override;
+    int addClose(IOController* controller) override;
 
     // 文件 IO (通过 libaio + eventfd)
-    int addFileRead(IOController* event) override;
-    int addFileWrite(IOController* event) override;
+    int addFileRead(IOController* controller) override;
+    int addFileWrite(IOController* controller) override;
 
     // UDP IO
-    int addRecvFrom(IOController* event) override;
-    int addSendTo(IOController* event) override;
+    int addRecvFrom(IOController* controller) override;
+    int addSendTo(IOController* controller) override;
 
     // 文件监控 (通过 inotify)
-    int addFileWatch(IOController* event) override;
+    int addFileWatch(IOController* controller) override;
 
-    // 定时器
-    int addTimer(int timer_fd, struct TimerController* timer_ctrl) override;
+    // 通知事件（用于SSL等自定义IO处理）
+    int addRecvNotify(IOController* controller) override;
+    int addSendNotify(IOController* controller) override;
 
-    int remove(int fd);
+    int remove(IOController* controller) override;
 
     void spawn(Coroutine coro) override;
 
@@ -92,8 +93,8 @@ private:
     bool handleConnect(IOController* controller);
     bool handleRecv(IOController* controller);
     bool handleSend(IOController* controller);
-    void handleFileRead(IOController* controller);
-    void handleFileWrite(IOController* controller);
+    bool handleFileRead(IOController* controller);
+    bool handleFileWrite(IOController* controller);
     bool handleRecvFrom(IOController* controller);
     bool handleSendTo(IOController* controller);
 
