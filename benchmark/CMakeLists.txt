@@ -39,3 +39,8 @@ target_include_directories(bench_compute_scheduler PRIVATE ${CMAKE_SOURCE_DIR})
 add_executable(bench_mpsc_channel bench_mpsc_channel.cc)
 target_link_libraries(bench_mpsc_channel PRIVATE galay-kernel)
 target_include_directories(bench_mpsc_channel PRIVATE ${CMAKE_SOURCE_DIR})
+
+# UnsafeChannel 压测
+add_executable(bench_unsafe_channel bench_unsafe_channel.cc)
+target_link_libraries(bench_unsafe_channel PRIVATE galay-kernel)
+target_include_directories(bench_unsafe_channel PRIVATE ${CMAKE_SOURCE_DIR})

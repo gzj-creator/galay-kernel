@@ -75,3 +75,8 @@ add_executable(test_notify_awaitable test_notify_awaitable.cc)
 target_link_libraries(test_notify_awaitable PRIVATE galay-kernel)
 target_include_directories(test_notify_awaitable PRIVATE ${CMAKE_SOURCE_DIR})
 
+# UnsafeChannel测试
+add_executable(test_unsafe_channel test_unsafe_channel.cc)
+target_link_libraries(test_unsafe_channel PRIVATE galay-kernel)
+target_include_directories(test_unsafe_channel PRIVATE ${CMAKE_SOURCE_DIR})
+

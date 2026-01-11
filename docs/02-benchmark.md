@@ -81,6 +81,18 @@
 
 详细数据: [09-concurrency.md](09-concurrency.md)
 
+### UnsafeChannel
+
+| 平台 | 场景 | 吞吐量 | 延迟 |
+|------|------|--------|------|
+| macOS (M4) | 单生产者 | 9,009,009 msg/s | - |
+| macOS (M4) | 批量接收 | 11,764,706 msg/s | - |
+| macOS (M4) | 延迟测试 | - | 5.96 μs |
+
+> UnsafeChannel 在同调度器场景下比 MpscChannel 快约 1.32x
+
+详细数据: [09-concurrency.md](09-concurrency.md#unsafechannel-性能)
+
 ---
 
 ## 关键结论
@@ -102,6 +114,10 @@
 ### MpscChannel
 - ⚡ **macOS (M4)**: 2777万+ msg/s
 - ⚡ **Linux (i7-14700K)**: 523万+ msg/s，批量接收 1470万+ msg/s
+
+### UnsafeChannel
+- ⚡ **macOS (M4)**: 1098万+ msg/s，延迟 5.96 μs
+- 同调度器场景下比 MpscChannel 快 1.32x
 
 ### 生产就绪度
 - ✅ 所有平台零错误率
@@ -141,6 +157,11 @@
 ./bin/bench_mpsc_channel
 ```
 
+### UnsafeChannel
+```bash
+./bin/bench_unsafe_channel
+```
+
 ---
 
-**报告更新时间**: 2026-01-10
+**报告更新时间**: 2026-01-11

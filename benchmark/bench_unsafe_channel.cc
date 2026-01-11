@@ -165,9 +165,8 @@ Coroutine mpscSimpleConsumer(MpscChannel<int64_t>* channel, int64_t expected_cou
 // ============== MpscChannel 生产者协程（用于对比）==============
 
 Coroutine mpscSimpleProducer(MpscChannel<int64_t>* channel, int64_t count) {
-    auto token = MpscChannel<int64_t>::getToken();
     for (int64_t i = 0; i < count; ++i) {
-        channel->send(i, token);
+        channel->send(i);
         if (i % 1000 == 0) {
             co_yield true;
         }
@@ -289,7 +288,7 @@ void benchMpscChannelThroughput(int64_t message_count) {
     resetCounters();
 
 #if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
-    MpscChannel<int64_t> channel(1024);
+    MpscChannel<int64_t> channel;
     IOSchedulerType scheduler;
 
     scheduler.start();
@@ -345,7 +344,7 @@ void benchComparison(int64_t message_count) {
 
     // MpscChannel 测试
     resetCounters();
-    MpscChannel<int64_t> mpscChannel(1024);
+    MpscChannel<int64_t> mpscChannel;
     IOSchedulerType scheduler2;
 
     scheduler2.start();
