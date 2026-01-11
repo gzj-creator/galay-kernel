@@ -54,15 +54,10 @@ void ComputeScheduler::spawn(Coroutine coro)
 void ComputeScheduler::workerLoop()
 {
     ComputeTask task;
-    // 超时时间与 timer_manager 的 tickDuration 匹配（纳秒转毫秒，至少 1ms）
-    auto timeout_ms = std::max(1ULL, m_timer_manager.during() / 1000000ULL);
 
     while (m_running.load(std::memory_order_acquire)) {
-        // 驱动定时器
-        m_timer_manager.tick();
-
-        // 阻塞等待任务
-        if (!m_queue.wait_dequeue_timed(task, std::chrono::milliseconds(timeout_ms))) {
+        // 阻塞等待任务（无超时，由任务驱动）
+        if (!m_queue.wait_dequeue_timed(task, std::chrono::milliseconds(1))) {
             continue;
         }
 

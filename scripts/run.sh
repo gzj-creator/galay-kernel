@@ -54,6 +54,7 @@ STANDALONE_TESTS=(
     "test_mpsc_channel"
     "test_timing_wheel"
     "test_unsafe_channel"
+    "test_timer_scheduler"
 )
 
 # 定义需要 client-server 配对的测试

@@ -3,6 +3,7 @@
 #include <atomic>
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/TimerScheduler.h"
 #include "galay-kernel/common/Sleep.hpp"
 #include "galay-kernel/common/Log.h"
 #include "test_result_writer.h"
@@ -536,6 +537,9 @@ int main() {
 
     scheduler.start();
 
+    // 启动全局定时器调度器（sleep 需要）
+    TimerScheduler::getInstance()->start();
+
     // 依次启动测试
     scheduler.spawn(testRecvTimeout());
     // 使用调度器的空闲等待
@@ -571,6 +575,9 @@ int main() {
     std::this_thread::sleep_for(std::chrono::seconds(10));
 
     scheduler.stop();
+
+    // 停止全局定时器调度器
+    TimerScheduler::getInstance()->stop();
 
     LogInfo("=== Results: {}/{} tests passed ===", g_passedCount.load(), g_totalCount.load());
 

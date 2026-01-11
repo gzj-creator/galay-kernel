@@ -10,7 +10,7 @@
 #define GALAY_KERNEL_UNSAFE_CHANNEL_H
 
 #include "galay-kernel/kernel/Coroutine.h"
-#include <queue>
+#include <deque>
 #include <optional>
 #include <vector>
 #include <cassert>
@@ -63,7 +63,7 @@ private:
  * 特点：
  * - 非线程安全，仅供同一调度器内的协程使用
  * - 无锁设计，性能优于 MpscChannel
- * - 使用 std::queue 作为底层容器
+ * - 使用 std::deque 作为底层容器，支持高效的头尾操作
  * - 适用于同一调度器内的生产者-消费者模式
  *
  * 使用场景：
@@ -93,16 +93,21 @@ public:
      * @warning 仅在调度器线程内调用
      */
     bool send(T&& value) {
-        m_queue.push(std::forward<T>(value));
-        if (m_queue.size() == 1 && m_hasWaiter) {
+        m_queue.push_back(std::forward<T>(value));
+        ++m_size;
+        if (m_size == 1 && m_hasWaiter) {
             wakeUpWaiter();
         }
         return true;
     }
 
     bool send(const T& value) {
-        T copy = value;
-        return send(std::move(copy));
+        m_queue.push_back(value);
+        ++m_size;
+        if (m_size == 1 && m_hasWaiter) {
+            wakeUpWaiter();
+        }
+        return true;
     }
 
     /**
@@ -111,10 +116,11 @@ public:
      */
     bool sendBatch(const std::vector<T>& values) {
         if (values.empty()) return true;
-        bool wasEmpty = m_queue.empty();
+        bool wasEmpty = (m_size == 0);
         for (const auto& value : values) {
-            m_queue.push(value);
+            m_queue.push_back(value);
         }
+        m_size += values.size();
         if (wasEmpty && m_hasWaiter) {
             wakeUpWaiter();
         }
@@ -123,10 +129,11 @@ public:
 
     bool sendBatch(std::vector<T>&& values) {
         if (values.empty()) return true;
-        bool wasEmpty = m_queue.empty();
+        bool wasEmpty = (m_size == 0);
         for (auto& value : values) {
-            m_queue.push(std::move(value));
+            m_queue.push_back(std::move(value));
         }
+        m_size += values.size();
         if (wasEmpty && m_hasWaiter) {
             wakeUpWaiter();
         }
@@ -151,11 +158,12 @@ public:
      * @brief 非阻塞接收单条数据
      */
     std::optional<T> tryRecv() {
-        if (m_queue.empty()) {
+        if (m_size == 0) {
             return std::nullopt;
         }
         T value = std::move(m_queue.front());
-        m_queue.pop();
+        m_queue.pop_front();
+        --m_size;
         return value;
     }
 
@@ -163,16 +171,17 @@ public:
      * @brief 非阻塞批量接收数据
      */
     std::optional<std::vector<T>> tryRecvBatch(size_t maxCount = DEFAULT_BATCH_SIZE) {
-        if (m_queue.empty()) {
+        if (m_size == 0) {
             return std::nullopt;
         }
         std::vector<T> values;
-        size_t count = std::min(maxCount, m_queue.size());
+        size_t count = std::min(maxCount, m_size);
         values.reserve(count);
         for (size_t i = 0; i < count; ++i) {
             values.push_back(std::move(m_queue.front()));
-            m_queue.pop();
+            m_queue.pop_front();
         }
+        m_size -= count;
         return values;
     }
 
@@ -180,14 +189,14 @@ public:
      * @brief 获取队列大小
      */
     size_t size() const {
-        return m_queue.size();
+        return m_size;
     }
 
     /**
      * @brief 检查队列是否为空
      */
     bool empty() const {
-        return m_queue.empty();
+        return m_size == 0;
     }
 
 private:
@@ -199,16 +208,17 @@ private:
     void wakeUpWaiter() {
         if (m_hasWaiter) {
             m_hasWaiter = false;
-            if (m_waiterCoro.isValid()) {
+            if (m_waiterHandle) {
                 // 同调度器内，直接恢复协程
-                m_waiterCoro.resume();
+                m_waiterHandle.resume();
             }
         }
     }
 
-    std::queue<T> m_queue;
+    std::deque<T> m_queue;
+    size_t m_size = 0;
     bool m_hasWaiter = false;
-    Coroutine m_waiterCoro;
+    std::coroutine_handle<Coroutine::promise_type> m_waiterHandle;
 };
 
 // ============================================================================
@@ -217,19 +227,18 @@ private:
 
 template <typename T>
 inline bool UnsafeRecvAwaitable<T>::await_ready() const noexcept {
-    return !m_channel->m_queue.empty();
+    return m_channel->m_size > 0;
 }
 
 template <typename T>
 inline bool UnsafeRecvAwaitable<T>::await_suspend(
     std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
     // 再次检查，避免竞态
-    if (!m_channel->m_queue.empty()) {
+    if (m_channel->m_size > 0) {
         return false;
     }
 
-    Coroutine coro = handle.promise().getCoroutine();
-    m_channel->m_waiterCoro = coro;
+    m_channel->m_waiterHandle = handle;
     m_channel->m_hasWaiter = true;
 
     return true;
@@ -237,11 +246,12 @@ inline bool UnsafeRecvAwaitable<T>::await_suspend(
 
 template <typename T>
 inline std::optional<T> UnsafeRecvAwaitable<T>::await_resume() noexcept {
-    if (m_channel->m_queue.empty()) {
+    if (m_channel->m_size == 0) {
         return std::nullopt;
     }
     T value = std::move(m_channel->m_queue.front());
-    m_channel->m_queue.pop();
+    m_channel->m_queue.pop_front();
+    --m_channel->m_size;
     return value;
 }
 
@@ -251,19 +261,18 @@ inline std::optional<T> UnsafeRecvAwaitable<T>::await_resume() noexcept {
 
 template <typename T>
 inline bool UnsafeRecvBatchAwaitable<T>::await_ready() const noexcept {
-    return !m_channel->m_queue.empty();
+    return m_channel->m_size > 0;
 }
 
 template <typename T>
 inline bool UnsafeRecvBatchAwaitable<T>::await_suspend(
     std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
     // 再次检查，避免竞态
-    if (!m_channel->m_queue.empty()) {
+    if (m_channel->m_size > 0) {
         return false;
     }
 
-    Coroutine coro = handle.promise().getCoroutine();
-    m_channel->m_waiterCoro = coro;
+    m_channel->m_waiterHandle = handle;
     m_channel->m_hasWaiter = true;
 
     return true;
@@ -271,18 +280,19 @@ inline bool UnsafeRecvBatchAwaitable<T>::await_suspend(
 
 template <typename T>
 inline std::optional<std::vector<T>> UnsafeRecvBatchAwaitable<T>::await_resume() noexcept {
-    if (m_channel->m_queue.empty()) {
+    if (m_channel->m_size == 0) {
         return std::nullopt;
     }
 
     std::vector<T> values;
-    size_t count = std::min(m_maxCount, m_channel->m_queue.size());
+    size_t count = std::min(m_maxCount, m_channel->m_size);
     values.reserve(count);
 
     for (size_t i = 0; i < count; ++i) {
         values.push_back(std::move(m_channel->m_queue.front()));
-        m_channel->m_queue.pop();
+        m_channel->m_queue.pop_front();
     }
+    m_channel->m_size -= count;
 
     return values;
 }

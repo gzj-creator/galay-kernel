@@ -14,18 +14,8 @@
 #include "galay-kernel/concurrency/UnsafeChannel.h"
 #include "galay-kernel/concurrency/MpscChannel.h"
 #include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/ComputeScheduler.h"
 #include "galay-kernel/common/Log.h"
-
-#ifdef USE_EPOLL
-#include "galay-kernel/kernel/EpollScheduler.h"
-using IOSchedulerType = galay::kernel::EpollScheduler;
-#elif defined(USE_KQUEUE)
-#include "galay-kernel/kernel/KqueueScheduler.h"
-using IOSchedulerType = galay::kernel::KqueueScheduler;
-#elif defined(USE_IOURING)
-#include "galay-kernel/kernel/IOUringScheduler.h"
-using IOSchedulerType = galay::kernel::IOUringScheduler;
-#endif
 
 using namespace galay::kernel;
 using namespace std::chrono_literals;
@@ -183,9 +173,8 @@ void benchUnsafeChannelThroughput(int64_t message_count) {
     LogInfo("--- UnsafeChannel Throughput Test ({} messages) ---", message_count);
     resetCounters();
 
-#if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
     UnsafeChannel<int64_t> channel;
-    IOSchedulerType scheduler;
+    ComputeScheduler scheduler;
 
     scheduler.start();
 
@@ -211,9 +200,6 @@ void benchUnsafeChannelThroughput(int64_t message_count) {
             g_sent.load(), g_received.load(), ms, throughput);
     LogInfo("  sum={} (expected {}), correct={}",
             g_sum.load(), expected_sum, correct ? "YES" : "NO");
-#else
-    LogWarn("  No IO scheduler available, skipping");
-#endif
 }
 
 // 2. UnsafeChannel 批量接收吞吐量测试
@@ -221,9 +207,8 @@ void benchUnsafeChannelBatchThroughput(int64_t message_count) {
     LogInfo("--- UnsafeChannel Batch Receive Throughput Test ({} messages) ---", message_count);
     resetCounters();
 
-#if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
     UnsafeChannel<int64_t> channel;
-    IOSchedulerType scheduler;
+    ComputeScheduler scheduler;
 
     scheduler.start();
 
@@ -249,9 +234,6 @@ void benchUnsafeChannelBatchThroughput(int64_t message_count) {
             g_sent.load(), g_received.load(), ms, throughput);
     LogInfo("  sum={} (expected {}), correct={}",
             g_sum.load(), expected_sum, correct ? "YES" : "NO");
-#else
-    LogWarn("  No IO scheduler available, skipping");
-#endif
 }
 
 // 3. UnsafeChannel 延迟测试
@@ -259,9 +241,8 @@ void benchUnsafeChannelLatency(int64_t message_count) {
     LogInfo("--- UnsafeChannel Latency Test ({} messages) ---", message_count);
     resetCounters();
 
-#if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
     UnsafeChannel<TimestampedMessage> channel;
-    IOSchedulerType scheduler;
+    ComputeScheduler scheduler;
 
     scheduler.start();
 
@@ -277,9 +258,6 @@ void benchUnsafeChannelLatency(int64_t message_count) {
     double avg_latency_us = (double)g_latency_sum_ns / g_latency_count / 1000.0;
 
     LogInfo("  messages={}, avg_latency={:.2f}us", g_received.load(), avg_latency_us);
-#else
-    LogWarn("  No IO scheduler available, skipping");
-#endif
 }
 
 // 4. MpscChannel 吞吐量测试（同调度器，用于对比）
@@ -287,9 +265,8 @@ void benchMpscChannelThroughput(int64_t message_count) {
     LogInfo("--- MpscChannel Throughput Test (same scheduler, {} messages) ---", message_count);
     resetCounters();
 
-#if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
     MpscChannel<int64_t> channel;
-    IOSchedulerType scheduler;
+    ComputeScheduler scheduler;
 
     scheduler.start();
 
@@ -315,20 +292,16 @@ void benchMpscChannelThroughput(int64_t message_count) {
             g_sent.load(), g_received.load(), ms, throughput);
     LogInfo("  sum={} (expected {}), correct={}",
             g_sum.load(), expected_sum, correct ? "YES" : "NO");
-#else
-    LogWarn("  No IO scheduler available, skipping");
-#endif
 }
 
 // 5. 性能对比总结
 void benchComparison(int64_t message_count) {
     LogInfo("\n=== Performance Comparison ({} messages) ===", message_count);
 
-#if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
     // UnsafeChannel 测试
     resetCounters();
     UnsafeChannel<int64_t> unsafeChannel;
-    IOSchedulerType scheduler1;
+    ComputeScheduler scheduler1;
 
     scheduler1.start();
     auto start1 = std::chrono::steady_clock::now();
@@ -345,7 +318,7 @@ void benchComparison(int64_t message_count) {
     // MpscChannel 测试
     resetCounters();
     MpscChannel<int64_t> mpscChannel;
-    IOSchedulerType scheduler2;
+    ComputeScheduler scheduler2;
 
     scheduler2.start();
     auto start2 = std::chrono::steady_clock::now();
@@ -371,9 +344,6 @@ void benchComparison(int64_t message_count) {
     LogInfo("UnsafeChannel is {:.2f}x {} than MpscChannel (same scheduler)",
             speedup > 1 ? speedup : 1/speedup,
             speedup > 1 ? "faster" : "slower");
-#else
-    LogWarn("No IO scheduler available, skipping");
-#endif
 }
 
 int main(int argc, char* argv[]) {

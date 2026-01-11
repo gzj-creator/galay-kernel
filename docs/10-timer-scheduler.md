@@ -1,0 +1,236 @@
+# 10. 全局定时器调度器 (TimerScheduler)
+
+## 概述
+
+`TimerScheduler` 是一个全局单例的定时器调度器，提供线程安全的定时器管理功能。设计参考了 Rust Tokio 的定时器实现，采用无锁 MPSC 队列 + 单线程时间轮的架构，实现高性能的多线程定时器支持。
+
+## 设计架构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    TimerScheduler                            │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐                │
+│  │ Thread 1 │   │ Thread 2 │   │ Thread N │                │
+│  └────┬─────┘   └────┬─────┘   └────┬─────┘                │
+│       │              │              │                        │
+│       └──────────────┼──────────────┘                        │
+│                      ▼                                       │
+│         ┌────────────────────────┐                          │
+│         │  ConcurrentQueue       │  ◄── 无锁 MPSC 队列      │
+│         │  (Lock-Free)           │                          │
+│         └───────────┬────────────┘                          │
+│                     │                                        │
+│                     ▼                                        │
+│         ┌────────────────────────┐                          │
+│         │  Timer Thread          │  ◄── 单线程处理          │
+│         │  (Single Consumer)     │                          │
+│         └───────────┬────────────┘                          │
+│                     │                                        │
+│                     ▼                                        │
+│         ┌────────────────────────┐                          │
+│         │  Hierarchical          │  ◄── 5层时间轮           │
+│         │  Timing Wheel          │      无需加锁            │
+│         └────────────────────────┘                          │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## 核心特性
+
+### 1. 无锁添加
+- 使用 `moodycamel::ConcurrentQueue` 作为无锁 MPSC 队列
+- 多线程可同时添加定时器，无竞争
+- 添加操作 O(1) 时间复杂度
+
+### 2. 单线程处理
+- 定时器线程批量从队列取出待处理定时器
+- 时间轮操作无需加锁
+- 避免了传统方案中的锁竞争问题
+
+### 3. 分层时间轮
+- 5层时间轮结构，覆盖从毫秒到数十天的定时范围
+- 插入/删除 O(1) 时间复杂度
+- 支持级联降级，长期定时器自动迁移到低层
+
+## API 接口
+
+### 获取实例
+```cpp
+TimerScheduler* scheduler = TimerScheduler::getInstance();
+```
+
+### 启动/停止
+```cpp
+scheduler->start();  // 启动定时器线程
+scheduler->stop();   // 停止定时器线程
+```
+
+### 添加定时器
+```cpp
+// 单个添加（线程安全，无锁）
+auto timer = std::make_shared<CBTimer>(100ms, []() {
+    std::cout << "Timer fired!" << std::endl;
+});
+scheduler->addTimer(timer);
+
+// 批量添加（线程安全，无锁）
+std::vector<Timer::ptr> timers;
+for (int i = 0; i < 1000; i++) {
+    timers.push_back(std::make_shared<CBTimer>(
+        std::chrono::milliseconds(i * 10),
+        [i]() { std::cout << "Timer " << i << " fired!" << std::endl; }
+    ));
+}
+scheduler->addTimerBatch(timers);
+```
+
+### 取消定时器
+```cpp
+auto timer = std::make_shared<CBTimer>(1000ms, []() {});
+scheduler->addTimer(timer);
+
+// 取消定时器（原子操作，线程安全）
+timer->cancel();
+```
+
+### 状态查询
+```cpp
+bool running = scheduler->isRunning();  // 是否运行中
+size_t count = scheduler->size();       // 定时器数量（近似值）
+uint64_t tick = scheduler->tickDuration(); // tick 间隔（纳秒）
+```
+
+## 使用示例
+
+### 基本使用
+```cpp
+#include "galay-kernel/kernel/TimerScheduler.h"
+
+using namespace galay::kernel;
+using namespace std::chrono_literals;
+
+int main() {
+    auto* scheduler = TimerScheduler::getInstance();
+    scheduler->start();
+
+    // 添加一次性定时器
+    auto timer = std::make_shared<CBTimer>(100ms, []() {
+        std::cout << "100ms timer fired!" << std::endl;
+    });
+    scheduler->addTimer(timer);
+
+    // 等待定时器触发
+    std::this_thread::sleep_for(200ms);
+
+    scheduler->stop();
+    return 0;
+}
+```
+
+### 多线程并发添加
+```cpp
+#include "galay-kernel/kernel/TimerScheduler.h"
+#include <thread>
+#include <vector>
+
+int main() {
+    auto* scheduler = TimerScheduler::getInstance();
+    scheduler->start();
+
+    std::atomic<int> count{0};
+    std::vector<std::thread> threads;
+
+    // 8个线程同时添加定时器
+    for (int t = 0; t < 8; t++) {
+        threads.emplace_back([&]() {
+            for (int i = 0; i < 1000; i++) {
+                auto timer = std::make_shared<CBTimer>(
+                    std::chrono::milliseconds(50 + i % 100),
+                    [&count]() { count++; }
+                );
+                scheduler->addTimer(timer);
+            }
+        });
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    // 等待所有定时器触发
+    std::this_thread::sleep_for(200ms);
+
+    std::cout << "Fired: " << count << "/8000" << std::endl;
+
+    scheduler->stop();
+    return 0;
+}
+```
+
+## 性能数据
+
+测试环境：macOS, Apple Silicon
+
+| 指标 | 数值 |
+|------|------|
+| 添加吞吐量 | ~8,000,000 timers/sec |
+| 批量添加 1000 个定时器 | ~100 μs |
+| 16 线程并发添加 16000 个定时器 | ~2 ms |
+
+## 时间轮结构
+
+| 层级 | 槽数 | 每槽时间 | 覆盖范围 |
+|------|------|----------|----------|
+| 第1层 | 256 | 1ms | 0-255ms |
+| 第2层 | 64 | 256ms | 256ms-16s |
+| 第3层 | 64 | 16s | 16s-17分钟 |
+| 第4层 | 64 | 17分钟 | 17分钟-18小时 |
+| 第5层 | 64 | 18小时 | 18小时-48天 |
+
+## 与 IOScheduler 定时器的区别
+
+| 特性 | TimerScheduler | IOScheduler 定时器 |
+|------|----------------|-------------------|
+| 用途 | 通用定时任务 | IO 超时控制 |
+| 线程安全 | 是（无锁） | 否（单调度器内） |
+| 跨线程添加 | 支持 | 不支持 |
+| 精度 | 1ms | 取决于 IO 多路复用 |
+| 适用场景 | 业务定时、心跳、延迟任务、sleep | 连接超时、读写超时 |
+
+## Sleep 函数
+
+`sleep()` 函数已改为使用全局 `TimerScheduler`，而非 IOScheduler 的定时器。
+
+```cpp
+#include "galay-kernel/common/Sleep.hpp"
+#include "galay-kernel/kernel/TimerScheduler.h"
+
+// 使用前需要启动 TimerScheduler
+TimerScheduler::getInstance()->start();
+
+Coroutine myCoro() {
+    // 协程内使用 sleep
+    co_await sleep(100ms);
+    std::cout << "Woke up after 100ms" << std::endl;
+    co_return;
+}
+
+// 程序退出时停止
+TimerScheduler::getInstance()->stop();
+```
+
+## 注意事项
+
+1. **单例模式**：`TimerScheduler` 是全局单例，整个进程共享一个实例
+2. **回调执行**：定时器回调在定时器线程中执行，避免长时间阻塞
+3. **精度限制**：默认 1ms 精度，可通过修改 `tickDuration` 调整
+4. **内存管理**：使用 `shared_ptr` 管理定时器生命周期
+
+## 文件列表
+
+- `galay-kernel/common/ThreadSafeTimerManager.hpp` - 线程安全时间轮实现
+- `galay-kernel/kernel/TimerScheduler.h` - 调度器头文件
+- `galay-kernel/kernel/TimerScheduler.cc` - 调度器实现
+- `test/test_timer_scheduler.cc` - 多线程测试用例

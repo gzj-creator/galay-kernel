@@ -4,9 +4,9 @@
 #include "Timer.hpp"
 #include <memory>
 #include "galay-kernel/kernel/Waker.h"
-#include "galay-kernel/kernel/Scheduler.hpp"
+#include "galay-kernel/kernel/TimerScheduler.h"
 
-namespace galay::kernel 
+namespace galay::kernel
 {
 
 class SleepTimer final: public Timer
@@ -23,21 +23,20 @@ private:
     Waker m_waker;
 };
 
-struct SleepAwaitable 
+struct SleepAwaitable
 {
     SleepTimer::ptr m_timer;
 
     template<typename Rep, typename Period>
-    SleepAwaitable(std::chrono::duration<Rep, Period> duration) 
+    SleepAwaitable(std::chrono::duration<Rep, Period> duration)
         :m_timer(std::make_shared<SleepTimer>(duration)) {}
 
     bool await_ready() { return false; }
 
     bool await_suspend(std::coroutine_handle<> handle) {
-        Waker waker(handle);
-        auto scheduler = waker.getScheduler();
         m_timer->setWaker(Waker(handle));
-        if(!scheduler->addTimer(m_timer)) {
+        // 使用全局 TimerScheduler 而不是 IOScheduler 的定时器
+        if(!TimerScheduler::getInstance()->addTimer(m_timer)) {
             return false;
         }
         return true;

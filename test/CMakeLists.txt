@@ -80,3 +80,8 @@ add_executable(test_unsafe_channel test_unsafe_channel.cc)
 target_link_libraries(test_unsafe_channel PRIVATE galay-kernel)
 target_include_directories(test_unsafe_channel PRIVATE ${CMAKE_SOURCE_DIR})
 
+# TimerScheduler多线程测试
+add_executable(test_timer_scheduler test_timer_scheduler.cc)
+target_link_libraries(test_timer_scheduler PRIVATE galay-kernel)
+target_include_directories(test_timer_scheduler PRIVATE ${CMAKE_SOURCE_DIR})
+
