@@ -67,6 +67,12 @@ public:
     // 同步操作（用于简单场景）
     std::expected<void, IOError> sync();
 
+    /*
+     * @brief 获取IO控制器
+     * @return IOController* IO控制器
+     */
+     IOController* getController() { return &m_controller; }
+
 private:
     IOController m_controller;
 };

@@ -221,6 +221,12 @@ public:
      * @endcode
      */
     CloseAwaitable close();
+
+    /*
+     * @brief 获取IO控制器
+     * @return IOController* IO控制器
+     */
+     IOController* getController() { return &m_controller; }
 private:
     GHandle create(IPType type);
 

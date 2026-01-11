@@ -114,6 +114,12 @@ public:
      */
     std::string getPath(int wd) const;
 
+    /*
+     * @brief 获取IO控制器
+     * @return IOController* IO控制器
+     */
+     IOController* getController() { return &m_controller; }
+
 private:
     int m_watch_fd;                                ///< Linux: inotify fd, macOS: 当前监控的 fd
     IOController m_controller;                     ///< IO控制器
