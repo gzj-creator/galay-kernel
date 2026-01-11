@@ -16,7 +16,7 @@
 #ifndef GALAY_KERNEL_SCHEDULER_HPP
 #define GALAY_KERNEL_SCHEDULER_HPP
 
-#include "galay-kernel/common/TimerManager.hpp"
+#include "galay-kernel/common/Timer.hpp"
 #include "Coroutine.h"
 #include <thread>
 

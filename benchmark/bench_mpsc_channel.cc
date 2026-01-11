@@ -19,18 +19,8 @@
 #include <numeric>
 #include "galay-kernel/concurrency/MpscChannel.h"
 #include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/ComputeScheduler.h"
 #include "galay-kernel/common/Log.h"
-
-#ifdef USE_EPOLL
-#include "galay-kernel/kernel/EpollScheduler.h"
-using IOSchedulerType = galay::kernel::EpollScheduler;
-#elif defined(USE_KQUEUE)
-#include "galay-kernel/kernel/KqueueScheduler.h"
-using IOSchedulerType = galay::kernel::KqueueScheduler;
-#elif defined(USE_IOURING)
-#include "galay-kernel/kernel/IOUringScheduler.h"
-using IOSchedulerType = galay::kernel::IOUringScheduler;
-#endif
 
 using namespace galay::kernel;
 using namespace std::chrono_literals;
@@ -187,9 +177,8 @@ void benchSingleProducerThroughput(int64_t message_count) {
     LogInfo("--- Single Producer Throughput Test ({} messages) ---", message_count);
     resetCounters();
 
-#if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
     MpscChannel<int64_t> channel;
-    IOSchedulerType scheduler;
+    ComputeScheduler scheduler;
 
     scheduler.start();
 
@@ -222,9 +211,6 @@ void benchSingleProducerThroughput(int64_t message_count) {
             g_sent.load(), g_received.load(), ms, throughput);
     LogInfo("  sum={} (expected {}), correct={}",
             g_sum.load(), expected_sum, correct ? "YES" : "NO");
-#else
-    LogWarn("  No IO scheduler available, skipping");
-#endif
 }
 
 // 2. 多生产者吞吐量测试
@@ -233,9 +219,8 @@ void benchMultiProducerThroughput(int producer_count, int64_t total_messages) {
             producer_count, total_messages);
     resetCounters();
 
-#if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
     MpscChannel<int64_t> channel;
-    IOSchedulerType scheduler;
+    ComputeScheduler scheduler;
 
     scheduler.start();
     scheduler.spawn(simpleConsumer(&channel, total_messages));
@@ -269,9 +254,6 @@ void benchMultiProducerThroughput(int producer_count, int64_t total_messages) {
 
     LogInfo("  sent={}, received={}, time={}ms, throughput={:.0f} msg/s",
             g_sent.load(), g_received.load(), ms, throughput);
-#else
-    LogWarn("  No IO scheduler available, skipping");
-#endif
 }
 
 // 3. 批量接收吞吐量测试
@@ -279,9 +261,8 @@ void benchBatchReceiveThroughput(int64_t message_count) {
     LogInfo("--- Batch Receive Throughput Test ({} messages) ---", message_count);
     resetCounters();
 
-#if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
     MpscChannel<int64_t> channel;
-    IOSchedulerType scheduler;
+    ComputeScheduler scheduler;
 
     scheduler.start();
     scheduler.spawn(batchConsumer(&channel, message_count));
@@ -310,9 +291,6 @@ void benchBatchReceiveThroughput(int64_t message_count) {
             g_sent.load(), g_received.load(), ms, throughput);
     LogInfo("  sum={} (expected {}), correct={}",
             g_sum.load(), expected_sum, correct ? "YES" : "NO");
-#else
-    LogWarn("  No IO scheduler available, skipping");
-#endif
 }
 
 // 4. 延迟测试
@@ -320,9 +298,8 @@ void benchLatency(int64_t message_count) {
     LogInfo("--- Latency Test ({} messages) ---", message_count);
     resetCounters();
 
-#if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
     MpscChannel<TimestampedMessage> channel;
-    IOSchedulerType scheduler;
+    ComputeScheduler scheduler;
 
     scheduler.start();
     scheduler.spawn(latencyConsumer(&channel, message_count));
@@ -341,9 +318,6 @@ void benchLatency(int64_t message_count) {
     double avg_latency_us = (double)g_latency_sum_ns / g_latency_count / 1000.0;
 
     LogInfo("  messages={}, avg_latency={:.2f}us", g_received.load(), avg_latency_us);
-#else
-    LogWarn("  No IO scheduler available, skipping");
-#endif
 }
 
 // 5. 正确性验证测试
@@ -352,9 +326,8 @@ void benchCorrectness(int producer_count, int64_t total_messages) {
             producer_count, total_messages);
     resetCounters();
 
-#if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
     MpscChannel<int64_t> channel;
-    IOSchedulerType scheduler;
+    ComputeScheduler scheduler;
 
     scheduler.start();
     scheduler.spawn(correctnessConsumer(&channel, total_messages));
@@ -403,9 +376,6 @@ void benchCorrectness(int producer_count, int64_t total_messages) {
     if (!all_received) {
         LogError("  CORRECTNESS FAILED!");
     }
-#else
-    LogWarn("  No IO scheduler available, skipping");
-#endif
 }
 
 // 6. 跨调度器测试
@@ -413,15 +383,14 @@ void benchCrossScheduler(int64_t message_count) {
     LogInfo("--- Cross-Scheduler Test ({} messages) ---", message_count);
     resetCounters();
 
-#if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
     MpscChannel<int64_t> channel;
 
     // 消费者调度器
-    IOSchedulerType consumerScheduler;
+    ComputeScheduler consumerScheduler;
 
     // 生产者协程
     auto producerCoro = [](MpscChannel<int64_t>* ch, int64_t count) -> Coroutine {
-        
+
         for (int64_t i = 0; i < count; ++i) {
             ch->send(i);
             g_sent.fetch_add(1, std::memory_order_relaxed);
@@ -448,7 +417,7 @@ void benchCrossScheduler(int64_t message_count) {
 
     // 启动生产者线程（独立调度器）
     std::thread producerThread([&]() {
-        IOSchedulerType producerScheduler;
+        ComputeScheduler producerScheduler;
         producerScheduler.start();
         producerScheduler.spawn(producerCoro(&channel, message_count));
 
@@ -472,9 +441,6 @@ void benchCrossScheduler(int64_t message_count) {
             g_sent.load(), g_received.load(), ms, throughput);
     LogInfo("  sum={} (expected {}), correct={}",
             g_sum.load(), expected_sum, correct ? "YES" : "NO");
-#else
-    LogWarn("  No IO scheduler available, skipping");
-#endif
 }
 
 // 7. 持续压力测试
@@ -482,9 +448,8 @@ void benchSustained(int duration_sec) {
     LogInfo("--- Sustained Load Test ({}s) ---", duration_sec);
     resetCounters();
 
-#if defined(USE_EPOLL) || defined(USE_KQUEUE) || defined(USE_IOURING)
     MpscChannel<int64_t> channel;
-    IOSchedulerType scheduler;
+    ComputeScheduler scheduler;
 
     std::atomic<bool> running{true};
 
@@ -507,14 +472,16 @@ void benchSustained(int duration_sec) {
     auto end_time = start + std::chrono::seconds(duration_sec);
 
     // 生产者线程
-    std::thread producer([&]() {
-        
-        int64_t id = 0;
-        while (running) {
-            channel.send(id++);
-            g_sent.fetch_add(1, std::memory_order_relaxed);
-        }
-    });
+    std::vector<std::thread> producers(4);
+    for(auto& producer: producers) {
+        producer = std::thread([&]() {
+            int64_t id = 0;
+            while (running) {
+                channel.send(id++);
+                g_sent.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
 
     // 监控
     int64_t last_received = 0;
@@ -528,7 +495,9 @@ void benchSustained(int duration_sec) {
     }
 
     running = false;
-    producer.join();
+    for(auto& producer: producers) {
+        producer.join();
+    }
 
     // 等待消费者处理完剩余消息
     while (!g_consumer_done && channel.size() > 0) {
@@ -544,9 +513,6 @@ void benchSustained(int duration_sec) {
 
     LogInfo("  total: sent={}, received={}, avg throughput: {:.0f}/s",
             g_sent.load(), g_received.load(), avg_throughput);
-#else
-    LogWarn("  No IO scheduler available, skipping");
-#endif
 }
 
 int main(int argc, char* argv[]) {

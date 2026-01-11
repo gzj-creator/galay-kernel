@@ -55,28 +55,17 @@ void ComputeScheduler::workerLoop()
 {
     ComputeTask task;
 
-    while (m_running.load(std::memory_order_acquire)) {
+    while (true) {
         // 阻塞等待任务（无超时，由任务驱动）
         if (!m_queue.wait_dequeue_timed(task, std::chrono::milliseconds(1))) {
             continue;
         }
-
         // 停止信号
         if (task.is_stop_signal) {
-            continue;
+            break;
         }
-
-        // 获取所属调度器
-        Scheduler* belong_scheduler = task.coro.belongScheduler();
-
         // 执行协程
         Scheduler::resume(task.coro);
-
-        // 协程未完成且所属调度器不是自己，spawn 回所属调度器
-        // 如果所属调度器是自己，协程会通过其他方式（如 AsyncWaiter）被重新唤醒
-        if (belong_scheduler && belong_scheduler != this) {
-            belong_scheduler->spawn(std::move(task.coro));
-        }
     }
 
     // 退出前处理剩余任务
@@ -84,11 +73,7 @@ void ComputeScheduler::workerLoop()
         if (task.is_stop_signal) {
             continue;
         }
-        Scheduler* belong_scheduler = task.coro.belongScheduler();
         Scheduler::resume(task.coro);
-        if (belong_scheduler && belong_scheduler != this) {
-            belong_scheduler->spawn(std::move(task.coro));
-        }
     }
 }
 
