@@ -79,35 +79,16 @@ public:
     virtual void spawn(Coroutine co) = 0;
 
     /**
+     * @brief 添加定时器到内部时间轮
+     * @param 定时器
+     */
+    virtual bool addTimer(Timer::ptr timer) = 0;
+
+    /**
      * @brief 获取调度器所属线程ID
      * @return 线程ID
      */
     std::thread::id threadId() const { return m_threadId; }
-
-    /**
-     * @brief 替换调度器的定时器管理器
-     * @param manager 新的时间轮定时器管理器（右值引用）
-     * @details 用于自定义时间轮配置（wheelSize、tickDuration）以适应不同的超时场景
-     * @note 应在调度器启动前调用，避免运行时替换导致定时器丢失
-     * @example
-     * ```cpp
-     * // 创建适合短超时场景的时间轮（60秒范围，1秒精度）
-     * TimingWheelTimerManager manager(60, 1000000000ULL);
-     * scheduler->replaceTimerManager(std::move(manager));
-     * ```
-     */
-    void replaceTimerManager(TimingWheelTimerManager&& manager) {
-        m_timer_manager = std::move(manager);
-    }
-
-    /**
-     * @brief 注册定时器
-     * @details 添加任务量不大且数量不是特别多的定时任务，如IO超时，sleep等
-     * @param timer 定时器共享指针
-     */
-    bool addTimer(Timer::ptr timer) {
-        return m_timer_manager.push(timer);
-    }
 
     /**
      * @brief 返回Scheduler类型
@@ -122,10 +103,7 @@ protected:
      * @note 仅供调度器内部使用
      */
     void resume(Coroutine& co);
-
     std::thread::id m_threadId;  ///< 调度器所属线程ID，在 start() 时设置
-
-    TimingWheelTimerManager m_timer_manager;
 };
 
 

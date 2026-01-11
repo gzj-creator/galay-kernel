@@ -22,6 +22,7 @@
 
 #include "Coroutine.h"
 #include "Scheduler.hpp"
+#include "kernel/TimerScheduler.h"
 #include <thread>
 #include <atomic>
 #include <concurrentqueue/moodycamel/blockingconcurrentqueue.h>
@@ -100,6 +101,15 @@ public:
      */
     bool isRunning() const { return m_running.load(std::memory_order_acquire); }
 
+
+    /**
+     * @brief 注册定时器
+     * @details 添加任务量不大且数量不是特别多的定时任务，如IO超时，sleep等
+     * @param timer 定时器共享指针
+     */
+    bool addTimer(Timer::ptr timer) override {
+        return TimerScheduler::getInstance()->addTimer(timer);    
+    }
 private:
     /**
      * @brief 工作线程函数
