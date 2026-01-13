@@ -54,6 +54,8 @@ public:
     int addConnect(IOController* controller) override;
     int addRecv(IOController* controller) override;
     int addSend(IOController* controller) override;
+    int addReadv(IOController* controller) override;
+    int addWritev(IOController* controller) override;
     int addClose(IOController* controller) override;
     int addFileRead(IOController* controller) override;
     int addFileWrite(IOController* controller) override;
@@ -91,6 +93,8 @@ private:
     bool handleConnect(IOController* controller);
     bool handleRecv(IOController* controller);
     bool handleSend(IOController* controller);
+    bool handleReadv(IOController* controller);
+    bool handleWritev(IOController* controller);
     bool handleFileRead(IOController* controller);
     bool handleFileWrite(IOController* controller);
     bool handleRecvFrom(IOController* controller);

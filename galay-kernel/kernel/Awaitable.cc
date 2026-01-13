@@ -74,6 +74,46 @@ std::expected<size_t, IOError> SendAwaitable::await_resume() {
     return std::move(m_result);
 }
 
+bool ReadvAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_waker = Waker(handle);
+    m_controller->fillAwaitable(READV, this);
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addReadv(m_controller) == OK) {
+        return false;
+    }
+    return true;
+}
+
+std::expected<size_t, IOError> ReadvAwaitable::await_resume() {
+    m_controller->removeAwaitable(READV);
+    return std::move(m_result);
+}
+
+bool WritevAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_waker = Waker(handle);
+    m_controller->fillAwaitable(WRITEV, this);
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addWritev(m_controller) == OK) {
+        return false;
+    }
+    return true;
+}
+
+std::expected<size_t, IOError> WritevAwaitable::await_resume() {
+    m_controller->removeAwaitable(WRITEV);
+    return std::move(m_result);
+}
+
 bool ConnectAwaitable::await_suspend(std::coroutine_handle<> handle) {
     m_waker = Waker(handle);
     m_controller->fillAwaitable(CONNECT, this);

@@ -257,6 +257,55 @@ public:
     SendAwaitable send(const char* buffer, size_t length);
 
     /**
+     * @brief 异步 scatter-gather 读取数据
+     *
+     * @param iovecs iovec 向量，描述多个接收缓冲区
+     * @return ReadvAwaitable 可等待对象，co_await后返回读取的总字节数
+     *
+     * @note
+     * - 使用 readv 系统调用一次读取到多个缓冲区
+     * - 返回值为0表示对端关闭连接
+     * - 所有缓冲区生命周期必须持续到co_await完成
+     *
+     * @code
+     * char header[64], body[1024];
+     * std::vector<struct iovec> iovecs(2);
+     * iovecs[0] = {header, sizeof(header)};
+     * iovecs[1] = {body, sizeof(body)};
+     * auto result = co_await socket.readv(std::move(iovecs));
+     * if (result) {
+     *     size_t totalRead = result.value();
+     * }
+     * @endcode
+     */
+    ReadvAwaitable readv(std::vector<struct iovec> iovecs);
+
+    /**
+     * @brief 异步 scatter-gather 写入数据
+     *
+     * @param iovecs iovec 向量，描述多个发送缓冲区
+     * @return WritevAwaitable 可等待对象，co_await后返回写入的总字节数
+     *
+     * @note
+     * - 使用 writev 系统调用一次发送多个缓冲区的数据
+     * - 返回值可能小于总长度，表示部分发送
+     * - 所有缓冲区生命周期必须持续到co_await完成
+     *
+     * @code
+     * const char* header = "HTTP/1.1 200 OK\r\n";
+     * const char* body = "Hello World";
+     * std::vector<struct iovec> iovecs(2);
+     * iovecs[0] = {const_cast<char*>(header), strlen(header)};
+     * iovecs[1] = {const_cast<char*>(body), strlen(body)};
+     * auto result = co_await socket.writev(std::move(iovecs));
+     * if (result) {
+     *     size_t totalWritten = result.value();
+     * }
+     * @endcode
+     */
+    WritevAwaitable writev(std::vector<struct iovec> iovecs);
+
+    /**
      * @brief 异步关闭socket
      *
      * @return CloseAwaitable 可等待对象，co_await后返回关闭结果

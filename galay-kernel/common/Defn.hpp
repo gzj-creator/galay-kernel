@@ -80,6 +80,8 @@
         CONNECT     ,
         RECV        ,
         SEND        ,
+        READV       ,   ///< scatter-gather 读取（readv）
+        WRITEV      ,   ///< scatter-gather 写入（writev）
         FILEREAD    ,
         FILEWRITE   ,
         FILEWATCH   ,

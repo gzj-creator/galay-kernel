@@ -32,6 +32,8 @@
 #include <coroutine>
 #include <cstddef>
 #include <expected>
+#include <vector>
+#include <sys/uio.h>
 
 #ifdef USE_EPOLL
 #include <libaio.h>
@@ -169,6 +171,92 @@ struct SendAwaitable: public TimeoutSupport<SendAwaitable> {
     IOController* m_controller;                 ///< IO控制器
     const char* m_buffer;                       ///< 发送数据
     size_t m_length;                            ///< 数据长度
+    Waker m_waker;                              ///< 协程唤醒器
+    std::expected<size_t, IOError> m_result;    ///< 操作结果
+};
+
+/**
+ * @brief Readv操作的可等待对象
+ *
+ * @details 用于异步接收TCP数据，支持 scatter-gather IO。
+ * 使用 readv 系统调用一次读取到多个缓冲区。
+ * co_await后返回接收到的总字节数或错误。
+ *
+ * @note 适用于需要将数据分散读取到多个缓冲区的场景
+ */
+struct ReadvAwaitable: public TimeoutSupport<ReadvAwaitable> {
+    /**
+     * @brief 构造函数
+     * @param controller IO控制器
+     * @param iovecs iovec 向量，描述多个缓冲区
+     */
+    ReadvAwaitable(IOController* controller, std::vector<struct iovec> iovecs)
+        : m_controller(controller), m_iovecs(std::move(iovecs)) {}
+
+    /**
+     * @brief 检查是否可以立即返回
+     * @return 始终返回false
+     */
+    bool await_ready() { return false; }
+
+    /**
+     * @brief 挂起协程并注册IO事件
+     * @param handle 当前协程句柄
+     * @return true表示挂起，false表示立即完成
+     */
+    bool await_suspend(std::coroutine_handle<> handle);
+
+    /**
+     * @brief 恢复时获取结果
+     * @return 成功返回读取的总字节数，失败返回IOError
+     */
+    std::expected<size_t, IOError> await_resume();
+
+    IOController* m_controller;                 ///< IO控制器
+    std::vector<struct iovec> m_iovecs;         ///< iovec 向量
+    Waker m_waker;                              ///< 协程唤醒器
+    std::expected<size_t, IOError> m_result;    ///< 操作结果
+};
+
+/**
+ * @brief Writev操作的可等待对象
+ *
+ * @details 用于异步发送TCP数据，支持 scatter-gather IO。
+ * 使用 writev 系统调用一次发送多个缓冲区的数据。
+ * co_await后返回发送的总字节数或错误。
+ *
+ * @note 适用于需要将多个缓冲区的数据聚合发送的场景
+ */
+struct WritevAwaitable: public TimeoutSupport<WritevAwaitable> {
+    /**
+     * @brief 构造函数
+     * @param controller IO控制器
+     * @param iovecs iovec 向量，描述多个缓冲区
+     */
+    WritevAwaitable(IOController* controller, std::vector<struct iovec> iovecs)
+        : m_controller(controller), m_iovecs(std::move(iovecs)) {}
+
+    /**
+     * @brief 检查是否可以立即返回
+     * @return 始终返回false
+     */
+    bool await_ready() { return false; }
+
+    /**
+     * @brief 挂起协程并注册IO事件
+     * @param handle 当前协程句柄
+     * @return true表示挂起，false表示立即完成
+     */
+    bool await_suspend(std::coroutine_handle<> handle);
+
+    /**
+     * @brief 恢复时获取结果
+     * @return 成功返回发送的总字节数，失败返回IOError
+     */
+    std::expected<size_t, IOError> await_resume();
+
+    IOController* m_controller;                 ///< IO控制器
+    std::vector<struct iovec> m_iovecs;         ///< iovec 向量
     Waker m_waker;                              ///< 协程唤醒器
     std::expected<size_t, IOError> m_result;    ///< 操作结果
 };

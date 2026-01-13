@@ -143,6 +143,36 @@ int KqueueScheduler::addSend(IOController* controller)
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
+int KqueueScheduler::addReadv(IOController* controller)
+{
+    // 先尝试立即读取
+    if (handleReadv(controller)) {
+        return OK;
+    }
+
+    // 需要等待数据，注册到 kqueue
+    auto awaitable = controller->getAwaitable<ReadvAwaitable>();
+    if(awaitable == nullptr) return -1;
+    struct kevent ev;
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, controller);
+    return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
+}
+
+int KqueueScheduler::addWritev(IOController* controller)
+{
+    // 先尝试立即写入
+    if (handleWritev(controller)) {
+        return OK;
+    }
+
+    // 需要等待可写，注册到 kqueue
+    auto awaitable = controller->getAwaitable<WritevAwaitable>();
+    if(awaitable == nullptr) return -1;
+    struct kevent ev;
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, controller);
+    return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
+}
+
 int KqueueScheduler::addClose(IOController* contoller)
 {
     close(contoller->m_handle.fd);
@@ -309,6 +339,28 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         }
         break;
     }
+    case READV:
+    {
+        // Readv 需要 EVFILT_READ 事件
+        if (ev.filter == EVFILT_READ) {
+            handleReadv(controller);
+            ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
+            if(awaitable == nullptr) return;
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
+    case WRITEV:
+    {
+        // Writev 需要 EVFILT_WRITE 事件
+        if (ev.filter == EVFILT_WRITE) {
+            handleWritev(controller);
+            WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
+            if(awaitable == nullptr) return;
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
     case FILEREAD:
     {
         if (ev.filter == EVFILT_READ) {
@@ -452,6 +504,49 @@ bool KqueueScheduler::handleSend(IOController* controller)
     } else {
         if (static_cast<uint32_t>(errno) == EAGAIN || static_cast<uint32_t>(errno) == EWOULDBLOCK || static_cast<uint32_t>(errno) == EINTR) {
             return false;  // 需要重试
+        }
+        awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
+        return true;
+    }
+}
+
+bool KqueueScheduler::handleReadv(IOController* controller)
+{
+    ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
+    if(awaitable == nullptr) return false;
+
+    ssize_t readBytes = readv(controller->m_handle.fd, awaitable->m_iovecs.data(),
+                              static_cast<int>(awaitable->m_iovecs.size()));
+
+    if (readBytes > 0) {
+        awaitable->m_result = static_cast<size_t>(readBytes);
+        return true;
+    } else if (readBytes == 0) {
+        awaitable->m_result = std::unexpected(IOError(kDisconnectError, 0));
+        return true;
+    } else {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return false;
+        }
+        awaitable->m_result = std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno)));
+        return true;
+    }
+}
+
+bool KqueueScheduler::handleWritev(IOController* controller)
+{
+    WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
+    if(awaitable == nullptr) return false;
+
+    ssize_t writtenBytes = writev(controller->m_handle.fd, awaitable->m_iovecs.data(),
+                                  static_cast<int>(awaitable->m_iovecs.size()));
+
+    if (writtenBytes >= 0) {
+        awaitable->m_result = static_cast<size_t>(writtenBytes);
+        return true;
+    } else {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return false;
         }
         awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
         return true;

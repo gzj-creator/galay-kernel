@@ -153,6 +153,40 @@ int IOUringScheduler::addSend(IOController* controller)
     return 0;
 }
 
+int IOUringScheduler::addReadv(IOController* controller)
+{
+    auto awaitable = controller->getAwaitable<ReadvAwaitable>();
+    if (awaitable == nullptr) return -1;
+
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    if (!sqe) {
+        return -EAGAIN;
+    }
+
+    io_uring_prep_readv(sqe, controller->m_handle.fd,
+                        awaitable->m_iovecs.data(),
+                        static_cast<unsigned>(awaitable->m_iovecs.size()), 0);
+    io_uring_sqe_set_data(sqe, controller);
+    return 0;
+}
+
+int IOUringScheduler::addWritev(IOController* controller)
+{
+    auto awaitable = controller->getAwaitable<WritevAwaitable>();
+    if (awaitable == nullptr) return -1;
+
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    if (!sqe) {
+        return -EAGAIN;
+    }
+
+    io_uring_prep_writev(sqe, controller->m_handle.fd,
+                         awaitable->m_iovecs.data(),
+                         static_cast<unsigned>(awaitable->m_iovecs.size()), 0);
+    io_uring_sqe_set_data(sqe, controller);
+    return 0;
+}
+
 int IOUringScheduler::addClose(IOController* controller)
 {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
@@ -446,6 +480,32 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case SEND:
     {
         SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
+        if (awaitable == nullptr) return;
+        if (res >= 0) {
+            awaitable->m_result = static_cast<size_t>(res);
+        } else {
+            awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res)));
+        }
+        awaitable->m_waker.wakeUp();
+        break;
+    }
+    case READV:
+    {
+        ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
+        if (awaitable == nullptr) return;
+        if (res > 0) {
+            awaitable->m_result = static_cast<size_t>(res);
+        } else if (res == 0) {
+            awaitable->m_result = std::unexpected(IOError(kDisconnectError, 0));
+        } else {
+            awaitable->m_result = std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-res)));
+        }
+        awaitable->m_waker.wakeUp();
+        break;
+    }
+    case WRITEV:
+    {
+        WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
         if (awaitable == nullptr) return;
         if (res >= 0) {
             awaitable->m_result = static_cast<size_t>(res);

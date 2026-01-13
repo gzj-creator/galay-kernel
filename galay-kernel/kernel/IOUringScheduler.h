@@ -53,6 +53,8 @@ public:
     int addConnect(IOController* controller) override;
     int addRecv(IOController* controller) override;
     int addSend(IOController* controller) override;
+    int addReadv(IOController* controller) override;
+    int addWritev(IOController* controller) override;
     int addClose(IOController* controller) override;
     int addFileRead(IOController* controller) override;
     int addFileWrite(IOController* controller) override;

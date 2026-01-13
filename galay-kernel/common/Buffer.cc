@@ -1,5 +1,9 @@
 #include "Buffer.h"
 #include <stdexcept>
+#include <cassert>
+#include <sys/uio.h>
+#include <unistd.h>
+#include <errno.h>
 
 namespace galay::kernel
 {
@@ -153,13 +157,13 @@ namespace galay::kernel
         clearString(m_data);
     }
 
-    // ============ RingBuffer 实现（镜像缓冲区版本）============
+    // ============ RingBuffer 实现 ============
 
     RingBuffer::RingBuffer(size_t capacity)
-        : m_buffer(new uint8_t[capacity * 2])  // 分配2倍容量
+        : m_buffer(new char[capacity])
         , m_capacity(capacity)
-        , m_read_pos(0)
-        , m_write_pos(0)
+        , m_readIndex(0)
+        , m_writeIndex(0)
         , m_size(0)
     {
         if (capacity == 0) {
@@ -170,14 +174,14 @@ namespace galay::kernel
     RingBuffer::RingBuffer(RingBuffer&& other) noexcept
         : m_buffer(other.m_buffer)
         , m_capacity(other.m_capacity)
-        , m_read_pos(other.m_read_pos)
-        , m_write_pos(other.m_write_pos)
+        , m_readIndex(other.m_readIndex)
+        , m_writeIndex(other.m_writeIndex)
         , m_size(other.m_size)
     {
         other.m_buffer = nullptr;
         other.m_capacity = 0;
-        other.m_read_pos = 0;
-        other.m_write_pos = 0;
+        other.m_readIndex = 0;
+        other.m_writeIndex = 0;
         other.m_size = 0;
     }
 
@@ -185,17 +189,16 @@ namespace galay::kernel
     {
         if (this != &other) {
             delete[] m_buffer;
-            
             m_buffer = other.m_buffer;
             m_capacity = other.m_capacity;
-            m_read_pos = other.m_read_pos;
-            m_write_pos = other.m_write_pos;
+            m_readIndex = other.m_readIndex;
+            m_writeIndex = other.m_writeIndex;
             m_size = other.m_size;
-            
+
             other.m_buffer = nullptr;
             other.m_capacity = 0;
-            other.m_read_pos = 0;
-            other.m_write_pos = 0;
+            other.m_readIndex = 0;
+            other.m_writeIndex = 0;
             other.m_size = 0;
         }
         return *this;
@@ -206,156 +209,101 @@ namespace galay::kernel
         delete[] m_buffer;
     }
 
-    void RingBuffer::updateMirror()
+    std::vector<struct iovec> RingBuffer::getWriteIovecs()
     {
-        // 将前半部分的数据镜像到后半部分
-        // 只需要镜像可能被读取的部分
-        if (m_read_pos + m_size > m_capacity) {
-            // 数据会跨越边界，需要镜像
-            size_t mirror_start = m_read_pos;
-            size_t mirror_size = m_capacity - m_read_pos;
-            std::memcpy(m_buffer + m_capacity + mirror_start, 
-                       m_buffer + mirror_start, 
-                       mirror_size);
-        }
-    }
+        std::vector<struct iovec> iovecs;
 
-    std::pair<char*, size_t> RingBuffer::getWriteBuffer()
-    {
         if (m_size == m_capacity) {
-            return {nullptr, 0};
+            return iovecs;
         }
 
-        // 写位置对capacity取模
-        size_t write_idx = m_write_pos % m_capacity;
-        size_t available = m_capacity - m_size;
-        
-        // 返回写指针，可写到capacity末尾
-        size_t writable_size = std::min(available, m_capacity - write_idx);
-        
-        return {reinterpret_cast<char*>(m_buffer + write_idx), writable_size};
-    }
-
-    std::pair<const char*, size_t> RingBuffer::getReadBuffer() const
-    {
-        if (m_size == 0) {
-            return {nullptr, 0};
-        }
-
-        // 读位置对capacity取模
-        size_t read_idx = m_read_pos % m_capacity;
-        
-        // 由于使用了镜像，即使环绕也能保证连续读取
-        // 直接返回从read_idx开始的m_size字节
-        return {reinterpret_cast<const char*>(m_buffer + read_idx), m_size};
-    }
-
-    void RingBuffer::produce(size_t n)
-    {
-        if (n == 0) {
-            return;
-        }
-
-        size_t available = m_capacity - m_size;
-        if (n > available) {
-            n = available;
-        }
-
-        m_write_pos += n;
-        m_size += n;
-        
-        // 更新镜像
-        updateMirror();
-    }
-
-    void RingBuffer::consume(size_t n)
-    {
-        if (n == 0) {
-            return;
-        }
-
-        if (n > m_size) {
-            n = m_size;
-        }
-
-        m_read_pos += n;
-        m_size -= n;
-
-        // 如果读完了，重置指针到开头以避免溢出
-        if (m_size == 0) {
-            m_read_pos = 0;
-            m_write_pos = 0;
-        }
-        // 当read_pos太大时，整体向前移动
-        else if (m_read_pos >= m_capacity) {
-            m_read_pos -= m_capacity;
-            m_write_pos -= m_capacity;
-        }
-    }
-
-    void RingBuffer::resize(size_t new_capacity)
-    {
-        if (new_capacity < m_size) {
-            throw std::invalid_argument("New capacity must be >= current size");
-        }
-
-        if (new_capacity == m_capacity) {
-            return;
-        }
-
-        uint8_t* new_buffer = new uint8_t[new_capacity * 2];  // 分配2倍容量
-
-        // 复制现有数据到新缓冲区开头
-        if (m_size > 0) {
-            size_t read_idx = m_read_pos % m_capacity;
-            
-            if (read_idx + m_size <= m_capacity) {
-                // 数据连续
-                std::memcpy(new_buffer, m_buffer + read_idx, m_size);
-            } else {
-                // 数据环绕
-                size_t first_chunk = m_capacity - read_idx;
-                std::memcpy(new_buffer, m_buffer + read_idx, first_chunk);
-                std::memcpy(new_buffer + first_chunk, m_buffer, m_size - first_chunk);
+        if (m_writeIndex >= m_readIndex) {
+            // 可写区域: [writeIndex, capacity) 和 [0, readIndex)
+            size_t firstChunk = m_capacity - m_writeIndex;
+            if (firstChunk > 0) {
+                iovecs.push_back({m_buffer + m_writeIndex, firstChunk});
             }
-            
-            // 设置镜像
-            if (m_size > 0) {
-                std::memcpy(new_buffer + new_capacity, new_buffer, std::min(m_size, new_capacity));
+            if (m_readIndex > 0) {
+                iovecs.push_back({m_buffer, m_readIndex});
+            }
+        } else {
+            // 可写区域: [writeIndex, readIndex)
+            iovecs.push_back({m_buffer + m_writeIndex, m_readIndex - m_writeIndex});
+        }
+
+        return iovecs;
+    }
+
+    std::vector<struct iovec> RingBuffer::getReadIovecs() const
+    {
+        std::vector<struct iovec> iovecs;
+
+        if (m_size == 0) {
+            return iovecs;
+        }
+
+        if (m_readIndex < m_writeIndex) {
+            // 可读区域: [readIndex, writeIndex)
+            iovecs.push_back({const_cast<char*>(m_buffer + m_readIndex), m_writeIndex - m_readIndex});
+        } else {
+            // 可读区域: [readIndex, capacity) 和 [0, writeIndex)
+            size_t firstChunk = m_capacity - m_readIndex;
+            if (firstChunk > 0) {
+                iovecs.push_back({const_cast<char*>(m_buffer + m_readIndex), firstChunk});
+            }
+            if (m_writeIndex > 0) {
+                iovecs.push_back({const_cast<char*>(m_buffer), m_writeIndex});
             }
         }
 
-        delete[] m_buffer;
-        m_buffer = new_buffer;
-        m_capacity = new_capacity;
-        m_read_pos = 0;
-        m_write_pos = m_size;
+        return iovecs;
     }
 
-    size_t RingBuffer::readable() const
+    void RingBuffer::produce(size_t len)
     {
-        return m_size;
+        if (len == 0) return;
+        size_t actualLen = std::min(len, writable());
+        m_writeIndex = (m_writeIndex + actualLen) % m_capacity;
+        m_size += actualLen;
     }
 
-    size_t RingBuffer::writable() const
+    void RingBuffer::consume(size_t len)
     {
-        return m_capacity - m_size;
-    }
+        if (len == 0) return;
+        size_t actualLen = std::min(len, m_size);
+        m_readIndex = (m_readIndex + actualLen) % m_capacity;
+        m_size -= actualLen;
 
-    size_t RingBuffer::capacity() const
-    {
-        return m_capacity;
-    }
-
-    bool RingBuffer::empty() const
-    {
-        return m_size == 0;
+        if (m_size == 0) {
+            m_readIndex = 0;
+            m_writeIndex = 0;
+        }
     }
 
     void RingBuffer::clear()
     {
-        m_read_pos = 0;
-        m_write_pos = 0;
+        m_readIndex = 0;
+        m_writeIndex = 0;
         m_size = 0;
+    }
+
+    size_t RingBuffer::write(const void* data, size_t len)
+    {
+        if (len == 0 || writable() == 0) return 0;
+
+        const char* src = static_cast<const char*>(data);
+        size_t toWrite = std::min(len, writable());
+        size_t written = 0;
+
+        auto iovecs = getWriteIovecs();
+        for (const auto& iov : iovecs) {
+            if (written >= toWrite) break;
+            size_t chunkSize = std::min(iov.iov_len, toWrite - written);
+            std::memcpy(iov.iov_base, src + written, chunkSize);
+            written += chunkSize;
+        }
+
+        produce(written);
+        return written;
     }
 }

@@ -44,3 +44,8 @@ target_include_directories(bench_mpsc_channel PRIVATE ${CMAKE_SOURCE_DIR})
 add_executable(bench_unsafe_channel bench_unsafe_channel.cc)
 target_link_libraries(bench_unsafe_channel PRIVATE galay-kernel)
 target_include_directories(bench_unsafe_channel PRIVATE ${CMAKE_SOURCE_DIR})
+
+# RingBuffer 压测
+add_executable(bench_ringbuffer bench_ringbuffer.cc)
+target_link_libraries(bench_ringbuffer PRIVATE galay-kernel)
+target_include_directories(bench_ringbuffer PRIVATE ${CMAKE_SOURCE_DIR})

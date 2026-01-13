@@ -1,0 +1,195 @@
+# RingBuffer 环形缓冲区
+
+## 概述
+
+RingBuffer 是一个固定容量的环形缓冲区，专为网络 IO 场景设计，支持 scatter-gather IO（readv/writev）。
+
+## 特性
+
+- 固定容量，不自动扩容
+- 支持环绕读写
+- `getWriteIovecs()` 返回 1-2 个 iovec 用于 readv 接收数据
+- `getReadIovecs()` 返回 1-2 个 iovec 用于 writev 发送数据
+- 零拷贝设计
+
+## 内存布局
+
+```
+正常情况（read=100, write=500, capacity=1000）:
++--------+------------------+------------------+
+| 0-100  |    100-500       |    500-1000      |
+| 可写   |    可读数据       |     可写          |
++--------+------------------+------------------+
+
+环绕情况（read=800, write=200, capacity=1000）:
++------------------+--------+------------------+
+|     0-200        | 200-800|    800-1000      |
+|     可读         |  可写   |     可读          |
++------------------+--------+------------------+
+```
+
+## API
+
+### 构造函数
+
+```cpp
+explicit RingBuffer(size_t capacity = 4096);
+```
+
+### 基本信息查询
+
+```cpp
+size_t readable() const;   // 可读数据大小
+size_t writable() const;   // 可写空间大小
+size_t capacity() const;   // 缓冲区总容量
+bool empty() const;        // 是否为空
+bool full() const;         // 是否已满
+```
+
+### 核心接口
+
+```cpp
+// 获取可写区域（用于 readv）
+std::vector<struct iovec> getWriteIovecs();
+
+// 获取可读区域（用于 writev）
+std::vector<struct iovec> getReadIovecs() const;
+
+// 确认写入字节数
+void produce(size_t len);
+
+// 消费数据
+void consume(size_t len);
+
+// 清空缓冲区
+void clear();
+```
+
+### 便捷方法
+
+```cpp
+// 写入数据
+size_t write(const void* data, size_t len);
+size_t write(const std::string_view& str);
+```
+
+## 使用示例
+
+### 配合 readv 接收数据
+
+```cpp
+RingBuffer recvBuffer(4096);
+
+// 获取可写 iovec
+auto iovecs = recvBuffer.getWriteIovecs();
+
+// 使用 readv 接收数据
+auto result = co_await socket.readv(std::move(iovecs));
+if (result) {
+    recvBuffer.produce(result.value());
+}
+
+// 处理接收到的数据
+auto readIovecs = recvBuffer.getReadIovecs();
+for (const auto& iov : readIovecs) {
+    process(iov.iov_base, iov.iov_len);
+}
+recvBuffer.consume(recvBuffer.readable());
+```
+
+### 配合 writev 发送数据
+
+```cpp
+RingBuffer sendBuffer(4096);
+
+// 写入要发送的数据
+sendBuffer.write("Hello, World!", 13);
+
+// 获取可读 iovec
+auto iovecs = sendBuffer.getReadIovecs();
+
+// 使用 writev 发送数据
+auto result = co_await socket.writev(std::move(iovecs));
+if (result) {
+    sendBuffer.consume(result.value());
+}
+```
+
+### 完整的 Echo 服务器示例
+
+```cpp
+Coroutine handleClient(TcpSocket client) {
+    RingBuffer buffer(4096);
+
+    while (true) {
+        // 接收数据
+        auto writeIovecs = buffer.getWriteIovecs();
+        if (writeIovecs.empty()) {
+            // 缓冲区满，需要先发送
+            auto readIovecs = buffer.getReadIovecs();
+            auto sendResult = co_await client.writev(std::move(readIovecs));
+            if (!sendResult) break;
+            buffer.consume(sendResult.value());
+            continue;
+        }
+
+        auto recvResult = co_await client.readv(std::move(writeIovecs));
+        if (!recvResult || recvResult.value() == 0) break;
+        buffer.produce(recvResult.value());
+
+        // 发送数据
+        auto readIovecs = buffer.getReadIovecs();
+        auto sendResult = co_await client.writev(std::move(readIovecs));
+        if (!sendResult) break;
+        buffer.consume(sendResult.value());
+    }
+
+    co_await client.close();
+}
+```
+
+## 性能压测
+
+测试环境：macOS, Apple Silicon
+
+### 写入吞吐量
+
+| Chunk Size | 吞吐量 |
+|------------|--------|
+| 64 B | 356 MB/s (2.78 Gbps) |
+| 256 B | 1.35 GB/s (10.5 Gbps) |
+| 1 KB | 5.12 GB/s (40 Gbps) |
+| 4 KB | 18.1 GB/s (142 Gbps) |
+| 16 KB | 43.6 GB/s (341 Gbps) |
+
+### 读写吞吐量
+
+| Chunk Size | 吞吐量 |
+|------------|--------|
+| 64 B | 189 MB/s (1.48 Gbps) |
+| 256 B | 756 MB/s (5.91 Gbps) |
+| 1 KB | 2.98 GB/s (23.3 Gbps) |
+| 4 KB | 10.3 GB/s (80.3 Gbps) |
+| 16 KB | 24.4 GB/s (191 Gbps) |
+
+### 操作性能
+
+| 操作 | 性能 |
+|------|------|
+| getWriteIovecs | 7.64 M calls/s (131 ns/call) |
+| getReadIovecs | 7.45 M calls/s (134 ns/call) |
+| produce + consume | 116 M pairs/s (8.6 ns/pair) |
+
+### 模拟场景
+
+| 场景 | 吞吐量 |
+|------|--------|
+| 网络接收模拟 | 13.2 GB/s (103 Gbps) |
+| 网络发送模拟 | 3.62 GB/s (28.3 Gbps) |
+
+## 注意事项
+
+1. RingBuffer 是固定容量的，不会自动扩容
+2. `getReadIovecs()` 在数据环绕时返回 2 个 iovec，调用方需要处理多段数据
+3. 调用 `produce()` 和 `consume()` 时，实际移动的字节数会被限制在可用范围内
+4. 缓冲区为空时，读写指针会自动重置到起始位置，减少环绕

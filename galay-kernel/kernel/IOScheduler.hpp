@@ -116,6 +116,16 @@ inline auto IOController::getAwaitable() -> SendNotifyAwaitable* {
     return static_cast<SendNotifyAwaitable*>(m_awaitable[WRITE]);
 }
 
+template<>
+inline auto IOController::getAwaitable() -> ReadvAwaitable* {
+    return static_cast<ReadvAwaitable*>(m_awaitable[READ]);
+}
+
+template<>
+inline auto IOController::getAwaitable() -> WritevAwaitable* {
+    return static_cast<WritevAwaitable*>(m_awaitable[WRITE]);
+}
+
 /**
  * @brief IO调度器接口
  *
@@ -164,6 +174,20 @@ public:
      * @return 1表示立即完成，0表示已注册等待，<0表示错误
      */
     virtual int addSend(IOController* controller) = 0;
+
+    /**
+     * @brief 注册Readv事件（scatter-gather 读取）
+     * @param controller IO控制器
+     * @return 1表示立即完成，0表示已注册等待，<0表示错误
+     */
+    virtual int addReadv(IOController* controller) = 0;
+
+    /**
+     * @brief 注册Writev事件（scatter-gather 写入）
+     * @param controller IO控制器
+     * @return 1表示立即完成，0表示已注册等待，<0表示错误
+     */
+    virtual int addWritev(IOController* controller) = 0;
 
     /**
      * @brief 关闭文件描述符
@@ -263,6 +287,7 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
     m_type = type;
     switch (m_type) {
     case IOEventType::RECV:
+    case IOEventType::READV:
     case IOEventType::FILEREAD:
     case IOEventType::RECVFROM:
     case IOEventType::ACCEPT:
@@ -272,6 +297,7 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
         ++m_generation[READ];
         break;
     case IOEventType::SEND:
+    case IOEventType::WRITEV:
     case IOEventType::FILEWRITE:
     case IOEventType::SENDTO:
     case IOEventType::CONNECT:
@@ -288,6 +314,7 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
 inline void IOController::removeAwaitable(IOEventType type) {
     switch (m_type) {
     case IOEventType::RECV:
+    case IOEventType::READV:
     case IOEventType::FILEREAD:
     case IOEventType::RECVFROM:
     case IOEventType::ACCEPT:
@@ -296,6 +323,7 @@ inline void IOController::removeAwaitable(IOEventType type) {
         m_awaitable[READ] = nullptr;
         break;
     case IOEventType::SEND:
+    case IOEventType::WRITEV:
     case IOEventType::FILEWRITE:
     case IOEventType::SENDTO:
     case IOEventType::CONNECT:

@@ -154,6 +154,44 @@ int EpollScheduler::addSend(IOController* controller)
     return ret;
 }
 
+int EpollScheduler::addReadv(IOController* controller)
+{
+    if (handleReadv(controller)) {
+        return OK;
+    }
+
+    auto awaitable = controller->getAwaitable<ReadvAwaitable>();
+    if (awaitable == nullptr) return -1;
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.ptr = controller;
+
+    int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
+    if (ret == -1 && errno == ENOENT) {
+        ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, controller->m_handle.fd, &ev);
+    }
+    return ret;
+}
+
+int EpollScheduler::addWritev(IOController* controller)
+{
+    if (handleWritev(controller)) {
+        return OK;
+    }
+
+    auto awaitable = controller->getAwaitable<WritevAwaitable>();
+    if (awaitable == nullptr) return -1;
+    struct epoll_event ev;
+    ev.events = EPOLLOUT | EPOLLET;
+    ev.data.ptr = controller;
+
+    int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
+    if (ret == -1 && errno == ENOENT) {
+        ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, controller->m_handle.fd, &ev);
+    }
+    return ret;
+}
+
 int EpollScheduler::addClose(IOController* controller)
 {
     close(controller->m_handle.fd);
@@ -289,6 +327,26 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         if (ev.events & EPOLLOUT) {
             handleSend(controller);
             SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
+            if (awaitable == nullptr) return;
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
+    case READV:
+    {
+        if (ev.events & EPOLLIN) {
+            handleReadv(controller);
+            ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
+            if (awaitable == nullptr) return;
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
+    case WRITEV:
+    {
+        if (ev.events & EPOLLOUT) {
+            handleWritev(controller);
+            WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
             if (awaitable == nullptr) return;
             awaitable->m_waker.wakeUp();
         }
@@ -454,6 +512,49 @@ bool EpollScheduler::handleSend(IOController* controller)
 
     if (sentBytes >= 0) {
         awaitable->m_result = static_cast<size_t>(sentBytes);
+        return true;
+    } else {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return false;
+        }
+        awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
+        return true;
+    }
+}
+
+bool EpollScheduler::handleReadv(IOController* controller)
+{
+    ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
+    if (awaitable == nullptr) return false;
+
+    ssize_t readBytes = readv(controller->m_handle.fd, awaitable->m_iovecs.data(),
+                              static_cast<int>(awaitable->m_iovecs.size()));
+
+    if (readBytes > 0) {
+        awaitable->m_result = static_cast<size_t>(readBytes);
+        return true;
+    } else if (readBytes == 0) {
+        awaitable->m_result = std::unexpected(IOError(kDisconnectError, 0));
+        return true;
+    } else {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return false;
+        }
+        awaitable->m_result = std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno)));
+        return true;
+    }
+}
+
+bool EpollScheduler::handleWritev(IOController* controller)
+{
+    WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
+    if (awaitable == nullptr) return false;
+
+    ssize_t writtenBytes = writev(controller->m_handle.fd, awaitable->m_iovecs.data(),
+                                  static_cast<int>(awaitable->m_iovecs.size()));
+
+    if (writtenBytes >= 0) {
+        awaitable->m_result = static_cast<size_t>(writtenBytes);
         return true;
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {

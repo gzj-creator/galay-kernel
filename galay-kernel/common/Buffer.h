@@ -1,10 +1,13 @@
 #ifndef GALAY_BUFFER_H
-#define GALAY_BUFFER_H 
+#define GALAY_BUFFER_H
 
 #include <algorithm>
 #include <cstring>
 #include <string>
 #include <cstdint>
+#include <vector>
+#include <sys/types.h>
+#include <sys/uio.h>
 
 namespace galay::kernel
 {
@@ -202,118 +205,109 @@ namespace galay::kernel
     };
 
     /**
-     * @brief 环形缓冲区类
-     * @details 使用镜像缓冲区技术，分配2倍容量的内存，前半部分镜像到后半部分
-     *          这样任何位置的数据在逻辑上都是连续的，无需内存拷贝
-     *          适用于网络I/O和流式数据处理，支持动态扩容
+     * @brief 环形缓冲区
+     * @details 支持环绕读写，提供简洁的接口用于网络 IO
+     *
+     *          内存布局示例（容量1000，read=800，write=200，环绕情况）:
+     *          +------------------+--------+------------------+
+     *          |     0-200        | 200-800|    800-1000      |
+     *          |     可读         |  可写   |     可读          |
+     *          +------------------+--------+------------------+
+     *
+     *          特性:
+     *          - 固定容量，不自动扩容
+     *          - 支持环绕读写
+     *          - getWriteIovecs() 返回1-2个iovec用于 readv 接收数据
+     *          - readableView() 自动线性化，返回连续的 string_view
      */
     class RingBuffer
     {
     public:
-        /**
-         * @brief 构造函数，创建指定容量的环形缓冲区
-         * @param capacity 初始容量，默认为4096字节
-         */
-        explicit RingBuffer(size_t capacity = 4096);
+        static constexpr size_t kDefaultCapacity = 4096;
 
         /**
-         * @brief 禁止拷贝构造
+         * @brief 构造函数
+         * @param capacity 缓冲区容量（固定大小）
          */
+        explicit RingBuffer(size_t capacity = kDefaultCapacity);
+
         RingBuffer(const RingBuffer&) = delete;
-
-        /**
-         * @brief 禁止拷贝赋值
-         */
         RingBuffer& operator=(const RingBuffer&) = delete;
 
-        /**
-         * @brief 移动构造函数
-         */
         RingBuffer(RingBuffer&& other) noexcept;
-
-        /**
-         * @brief 移动赋值运算符
-         */
         RingBuffer& operator=(RingBuffer&& other) noexcept;
 
-        /**
-         * @brief 析构函数
-         */
         ~RingBuffer();
 
-        /**
-         * @brief 获取写缓冲区指针和可写大小
-         * @details 返回连续的可写空间
-         * @return pair<写指针, 可写字节数>
-         */
-        std::pair<char*, size_t> getWriteBuffer();
+        // ============ 基本信息查询 ============
+
+        size_t readable() const { return m_size; }
+        size_t writable() const { return m_capacity - m_size; }
+        size_t capacity() const { return m_capacity; }
+        bool empty() const { return m_size == 0; }
+        bool full() const { return m_size == m_capacity; }
+
+        // ============ 核心接口 ============
 
         /**
-         * @brief 获取读缓冲区指针和可读大小
-         * @details 返回连续的可读数据（通过镜像实现零拷贝）
-         * @return pair<读指针, 可读字节数>
+         * @brief 获取可写区域的 iovec 向量（用于 readv）
+         * @return 1-2个iovec，描述可写的连续内存区域
+         *
+         * @code
+         * auto iovecs = buffer.getWriteIovecs();
+         * ssize_t n = co_await socket.readv(std::move(iovecs));
+         * buffer.produce(n);
+         * @endcode
          */
-        std::pair<const char*, size_t> getReadBuffer() const;
+        std::vector<struct iovec> getWriteIovecs();
 
         /**
-         * @brief 移动写指针（提交写入）
-         * @param n 写入的字节数
+         * @brief 获取可读区域的 iovec 向量（用于 writev）
+         * @return 1-2个iovec，描述可读的连续内存区域
+         *
+         * @code
+         * auto iovecs = buffer.getReadIovecs();
+         * ssize_t n = co_await socket.writev(std::move(iovecs));
+         * buffer.consume(n);
+         * @endcode
          */
-        void produce(size_t n);
+        std::vector<struct iovec> getReadIovecs() const;
 
         /**
-         * @brief 移动读指针（消费数据）
-         * @param n 消费的字节数
+         * @brief 确认已写入的字节数（移动写指针）
+         * @param len 已写入的字节数
          */
-        void consume(size_t n);
+        void produce(size_t len);
 
         /**
-         * @brief 扩容到指定大小
-         * @param new_capacity 新的容量大小
-         * @details 新容量必须大于等于当前数据量
+         * @brief 消费指定字节数的数据（移动读指针）
+         * @param len 要消费的字节数
          */
-        void resize(size_t new_capacity);
+        void consume(size_t len);
 
         /**
-         * @brief 获取当前可读数据大小
-         * @return 可读字节数
-         */
-        size_t readable() const;
-
-        /**
-         * @brief 获取当前可写空间大小
-         * @return 可写字节数
-         */
-        size_t writable() const;
-
-        /**
-         * @brief 获取缓冲区总容量
-         * @return 总容量字节数
-         */
-        size_t capacity() const;
-
-        /**
-         * @brief 检查缓冲区是否为空
-         * @return true表示为空
-         */
-        bool empty() const;
-
-        /**
-         * @brief 清空缓冲区（不释放内存）
+         * @brief 清空缓冲区（重置读写指针）
          */
         void clear();
 
-    private:
-        /**
-         * @brief 更新镜像区域
-         * @details 将前半部分修改的数据同步到后半部分
-         */
-        void updateMirror();
+        // ============ 便捷方法 ============
 
-        uint8_t* m_buffer;      ///< 缓冲区指针（实际分配2*capacity大小）
-        size_t m_capacity;      ///< 逻辑容量
-        size_t m_read_pos;      ///< 读位置
-        size_t m_write_pos;     ///< 写位置
+        /**
+         * @brief 写入数据到缓冲区
+         * @param data 数据指针
+         * @param len 数据长度
+         * @return 实际写入的字节数
+         */
+        size_t write(const void* data, size_t len);
+        size_t write(const std::string_view& str) {
+            return write(str.data(), str.size());
+        }
+
+    private:
+        char* m_buffer;         ///< 底层存储
+        size_t m_capacity;      ///< 缓冲区容量
+        size_t m_readIndex;     ///< 读指针位置
+        size_t m_writeIndex;    ///< 写指针位置
         size_t m_size;          ///< 当前数据量
     };
 }

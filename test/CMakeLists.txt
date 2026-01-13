@@ -85,3 +85,12 @@ add_executable(test_timer_scheduler test_timer_scheduler.cc)
 target_link_libraries(test_timer_scheduler PRIVATE galay-kernel)
 target_include_directories(test_timer_scheduler PRIVATE ${CMAKE_SOURCE_DIR})
 
+# readv/writev测试
+add_executable(test_readv_writev test_readv_writev.cc)
+target_link_libraries(test_readv_writev PRIVATE galay-kernel)
+target_include_directories(test_readv_writev PRIVATE ${CMAKE_SOURCE_DIR})
+
+# RingBuffer + readv/writev 集成测试
+add_executable(test_ringbuffer_io test_ringbuffer_io.cc)
+target_link_libraries(test_ringbuffer_io PRIVATE galay-kernel)
+target_include_directories(test_ringbuffer_io PRIVATE ${CMAKE_SOURCE_DIR})
