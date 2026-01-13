@@ -152,7 +152,9 @@ Coroutine handleClient(TcpSocket client) {
 
 测试环境：macOS, Apple Silicon
 
-### 写入吞吐量
+### RingBuffer 内存操作性能
+
+#### 写入吞吐量
 
 | Chunk Size | 吞吐量 |
 |------------|--------|
@@ -162,7 +164,7 @@ Coroutine handleClient(TcpSocket client) {
 | 4 KB | 18.1 GB/s (142 Gbps) |
 | 16 KB | 43.6 GB/s (341 Gbps) |
 
-### 读写吞吐量
+#### 读写吞吐量
 
 | Chunk Size | 吞吐量 |
 |------------|--------|
@@ -172,7 +174,7 @@ Coroutine handleClient(TcpSocket client) {
 | 4 KB | 10.3 GB/s (80.3 Gbps) |
 | 16 KB | 24.4 GB/s (191 Gbps) |
 
-### 操作性能
+#### 操作性能
 
 | 操作 | 性能 |
 |------|------|
@@ -180,12 +182,38 @@ Coroutine handleClient(TcpSocket client) {
 | getReadIovecs | 7.45 M calls/s (134 ns/call) |
 | produce + consume | 116 M pairs/s (8.6 ns/pair) |
 
-### 模拟场景
+#### 模拟场景
 
 | 场景 | 吞吐量 |
 |------|--------|
 | 网络接收模拟 | 13.2 GB/s (103 Gbps) |
 | 网络发送模拟 | 3.62 GB/s (28.3 Gbps) |
+
+### TCP Echo 性能对比：recv/send vs readv/writev
+
+测试条件：100 并发连接，256 字节消息，10 秒持续时间
+
+| 方式 | QPS | 吞吐量 | 总请求数 |
+|------|-----|--------|----------|
+| recv/send | 217,746 | 106.3 MB/s | 2,177,463 |
+| readv/writev + RingBuffer | 227,027 | 110.9 MB/s | 2,270,275 |
+| **性能提升** | **+4.3%** | **+4.3%** | **+4.3%** |
+
+#### 压测命令
+
+```bash
+# recv/send 版本
+./build/bin/bench_tcp_server 8080 &
+./build/bin/bench_tcp_client -p 8080 -c 100 -s 256 -d 10
+
+# readv/writev 版本
+./build/bin/bench_tcp_iov_server 8081 &
+./build/bin/bench_tcp_iov_client -p 8081 -c 100 -s 256 -d 10
+```
+
+#### 结论
+
+在小消息（256字节）Echo 场景下，readv/writev + RingBuffer 相比普通 recv/send 有约 4.3% 的性能提升。在大消息或需要处理多个缓冲区的场景下，scatter-gather IO 的优势会更加明显。
 
 ## 注意事项
 

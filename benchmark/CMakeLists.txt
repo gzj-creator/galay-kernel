@@ -49,3 +49,13 @@ target_include_directories(bench_unsafe_channel PRIVATE ${CMAKE_SOURCE_DIR})
 add_executable(bench_ringbuffer bench_ringbuffer.cc)
 target_link_libraries(bench_ringbuffer PRIVATE galay-kernel)
 target_include_directories(bench_ringbuffer PRIVATE ${CMAKE_SOURCE_DIR})
+
+# TCP IOV 压测服务器 (readv/writev)
+add_executable(bench_tcp_iov_server bench_tcp_iov_server.cc)
+target_link_libraries(bench_tcp_iov_server PRIVATE galay-kernel)
+target_include_directories(bench_tcp_iov_server PRIVATE ${CMAKE_SOURCE_DIR})
+
+# TCP IOV 压测客户端 (readv/writev)
+add_executable(bench_tcp_iov_client bench_tcp_iov_client.cc)
+target_link_libraries(bench_tcp_iov_client PRIVATE galay-kernel)
+target_include_directories(bench_tcp_iov_client PRIVATE ${CMAKE_SOURCE_DIR})
