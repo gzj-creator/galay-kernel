@@ -7,12 +7,29 @@
 
 #include "Runtime.h"
 #include <algorithm>
+#include <thread>
+
+// 根据平台选择默认的 IO 调度器
+#if defined(__APPLE__) || defined(__FreeBSD__)
+#include "KqueueScheduler.h"
+using DefaultIOScheduler = galay::kernel::KqueueScheduler;
+#elif defined(__linux__)
+#ifdef USE_IOURING
+#include "IOUringScheduler.h"
+using DefaultIOScheduler = galay::kernel::IOUringScheduler;
+#else
+#include "EpollScheduler.h"
+using DefaultIOScheduler = galay::kernel::EpollScheduler;
+#endif
+#endif
 
 namespace galay::kernel
 {
 
-Runtime::Runtime(LoadBalanceStrategy strategy)
+Runtime::Runtime(LoadBalanceStrategy strategy, size_t io_count, size_t compute_count)
     : m_strategy(strategy)
+    , m_auto_io_count(io_count)
+    , m_auto_compute_count(compute_count)
 {
 }
 
@@ -89,6 +106,11 @@ void Runtime::start()
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);
+
+    // 如果没有手动添加调度器，则自动创建
+    if (m_io_schedulers.empty() && m_compute_schedulers.empty()) {
+        createDefaultSchedulers();
+    }
 
     // 启动所有 IO 调度器
     for (auto& scheduler : m_io_schedulers) {
@@ -170,6 +192,30 @@ ComputeScheduler* Runtime::getNextComputeScheduler()
         auto result = balancer.select();
         return result.has_value() ? result.value() : nullptr;
     }, *m_compute_load_balancer);
+}
+
+size_t Runtime::getCPUCount()
+{
+    size_t count = std::thread::hardware_concurrency();
+    return count > 0 ? count : 4;  // 如果无法获取，默认返回 4
+}
+
+void Runtime::createDefaultSchedulers()
+{
+    // 计算默认数量
+    size_t cpu_count = getCPUCount();
+    size_t io_count = m_auto_io_count > 0 ? m_auto_io_count : (cpu_count * 2);
+    size_t compute_count = m_auto_compute_count > 0 ? m_auto_compute_count : cpu_count;
+
+    // 创建 IO 调度器
+    for (size_t i = 0; i < io_count; ++i) {
+        m_io_schedulers.push_back(std::make_unique<DefaultIOScheduler>());
+    }
+
+    // 创建计算调度器
+    for (size_t i = 0; i < compute_count; ++i) {
+        m_compute_schedulers.push_back(std::make_unique<ComputeScheduler>());
+    }
 }
 
 } // namespace galay::kernel

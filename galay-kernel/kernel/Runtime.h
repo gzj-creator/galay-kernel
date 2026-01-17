@@ -9,21 +9,20 @@
  *
  * 使用方式：
  * @code
- * // 使用默认轮询策略
+ * // 方式1: 零配置启动（自动创建默认数量的调度器）
  * Runtime runtime;
+ * runtime.start();  // 自动创建 2*CPU 核心数的 IO 调度器和 CPU 核心数的计算调度器
  *
- * // 或使用指定的负载均衡策略
- * Runtime runtime(LoadBalanceStrategy::RANDOM);
+ * // 方式2: 指定调度器数量
+ * Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, 4, 8);  // 4 个 IO 调度器，8 个计算调度器
+ * runtime.start();
  *
- * // 添加 IO 调度器
+ * // 方式3: 手动添加调度器
+ * Runtime runtime;
  * auto io_scheduler = std::make_unique<EpollScheduler>();
  * runtime.addIOScheduler(std::move(io_scheduler));
- *
- * // 添加计算调度器
  * auto compute_scheduler = std::make_unique<ComputeScheduler>();
  * runtime.addComputeScheduler(std::move(compute_scheduler));
- *
- * // 启动所有调度器
  * runtime.start();
  *
  * // 获取调度器（使用负载均衡策略）
@@ -63,12 +62,14 @@ enum class LoadBalanceStrategy {
  *
  * @details 管理多个 IO 调度器和计算调度器的生命周期。
  * 特点：
- * - 支持动态添加调度器（启动前）
+ * - 支持自动创建默认数量的调度器（基于 CPU 核心数）
+ * - 支持手动添加调度器（启动前）
  * - 统一启动和停止所有调度器
  * - 支持多种负载均衡策略（轮询、随机）
  * - 线程安全的调度器访问
  *
  * @note
+ * - 如果不手动添加调度器，start() 会自动创建默认数量的调度器
  * - 调度器应在 start() 之前添加
  * - start() 后不应再添加新的调度器
  * - stop() 会等待所有调度器停止
@@ -77,10 +78,17 @@ class Runtime
 {
 public:
     /**
-     * @brief 构造函数
+     * @brief 构造函数（自动配置模式）
      * @param strategy 负载均衡策略，默认为轮询
+     * @param io_count IO 调度器数量，0 表示自动（2 * CPU 核心数）
+     * @param compute_count 计算调度器数量，0 表示自动（CPU 核心数）
+     * @note 如果指定了数量，会在 start() 时自动创建对应数量的调度器
      */
-    explicit Runtime(LoadBalanceStrategy strategy = LoadBalanceStrategy::ROUND_ROBIN);
+    explicit Runtime(
+        LoadBalanceStrategy strategy = LoadBalanceStrategy::ROUND_ROBIN,
+        size_t io_count = 0,
+        size_t compute_count = 0
+    );
 
     /**
      * @brief 析构函数
@@ -178,6 +186,16 @@ private:
      */
     void initLoadBalancers();
 
+    /**
+     * @brief 创建默认的调度器
+     */
+    void createDefaultSchedulers();
+
+    /**
+     * @brief 获取 CPU 核心数
+     */
+    static size_t getCPUCount();
+
 private:
     using IOLoadBalancer = std::variant<
         details::RoundRobinLoadBalancer<IOScheduler*>,
@@ -195,6 +213,9 @@ private:
     LoadBalanceStrategy m_strategy;                                      ///< 负载均衡策略
     std::unique_ptr<IOLoadBalancer> m_io_load_balancer;                 ///< IO 调度器负载均衡器
     std::unique_ptr<ComputeLoadBalancer> m_compute_load_balancer;       ///< 计算调度器负载均衡器
+
+    size_t m_auto_io_count;                                              ///< 自动创建的 IO 调度器数量（0 表示不自动创建）
+    size_t m_auto_compute_count;                                         ///< 自动创建的计算调度器数量（0 表示不自动创建）
 
     std::atomic<bool> m_running{false};                                  ///< 运行状态
     mutable std::mutex m_mutex;                                          ///< 保护调度器列表的互斥锁

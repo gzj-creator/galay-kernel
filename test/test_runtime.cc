@@ -272,22 +272,98 @@ void test_runtime_with_tasks() {
     ++g_passed;
 }
 
-// ============== 测试5: 空 Runtime（无调度器） ==============
-void test_runtime_empty() {
+// ============== 测试5: 自动配置（零配置启动） ==============
+void test_runtime_auto_config() {
     ++g_total;
-    std::cout << "\n[测试5] 空 Runtime（无调度器）" << std::endl;
+    std::cout << "\n[测试5] 自动配置（零配置启动）" << std::endl;
 
-    Runtime runtime;
+    Runtime runtime;  // 不手动添加任何调度器
 
-    runtime.start();
+    runtime.start();  // 应该自动创建默认数量的调度器
 
+    // 检查是否自动创建了调度器
+    size_t io_count = runtime.getIOSchedulerCount();
+    size_t compute_count = runtime.getComputeSchedulerCount();
+
+    std::cout << "  自动创建: " << io_count << " 个 IO 调度器, "
+              << compute_count << " 个计算调度器" << std::endl;
+
+    if (io_count == 0 || compute_count == 0) {
+        std::cout << "❌ 自动配置失败，调度器数量为 0" << std::endl;
+        runtime.stop();
+        return;
+    }
+
+    // 测试能否正常获取调度器
     auto* io = runtime.getNextIOScheduler();
     auto* compute = runtime.getNextComputeScheduler();
 
+    if (!io || !compute) {
+        std::cout << "❌ 无法获取自动创建的调度器" << std::endl;
+        runtime.stop();
+        return;
+    }
+
     runtime.stop();
 
-    if (io != nullptr || compute != nullptr) {
-        std::cout << "❌ 空 Runtime 应返回 nullptr" << std::endl;
+    std::cout << "✅ 测试通过" << std::endl;
+    ++g_passed;
+}
+
+// ============== 测试6: 指定调度器数量 ==============
+void test_runtime_specified_count() {
+    ++g_total;
+    std::cout << "\n[测试6] 指定调度器数量" << std::endl;
+
+    // 指定创建 3 个 IO 调度器和 5 个计算调度器
+    Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, 3, 5);
+
+    runtime.start();
+
+    size_t io_count = runtime.getIOSchedulerCount();
+    size_t compute_count = runtime.getComputeSchedulerCount();
+
+    std::cout << "  创建: " << io_count << " 个 IO 调度器, "
+              << compute_count << " 个计算调度器" << std::endl;
+
+    runtime.stop();
+
+    if (io_count != 3 || compute_count != 5) {
+        std::cout << "❌ 调度器数量不符合预期" << std::endl;
+        return;
+    }
+
+    std::cout << "✅ 测试通过" << std::endl;
+    ++g_passed;
+}
+
+// ============== 测试7: 手动添加优先于自动配置 ==============
+void test_runtime_manual_priority() {
+    ++g_total;
+    std::cout << "\n[测试7] 手动添加优先于自动配置" << std::endl;
+
+    // 指定自动创建数量，但手动添加调度器
+    Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, 10, 10);
+
+    // 手动添加 2 个 IO 调度器
+    auto io1 = std::make_unique<IOSchedulerType>();
+    auto io2 = std::make_unique<IOSchedulerType>();
+    runtime.addIOScheduler(std::move(io1));
+    runtime.addIOScheduler(std::move(io2));
+
+    runtime.start();
+
+    size_t io_count = runtime.getIOSchedulerCount();
+    size_t compute_count = runtime.getComputeSchedulerCount();
+
+    std::cout << "  实际创建: " << io_count << " 个 IO 调度器, "
+              << compute_count << " 个计算调度器" << std::endl;
+
+    runtime.stop();
+
+    // 手动添加的调度器应该被使用，不会自动创建
+    if (io_count != 2 || compute_count != 0) {
+        std::cout << "❌ 手动添加后不应自动创建调度器" << std::endl;
         return;
     }
 
@@ -305,7 +381,9 @@ int main() {
     test_runtime_no_add_after_start();
     test_runtime_round_robin();
     test_runtime_with_tasks();
-    test_runtime_empty();
+    test_runtime_auto_config();
+    test_runtime_specified_count();
+    test_runtime_manual_priority();
 
     std::cout << "\n========================================" << std::endl;
     std::cout << "测试结果: " << g_passed.load() << "/" << g_total.load() << " 通过" << std::endl;

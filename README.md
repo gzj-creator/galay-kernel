@@ -78,30 +78,16 @@ cmake .. -DENABLE_LOG=OFF -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF
 
 Runtime 提供统一的调度器管理，支持多个 IO 调度器和计算调度器，并提供负载均衡策略。
 
+**零配置启动（推荐）**：
+
 ```cpp
 #include "galay-kernel/kernel/Runtime.h"
-#include "galay-kernel/kernel/KqueueScheduler.h"
-#include "galay-kernel/kernel/ComputeScheduler.h"
 
 using namespace galay::kernel;
 
 int main() {
-    // 创建 Runtime，使用轮询负载均衡策略
-    Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN);
-
-    // 添加 2 个 IO 调度器
-    for (int i = 0; i < 2; ++i) {
-        auto io_scheduler = std::make_unique<KqueueScheduler>();
-        runtime.addIOScheduler(std::move(io_scheduler));
-    }
-
-    // 添加 4 个计算调度器
-    for (int i = 0; i < 4; ++i) {
-        auto compute_scheduler = std::make_unique<ComputeScheduler>();
-        runtime.addComputeScheduler(std::move(compute_scheduler));
-    }
-
-    // 启动所有调度器
+    // 零配置启动：自动创建 2*CPU 核心数的 IO 调度器和 CPU 核心数的计算调度器
+    Runtime runtime;
     runtime.start();
 
     // 使用负载均衡获取调度器
@@ -113,9 +99,31 @@ int main() {
 
     // ... wait for signal
 
-    // 停止所有调度器
     runtime.stop();
 }
+```
+
+**指定调度器数量**：
+
+```cpp
+// 创建 4 个 IO 调度器和 8 个计算调度器
+Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, 4, 8);
+runtime.start();
+```
+
+**手动添加调度器**：
+
+```cpp
+Runtime runtime;
+
+// 手动添加特定类型的调度器
+auto io_scheduler = std::make_unique<KqueueScheduler>();
+runtime.addIOScheduler(std::move(io_scheduler));
+
+auto compute_scheduler = std::make_unique<ComputeScheduler>();
+runtime.addComputeScheduler(std::move(compute_scheduler));
+
+runtime.start();
 ```
 
 ### Echo 服务器
@@ -243,23 +251,27 @@ galay-kernel/
 
 ```cpp
 class Runtime {
-    // 构造
-    explicit Runtime(LoadBalanceStrategy strategy = LoadBalanceStrategy::ROUND_ROBIN);
+    // 构造（支持零配置启动）
+    explicit Runtime(
+        LoadBalanceStrategy strategy = LoadBalanceStrategy::ROUND_ROBIN,
+        size_t io_count = 0,        // 0 表示自动（2 * CPU 核心数）
+        size_t compute_count = 0    // 0 表示自动（CPU 核心数）
+    );
 
-    // 添加调度器 (必须在 start() 之前)
+    // 添加调度器 (必须在 start() 之前，可选)
     bool addIOScheduler(std::unique_ptr<IOScheduler> scheduler);
     bool addComputeScheduler(std::unique_ptr<ComputeScheduler> scheduler);
 
     // 生命周期管理
-    void start();  // 启动所有调度器
+    void start();  // 启动所有调度器（如果没有手动添加，会自动创建）
     void stop();   // 停止所有调度器
     bool isRunning() const;
 
     // 获取调度器
     IOScheduler* getIOScheduler(size_t index);           // 按索引获取
     ComputeScheduler* getComputeScheduler(size_t index); // 按索引获取
-    IOScheduler* getNextIOScheduler();                   // 负载均衡获取
-    ComputeScheduler* getNextComputeScheduler();         // 负载均衡获取
+    IOScheduler* getNextIOScheduler();                   // 负载均衡获取（推荐）
+    ComputeScheduler* getNextComputeScheduler();         // 负载均衡获取（推荐）
 
     // 查询
     size_t getIOSchedulerCount() const;
@@ -269,7 +281,7 @@ class Runtime {
 
 // 负载均衡策略
 enum class LoadBalanceStrategy {
-    ROUND_ROBIN,  // 轮询
+    ROUND_ROBIN,  // 轮询（默认）
     RANDOM        // 随机
 };
 ```
