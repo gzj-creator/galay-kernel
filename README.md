@@ -74,6 +74,50 @@ cmake .. -DENABLE_LOG=OFF -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF
 
 ## 使用示例
 
+### Runtime 多调度器管理
+
+Runtime 提供统一的调度器管理，支持多个 IO 调度器和计算调度器，并提供负载均衡策略。
+
+```cpp
+#include "galay-kernel/kernel/Runtime.h"
+#include "galay-kernel/kernel/KqueueScheduler.h"
+#include "galay-kernel/kernel/ComputeScheduler.h"
+
+using namespace galay::kernel;
+
+int main() {
+    // 创建 Runtime，使用轮询负载均衡策略
+    Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN);
+
+    // 添加 2 个 IO 调度器
+    for (int i = 0; i < 2; ++i) {
+        auto io_scheduler = std::make_unique<KqueueScheduler>();
+        runtime.addIOScheduler(std::move(io_scheduler));
+    }
+
+    // 添加 4 个计算调度器
+    for (int i = 0; i < 4; ++i) {
+        auto compute_scheduler = std::make_unique<ComputeScheduler>();
+        runtime.addComputeScheduler(std::move(compute_scheduler));
+    }
+
+    // 启动所有调度器
+    runtime.start();
+
+    // 使用负载均衡获取调度器
+    auto* io_scheduler = runtime.getNextIOScheduler();
+    auto* compute_scheduler = runtime.getNextComputeScheduler();
+
+    // 提交任务
+    io_scheduler->spawn(serverTask(&runtime));
+
+    // ... wait for signal
+
+    // 停止所有调度器
+    runtime.stop();
+}
+```
+
 ### Echo 服务器
 
 ```cpp
@@ -150,6 +194,8 @@ galay-kernel/
 │   ├── kernel/             # 协程调度器
 │   │   ├── Coroutine.h/cc  # 协程实现
 │   │   ├── Scheduler.h/cc  # 调度器基类
+│   │   ├── Runtime.h/cc    # 多调度器管理器
+│   │   ├── ComputeScheduler.h/cc # 计算调度器
 │   │   ├── Awaitable.h/cc  # 可等待对象
 │   │   ├── Waker.h/cc      # 协程唤醒器
 │   │   └── KqueueScheduler.h/cc  # kqueue 调度器
@@ -159,11 +205,13 @@ galay-kernel/
 │       ├── Defn.hpp        # 平台定义
 │       ├── Buffer.h/cc     # 缓冲区
 │       ├── Bytes.h/cc      # 字节容器
+│       ├── Strategy.hpp/inl # 负载均衡策略
 │       ├── Error.h/cc      # 错误处理
 │       ├── Host.hpp        # 地址封装
 │       ├── HandleOption.h/cc # 句柄选项
 │       └── Log.h           # 日志封装
 ├── test/                   # 测试代码
+│   └── test_runtime.cc     # Runtime 测试
 ├── benchmark/              # 压测工具
 │   ├── bench_server.cc     # 压测服务器
 │   └── bench_client.cc     # 压测客户端
@@ -190,6 +238,41 @@ galay-kernel/
 ```
 
 ## API 参考
+
+### Runtime
+
+```cpp
+class Runtime {
+    // 构造
+    explicit Runtime(LoadBalanceStrategy strategy = LoadBalanceStrategy::ROUND_ROBIN);
+
+    // 添加调度器 (必须在 start() 之前)
+    bool addIOScheduler(std::unique_ptr<IOScheduler> scheduler);
+    bool addComputeScheduler(std::unique_ptr<ComputeScheduler> scheduler);
+
+    // 生命周期管理
+    void start();  // 启动所有调度器
+    void stop();   // 停止所有调度器
+    bool isRunning() const;
+
+    // 获取调度器
+    IOScheduler* getIOScheduler(size_t index);           // 按索引获取
+    ComputeScheduler* getComputeScheduler(size_t index); // 按索引获取
+    IOScheduler* getNextIOScheduler();                   // 负载均衡获取
+    ComputeScheduler* getNextComputeScheduler();         // 负载均衡获取
+
+    // 查询
+    size_t getIOSchedulerCount() const;
+    size_t getComputeSchedulerCount() const;
+    LoadBalanceStrategy getLoadBalanceStrategy() const;
+};
+
+// 负载均衡策略
+enum class LoadBalanceStrategy {
+    ROUND_ROBIN,  // 轮询
+    RANDOM        // 随机
+};
+```
 
 ### TcpSocket
 

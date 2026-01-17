@@ -94,3 +94,8 @@ target_include_directories(test_readv_writev PRIVATE ${CMAKE_SOURCE_DIR})
 add_executable(test_ringbuffer_io test_ringbuffer_io.cc)
 target_link_libraries(test_ringbuffer_io PRIVATE galay-kernel)
 target_include_directories(test_ringbuffer_io PRIVATE ${CMAKE_SOURCE_DIR})
+
+# Runtime测试 (管理多个调度器)
+add_executable(test_runtime test_runtime.cc)
+target_link_libraries(test_runtime PRIVATE galay-kernel)
+target_include_directories(test_runtime PRIVATE ${CMAKE_SOURCE_DIR})

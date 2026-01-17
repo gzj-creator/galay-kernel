@@ -72,6 +72,23 @@ enum SchedulerType {
 class Scheduler {
 public:
     /**
+     * @brief 虚析构函数
+     */
+    virtual ~Scheduler() = default;
+
+    /**
+     * @brief 启动调度器
+     * @note 子类必须实现此方法
+     */
+    virtual void start() = 0;
+
+    /**
+     * @brief 停止调度器
+     * @note 子类必须实现此方法
+     */
+    virtual void stop() = 0;
+
+    /**
      * @brief 提交协程到调度器执行
      * @param co 要执行的协程
      * @note 协程会被加入调度队列，由调度器线程执行
@@ -94,8 +111,8 @@ public:
      * @brief 返回Scheduler类型
      * @return  SchedulerType 调度器类型
      */
-
     virtual SchedulerType type() = 0;
+
 protected:
     /**
      * @brief 恢复协程执行

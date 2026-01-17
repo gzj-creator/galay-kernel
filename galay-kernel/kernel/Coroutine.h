@@ -149,11 +149,11 @@ public:
      */
     void threadId(std::thread::id id);
 
-     /**
+    /**
      * @brief 恢复协程执行
      * @note 仅供Waker和Scheduler调用，会在协程所属的scheduler上spawn
      */
-     void resume();
+    void resume();
 
 private:
     std::shared_ptr<CoroutineData> m_data;  ///< 协程数据，使用shared_ptr管理生命周期
@@ -214,15 +214,6 @@ private:
  */
 struct alignas(64) CoroutineData
 {
-    CoroutineData() = default;
-
-    ~CoroutineData() {
-        // 协程完成后由 shared_ptr 最后一个引用释放时销毁句柄
-        if (m_handle) {
-            m_handle.destroy();
-        }
-    }
-
     std::coroutine_handle<Coroutine::promise_type> m_handle = nullptr;   ///< 底层协程句柄
     Scheduler* m_scheduler = nullptr;                                     ///< 所属调度器
     std::thread::id m_threadId;                                           ///< 所属线程ID
@@ -271,9 +262,9 @@ public:
 
     /**
      * @brief 最终挂起点
-     * @return suspend_always 协程完成后保持挂起，由 CoroutineData 析构时销毁
+     * @return suspend_never 协程完成后自动销毁
      */
-    std::suspend_always final_suspend() noexcept { return {}; }
+    std::suspend_never final_suspend() noexcept { return {}; }
 
     /**
      * @brief 未捕获异常处理
@@ -291,7 +282,6 @@ public:
      */
     Coroutine getCoroutine() { return m_coroutine; }
 
-    ~PromiseType() = default;
 
 private:
     Coroutine m_coroutine;  ///< 关联的Coroutine对象

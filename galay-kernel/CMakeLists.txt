@@ -54,7 +54,7 @@ install(TARGETS galay-kernel
 )
 
 # 安装头文件（保留目录结构）
-install(DIRECTORY async common kernel concurrency
+install(DIRECTORY async common kernel concurrency protocol
     DESTINATION include/galay-kernel
     FILES_MATCHING
     PATTERN "*.h"

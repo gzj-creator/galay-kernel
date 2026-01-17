@@ -43,8 +43,8 @@ public:
     KqueueScheduler& operator=(const KqueueScheduler&) = delete;
 
     // Lifecycle
-    void start();
-    void stop();
+    void start() override;
+    void stop() override;
 
     // Notify to wake up the scheduler
     void notify();

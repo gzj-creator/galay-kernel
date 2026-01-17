@@ -80,13 +80,13 @@ public:
      * @brief 启动调度器
      * @note 创建工作线程并开始处理任务
      */
-    void start();
+    void start() override;
 
     /**
      * @brief 停止调度器
      * @note 等待工作线程结束
      */
-    void stop();
+    void stop() override;
 
     /**
      * @brief 提交协程到调度器执行
