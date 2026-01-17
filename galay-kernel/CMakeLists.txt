@@ -59,6 +59,7 @@ install(DIRECTORY async common kernel concurrency protocol
     FILES_MATCHING
     PATTERN "*.h"
     PATTERN "*.hpp"
+    PATTERN "*.inl"
 )
 
 # 安装配置文件
