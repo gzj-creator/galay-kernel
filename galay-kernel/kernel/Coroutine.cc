@@ -1,5 +1,6 @@
 #include "Coroutine.h"
 #include "Scheduler.hpp"
+#include <iostream>
 
 namespace galay::kernel
 {
@@ -19,7 +20,10 @@ std::suspend_always PromiseType::yield_value(ReSchedulerType flag) noexcept
     return {};
 }
 
-void PromiseType::return_void() const noexcept {
+void PromiseType::return_void() noexcept {
+    std::cout << "return_void" << std::endl;
+    m_coroutine.m_data->m_done.store(true, std::memory_order_relaxed);
+
     if( m_coroutine.m_data->m_next.has_value() ) {
         m_coroutine.m_data->m_next->m_data->m_handle.resume();
     }
@@ -28,8 +32,9 @@ void PromiseType::return_void() const noexcept {
 bool WaitResult::await_suspend(std::coroutine_handle<> handle)
 {
     auto wait_co = std::coroutine_handle<Coroutine::promise_type>::from_address(handle.address()).promise().getCoroutine();
+    wait_co.belongScheduler()->spawnImmidiately(m_co);
+    if(m_co.done()) return false;
     m_co.m_data->m_next = wait_co;
-    wait_co.belongScheduler()->spawn(std::move(m_co));
     return true;
 }
 
@@ -71,7 +76,7 @@ Coroutine& Coroutine::operator=(const Coroutine& other) noexcept
 
 void Coroutine::resume()
 {
-    if (m_data && m_data->m_handle && !m_data->m_handle.done() && m_data->m_scheduler) {
+    if (m_data && m_data->m_handle && m_data->m_scheduler) {
         m_data->m_scheduler->spawn(*this);
     }
 }
@@ -94,6 +99,14 @@ std::thread::id Coroutine::threadId() const
 void Coroutine::threadId(std::thread::id id)
 {
     m_data->m_threadId = id;
+}
+
+bool Coroutine::done() const
+{
+    if(m_data) {
+        return m_data->m_done.load(std::memory_order_relaxed);
+    }
+    return true;
 }
 
 WaitResult Coroutine::wait()

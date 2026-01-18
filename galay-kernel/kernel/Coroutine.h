@@ -27,6 +27,7 @@
 #ifndef GALAY_KERNEL_COROUTINE_H
 #define GALAY_KERNEL_COROUTINE_H
 
+#include <atomic>
 #include <coroutine>
 #include <memory>
 #include <optional>
@@ -113,9 +114,16 @@ public:
     bool isValid() const { return m_data != nullptr; }
 
     /**
+     * @brief 检查协程是否已完成
+     * @return true 如果协程已完成
+     * @note 线程安全，使用原子变量实现
+     */
+    bool done() const;
+
+    /**
      * @brief 等待协程完成
      * @return WaitResult 可等待对象
-     * @note 在另一个协程中使用 co_await coro.wait()
+     * @note 在另一个协程中使用 co_await coro.wait(),使用另一协程持有的调度器
      */
     WaitResult wait();
 
@@ -212,6 +220,7 @@ struct alignas(64) CoroutineData
     Scheduler* m_scheduler = nullptr;                                     ///< 所属调度器
     std::thread::id m_threadId;                                           ///< 所属线程ID
     std::optional<Coroutine> m_next;                                      ///< 后续协程（用于链式执行）
+    std::atomic<bool> m_done{false};                                      ///< 协程是否完成（线程安全）
 };
 
 /**
@@ -268,7 +277,7 @@ public:
     /**
      * @brief 协程返回（无返回值）
      */
-    void return_void() const noexcept;
+    void return_void() noexcept;
 
     /**
      * @brief 获取关联的Coroutine对象

@@ -132,7 +132,7 @@ protected:
 
 
 inline void Scheduler::resume(Coroutine& co) {
-    if (!co.m_data || !co.m_data->m_handle || co.m_data->m_handle.done()) {
+    if (!co.m_data || !co.m_data->m_handle || co.m_data->m_done.load(std::memory_order_relaxed)) {
         return;
     }
     co.m_data->m_handle.resume();
