@@ -93,7 +93,14 @@ public:
      * @param coro 要执行的协程
      * @note 计算完成后会自动 spawn 回协程原来的调度器
      */
-    void spawn(Coroutine coro) override;
+    bool spawn(Coroutine coro) override;
+
+    /**
+     * @brief 立即执行协程（在当前线程）
+     * @param co 要执行的协程
+     * @return true 如果成功执行，false 如果协程已绑定到其他调度器
+     */
+    bool spawnImmidiately(Coroutine co) override;
 
     /**
      * @brief 检查调度器是否正在运行

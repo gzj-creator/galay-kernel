@@ -93,7 +93,14 @@ public:
      * @param co 要执行的协程
      * @note 协程会被加入调度队列，由调度器线程执行
      */
-    virtual void spawn(Coroutine co) = 0;
+    virtual bool spawn(Coroutine co) = 0;
+
+    /**
+     * @brief 提交协程到调度器执行
+     * @param co 要执行的协程
+     * @note 协程立即执行，需要该接口只适合在协程内部调用以避免调度导致的延迟，已经spwan的协程调用此接口无效
+     */
+    virtual bool spawnImmidiately(Coroutine co) = 0;
 
     /**
      * @brief 添加定时器到内部时间轮

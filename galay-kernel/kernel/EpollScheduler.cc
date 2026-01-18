@@ -222,13 +222,30 @@ int EpollScheduler::remove(IOController* controller)
     return epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, controller->m_handle.fd, nullptr);
 }
 
-void EpollScheduler::spawn(Coroutine coro)
+bool EpollScheduler::spawn(Coroutine co)
 {
-    if (!coro.belongScheduler()) {
-        coro.belongScheduler(this);
-        coro.threadId(m_threadId);
+    auto* scheduler = co.belongScheduler();
+    // 如果协程未绑定 scheduler，绑定到当前 scheduler
+    if (!scheduler) {
+        co.belongScheduler(this);
+        co.threadId(m_threadId);
+    } else {
+        if(scheduler != this) return false;
     }
-    m_coro_queue.enqueue(std::move(coro));
+    m_coro_queue.enqueue(std::move(co));
+    return true;
+}
+
+bool EpollScheduler::spawnImmidiately(Coroutine co)
+{
+    auto* scheduler = co.belongScheduler();
+    if (scheduler) {
+        return false;
+    }
+    co.belongScheduler(this);
+    co.threadId(m_threadId);
+    resume(co);
+    return true;
 }
 
 void EpollScheduler::processPendingCoroutines()

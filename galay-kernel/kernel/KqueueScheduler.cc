@@ -212,14 +212,30 @@ int KqueueScheduler::remove(IOController* controller)
     return kevent(m_kqueue_fd, evs, 2, nullptr, 0, nullptr);
 }
 
-void KqueueScheduler::spawn(Coroutine coro)
+bool KqueueScheduler::spawn(Coroutine co)
 {
+    auto* scheduler = co.belongScheduler();
     // 如果协程未绑定 scheduler，绑定到当前 scheduler
-    if (!coro.belongScheduler()) {
-        coro.belongScheduler(this);
-        coro.threadId(m_threadId);
+    if (!scheduler) {
+        co.belongScheduler(this);
+        co.threadId(m_threadId);
+    } else {
+        if(scheduler != this) return false;
     }
-    m_coro_queue.enqueue(std::move(coro));
+    m_coro_queue.enqueue(std::move(co));
+    return true;
+}
+
+bool KqueueScheduler::spawnImmidiately(Coroutine co)
+{
+    auto* scheduler = co.belongScheduler();
+    if (scheduler) {
+        return false;
+    } 
+    co.belongScheduler(this);
+    co.threadId(m_threadId);
+    resume(co);
+    return true;
 }
 
 void KqueueScheduler::processPendingCoroutines()

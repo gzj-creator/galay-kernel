@@ -342,14 +342,31 @@ int IOUringScheduler::remove(IOController* controller)
     return 0;
 }
 
-void IOUringScheduler::spawn(Coroutine coro)
+bool IOUringScheduler::spawn(Coroutine co)
 {
-    if (!coro.belongScheduler()) {
-        coro.belongScheduler(this);
-        coro.threadId(m_threadId);
+    auto* scheduler = co.belongScheduler();
+    // 如果协程未绑定 scheduler，绑定到当前 scheduler
+    if (!scheduler) {
+        co.belongScheduler(this);
+        co.threadId(m_threadId);
+    } else {
+        if(scheduler != this) return false;
     }
-    m_coro_queue.enqueue(std::move(coro));
+    m_coro_queue.enqueue(std::move(co));
     notify();
+    return true;
+}
+
+bool IOUringScheduler::spawnImmidiately(Coroutine co)
+{
+    auto* scheduler = co.belongScheduler();
+    if (scheduler) {
+        return false;
+    }
+    co.belongScheduler(this);
+    co.threadId(m_threadId);
+    resume(co);
+    return true;
 }
 
 void IOUringScheduler::processPendingCoroutines()

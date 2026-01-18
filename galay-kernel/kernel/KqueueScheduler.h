@@ -67,8 +67,9 @@ public:
 
     int remove(IOController* controller) override;
     // Coroutine scheduling
-    void spawn(Coroutine coro) override;
+    bool spawn(Coroutine coro) override;
 
+    bool spawnImmidiately(Coroutine co) override;
 protected:
     int m_kqueue_fd;
     std::atomic<bool> m_running;

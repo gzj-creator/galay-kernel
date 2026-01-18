@@ -41,14 +41,30 @@ void ComputeScheduler::stop()
     }
 }
 
-void ComputeScheduler::spawn(Coroutine coro)
+bool ComputeScheduler::spawn(Coroutine co)
 {
+    auto* scheduler = co.belongScheduler();
     // 如果协程未绑定 scheduler，绑定到当前 scheduler
-    if (!coro.belongScheduler()) {
-        coro.belongScheduler(this);
-        coro.threadId(m_threadId);
+    if (!scheduler) {
+        co.belongScheduler(this);
+        co.threadId(m_threadId);
+    } else {
+        if(scheduler != this) return false;
     }
-    m_queue.enqueue(ComputeTask{std::move(coro)});
+    m_queue.enqueue(ComputeTask{std::move(co)});
+    return true;
+}
+
+bool ComputeScheduler::spawnImmidiately(Coroutine co)
+{
+    auto* scheduler = co.belongScheduler();
+    if (scheduler) {
+        return false;
+    }
+    co.belongScheduler(this);
+    co.threadId(m_threadId);
+    resume(co);
+    return true;
 }
 
 void ComputeScheduler::workerLoop()

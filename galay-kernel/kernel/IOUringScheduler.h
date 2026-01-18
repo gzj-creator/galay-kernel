@@ -68,7 +68,9 @@ public:
 
     int remove(IOController* controller) override;
 
-    void spawn(Coroutine coro) override;
+    bool spawn(Coroutine coro) override;
+
+    bool spawnImmidiately(Coroutine co) override;
 
 private:
     struct io_uring m_ring;

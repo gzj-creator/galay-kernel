@@ -6,7 +6,6 @@
  */
 
 #include "Runtime.h"
-#include <algorithm>
 #include <thread>
 
 // 根据平台选择默认的 IO 调度器
