@@ -20,17 +20,17 @@ std::suspend_always PromiseType::yield_value(ReSchedulerType flag) noexcept
 }
 
 void PromiseType::return_void() const noexcept {
-    if(m_coroutine.m_data->m_next.has_value()) {
-        auto next = m_coroutine.m_data->m_next.value();
-        next.belongScheduler()->spawn(next);
+    if( m_coroutine.m_data->m_next.has_value() ) {
+        m_coroutine.m_data->m_next->m_data->m_handle.resume();
     }
 }
 
 bool WaitResult::await_suspend(std::coroutine_handle<> handle)
 {
     auto wait_co = std::coroutine_handle<Coroutine::promise_type>::from_address(handle.address()).promise().getCoroutine();
-    m_co.then(wait_co);
-    return false;
+    m_co.m_data->m_next = wait_co;
+    wait_co.belongScheduler()->spawn(std::move(m_co));
+    return true;
 }
 
 
@@ -79,14 +79,6 @@ void Coroutine::resume()
 Scheduler *Coroutine::belongScheduler() const
 {
     return m_data->m_scheduler;
-}
-
-Coroutine& Coroutine::then(Coroutine co)
-{
-    if (m_data) {
-        m_data->m_next = std::move(co);
-    }
-    return *this;
 }
 
 void Coroutine::belongScheduler(Scheduler* scheduler)

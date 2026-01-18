@@ -1,5 +1,9 @@
 # 测试可执行文件
 
+add_executable(test_coroutine_chain test_coroutine_chain.cc)
+target_link_libraries(test_coroutine_chain PRIVATE galay-kernel)
+target_include_directories(test_coroutine_chain PRIVATE ${CMAKE_SOURCE_DIR})
+
 # TcpSocket测试 (旧版本，包含 client 和 server)
 add_executable(test_tcp_socket test_tcp_socket.cc)
 target_link_libraries(test_tcp_socket PRIVATE galay-kernel)

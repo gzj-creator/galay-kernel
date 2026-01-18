@@ -56,6 +56,7 @@ class Scheduler;
  */
 class Coroutine
 {
+    friend class WaitResult;
 public:
     using promise_type = PromiseType;  ///< Promise类型别名，C++20协程要求
 
@@ -110,13 +111,6 @@ public:
      * @return true 如果协程数据有效
      */
     bool isValid() const { return m_data != nullptr; }
-
-    /**
-     * @brief 设置后续协程
-     * @param co 当前协程完成后要执行的协程
-     * @return 当前协程引用，支持链式调用
-     */
-    Coroutine& then(Coroutine co);
 
     /**
      * @brief 等待协程完成
