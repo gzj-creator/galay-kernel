@@ -187,6 +187,27 @@ int IOUringScheduler::addWritev(IOController* controller)
     return 0;
 }
 
+int IOUringScheduler::addSendFile(IOController* controller)
+{
+    auto awaitable = controller->getAwaitable<SendFileAwaitable>();
+    if (awaitable == nullptr) return -1;
+
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    if (!sqe) {
+        return -EAGAIN;
+    }
+
+    // io_uring 使用 splice 实现零拷贝文件传输
+    // 或者使用 IORING_OP_SENDMSG 配合 MSG_SPLICE_PAGES (Linux 6.5+)
+    // 这里使用 splice 方式：file -> pipe -> socket
+    // 简化实现：直接使用 io_uring_prep_splice
+    io_uring_prep_splice(sqe, awaitable->m_file_fd, awaitable->m_offset,
+                         controller->m_handle.fd, -1,
+                         awaitable->m_count, SPLICE_F_MOVE);
+    io_uring_sqe_set_data(sqe, controller);
+    return 0;
+}
+
 int IOUringScheduler::addClose(IOController* controller)
 {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
@@ -636,6 +657,20 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         // poll 完成，仅唤醒协程，不执行IO操作
         SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
         if (awaitable == nullptr) return;
+        awaitable->m_waker.wakeUp();
+        break;
+    }
+    case SENDFILE:
+    {
+        SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
+        if (awaitable == nullptr) return;
+        if (res > 0) {
+            awaitable->m_result = static_cast<size_t>(res);
+        } else if (res == 0) {
+            awaitable->m_result = 0;
+        } else {
+            awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res)));
+        }
         awaitable->m_waker.wakeUp();
         break;
     }

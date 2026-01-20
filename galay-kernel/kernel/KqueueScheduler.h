@@ -64,6 +64,7 @@ public:
     int addFileWatch(IOController* controller) override;
     int addRecvNotify(IOController* controller) override;
     int addSendNotify(IOController* controller) override;
+    int addSendFile(IOController* controller) override;
 
     int remove(IOController* controller) override;
     // Coroutine scheduling
@@ -96,6 +97,7 @@ private:
     bool handleSend(IOController* controller);
     bool handleReadv(IOController* controller);
     bool handleWritev(IOController* controller);
+    bool handleSendFile(IOController* controller);
     bool handleFileRead(IOController* controller);
     bool handleFileWrite(IOController* controller);
     bool handleRecvFrom(IOController* controller);

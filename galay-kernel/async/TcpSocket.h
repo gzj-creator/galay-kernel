@@ -306,6 +306,35 @@ public:
     WritevAwaitable writev(std::vector<struct iovec> iovecs);
 
     /**
+     * @brief 异步零拷贝发送文件
+     *
+     * @param file_fd 要发送的文件描述符
+     * @param offset 文件偏移量（发送起始位置）
+     * @param count 要发送的字节数
+     * @return SendFileAwaitable 可等待对象，co_await后返回实际发送的字节数
+     *
+     * @note
+     * - 使用 sendfile 系统调用实现零拷贝传输，性能优于 read + send
+     * - 适用于发送大文件的场景
+     * - 返回值可能小于 count，表示部分发送
+     * - 不同平台的 sendfile 接口略有差异，本方法已做跨平台适配
+     * - 文件描述符需要由调用者管理（打开和关闭）
+     *
+     * @code
+     * int file_fd = open("large_file.dat", O_RDONLY);
+     * if (file_fd >= 0) {
+     *     auto result = co_await socket.sendfile(file_fd, 0, 1024*1024);
+     *     if (result) {
+     *         size_t sent = result.value();
+     *         // 处理发送结果
+     *     }
+     *     close(file_fd);
+     * }
+     * @endcode
+     */
+    SendFileAwaitable sendfile(int file_fd, off_t offset, size_t count);
+
+    /**
      * @brief 异步关闭socket
      *
      * @return CloseAwaitable 可等待对象，co_await后返回关闭结果

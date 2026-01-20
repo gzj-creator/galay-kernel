@@ -192,6 +192,25 @@ int EpollScheduler::addWritev(IOController* controller)
     return ret;
 }
 
+int EpollScheduler::addSendFile(IOController* controller)
+{
+    if (handleSendFile(controller)) {
+        return OK;
+    }
+
+    auto awaitable = controller->getAwaitable<SendFileAwaitable>();
+    if (awaitable == nullptr) return -1;
+    struct epoll_event ev;
+    ev.events = EPOLLOUT | EPOLLET;
+    ev.data.ptr = controller;
+
+    int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
+    if (ret == -1 && errno == ENOENT) {
+        ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, controller->m_handle.fd, &ev);
+    }
+    return ret;
+}
+
 int EpollScheduler::addClose(IOController* controller)
 {
     close(controller->m_handle.fd);
@@ -474,6 +493,34 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         }
         break;
     }
+    case RECV_NOTIFY:
+    {
+        if (ev.events & EPOLLIN) {
+            RecvNotifyAwaitable* awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
+            if (awaitable == nullptr) return;
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
+    case SEND_NOTIFY:
+    {
+        if (ev.events & EPOLLOUT) {
+            SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
+            if (awaitable == nullptr) return;
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
+    case SENDFILE:
+    {
+        if (ev.events & EPOLLOUT) {
+            handleSendFile(controller);
+            SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
+            if (awaitable == nullptr) return;
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
     default:
         break;
     }
@@ -572,6 +619,33 @@ bool EpollScheduler::handleWritev(IOController* controller)
 
     if (writtenBytes >= 0) {
         awaitable->m_result = static_cast<size_t>(writtenBytes);
+        return true;
+    } else {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return false;
+        }
+        awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
+        return true;
+    }
+}
+
+bool EpollScheduler::handleSendFile(IOController* controller)
+{
+    SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
+    if (awaitable == nullptr) return false;
+
+    // Linux sendfile 参数: sendfile(out_fd, in_fd, offset, count)
+    off_t offset = awaitable->m_offset;
+    ssize_t sentBytes = ::sendfile(controller->m_handle.fd, awaitable->m_file_fd,
+                                   &offset, awaitable->m_count);
+
+    if (sentBytes > 0) {
+        // 成功发送
+        awaitable->m_result = static_cast<size_t>(sentBytes);
+        return true;
+    } else if (sentBytes == 0) {
+        // 没有数据发送（可能文件已到末尾）
+        awaitable->m_result = 0;
         return true;
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {

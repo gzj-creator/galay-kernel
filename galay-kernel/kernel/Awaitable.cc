@@ -291,4 +291,24 @@ void SendNotifyAwaitable::await_resume() {
     m_controller->removeAwaitable(SEND_NOTIFY);
 }
 
+bool SendFileAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_waker = Waker(handle);
+    m_controller->fillAwaitable(SENDFILE, this);
+    auto scheduler = m_waker.getScheduler();
+    if(scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if(io_scheduler->addSendFile(m_controller) == OK) {
+        return false;
+    }
+    return true;
+}
+
+std::expected<size_t, IOError> SendFileAwaitable::await_resume() {
+    m_controller->removeAwaitable(SENDFILE);
+    return std::move(m_result);
+}
+
 }

@@ -92,6 +92,11 @@ WritevAwaitable TcpSocket::writev(std::vector<struct iovec> iovecs)
     return WritevAwaitable(&m_controller, std::move(iovecs));
 }
 
+SendFileAwaitable TcpSocket::sendfile(int file_fd, off_t offset, size_t count)
+{
+    return SendFileAwaitable(&m_controller, file_fd, offset, count);
+}
+
 CloseAwaitable TcpSocket::close()
 {
     return CloseAwaitable(&m_controller);

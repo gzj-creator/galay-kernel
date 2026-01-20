@@ -82,6 +82,7 @@
         SEND        ,
         READV       ,   ///< scatter-gather 读取（readv）
         WRITEV      ,   ///< scatter-gather 写入（writev）
+        SENDFILE    ,   ///< 零拷贝发送文件（sendfile）
         FILEREAD    ,
         FILEWRITE   ,
         FILEWATCH   ,

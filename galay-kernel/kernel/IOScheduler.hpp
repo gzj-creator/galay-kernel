@@ -126,6 +126,11 @@ inline auto IOController::getAwaitable() -> WritevAwaitable* {
     return static_cast<WritevAwaitable*>(m_awaitable[WRITE]);
 }
 
+template<>
+inline auto IOController::getAwaitable() -> SendFileAwaitable* {
+    return static_cast<SendFileAwaitable*>(m_awaitable[WRITE]);
+}
+
 /**
  * @brief IO调度器接口
  *
@@ -247,6 +252,13 @@ public:
      */
     virtual int addSendNotify(IOController* controller) = 0;
 
+    /**
+     * @brief 注册SendFile事件（零拷贝发送文件）
+     * @param controller IO控制器
+     * @return 1表示立即完成，0表示已注册等待，<0表示错误
+     */
+    virtual int addSendFile(IOController* controller) = 0;
+
      /**
      * @brief 删除fd的所有事件
      * @param controller IO控制器
@@ -298,6 +310,7 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
         break;
     case IOEventType::SEND:
     case IOEventType::WRITEV:
+    case IOEventType::SENDFILE:
     case IOEventType::FILEWRITE:
     case IOEventType::SENDTO:
     case IOEventType::CONNECT:
@@ -324,6 +337,7 @@ inline void IOController::removeAwaitable(IOEventType type) {
         break;
     case IOEventType::SEND:
     case IOEventType::WRITEV:
+    case IOEventType::SENDFILE:
     case IOEventType::FILEWRITE:
     case IOEventType::SENDTO:
     case IOEventType::CONNECT:

@@ -59,3 +59,8 @@ target_include_directories(bench_tcp_iov_server PRIVATE ${CMAKE_SOURCE_DIR})
 add_executable(bench_tcp_iov_client bench_tcp_iov_client.cc)
 target_link_libraries(bench_tcp_iov_client PRIVATE galay-kernel)
 target_include_directories(bench_tcp_iov_client PRIVATE ${CMAKE_SOURCE_DIR})
+
+# SendFile 性能对比和压测
+add_executable(bench_sendfile bench_sendfile.cc)
+target_link_libraries(bench_sendfile PRIVATE galay-kernel)
+target_include_directories(bench_sendfile PRIVATE ${CMAKE_SOURCE_DIR})

@@ -66,6 +66,9 @@ public:
     int addRecvNotify(IOController* controller) override;
     int addSendNotify(IOController* controller) override;
 
+    // 零拷贝发送文件
+    int addSendFile(IOController* controller) override;
+
     int remove(IOController* controller) override;
 
     bool spawn(Coroutine coro) override;

@@ -725,6 +725,59 @@ struct SendNotifyAwaitable: public TimeoutSupport<SendNotifyAwaitable> {
     Waker m_waker;                             ///< 协程唤醒器
 };
 
+/**
+ * @brief SendFile操作的可等待对象
+ *
+ * @details 用于异步发送文件数据，使用零拷贝技术。
+ * 使用 sendfile 系统调用直接在内核空间传输数据，避免用户空间拷贝。
+ * co_await后返回实际发送的字节数或错误。
+ *
+ * @note
+ * - 适用于发送大文件的场景，性能优于普通的 read + send
+ * - 不同平台的 sendfile 接口略有差异：
+ *   - Linux: sendfile(out_fd, in_fd, offset, count)
+ *   - macOS: sendfile(in_fd, out_fd, offset, len, hdtr, flags)
+ * - offset 会被更新为发送后的位置
+ */
+struct SendFileAwaitable: public TimeoutSupport<SendFileAwaitable> {
+    /**
+     * @brief 构造函数
+     * @param controller IO控制器（socket的控制器）
+     * @param file_fd 要发送的文件描述符
+     * @param offset 文件偏移量（发送起始位置）
+     * @param count 要发送的字节数
+     */
+    SendFileAwaitable(IOController* controller, int file_fd, off_t offset, size_t count)
+        : m_controller(controller), m_file_fd(file_fd),
+          m_offset(offset), m_count(count) {}
+
+    /**
+     * @brief 检查是否可以立即返回
+     * @return 始终返回false
+     */
+    bool await_ready() { return false; }
+
+    /**
+     * @brief 挂起协程并注册IO事件
+     * @param handle 当前协程句柄
+     * @return true表示挂起，false表示立即完成
+     */
+    bool await_suspend(std::coroutine_handle<> handle);
+
+    /**
+     * @brief 恢复时获取结果
+     * @return 成功返回发送字节数，失败返回IOError
+     */
+    std::expected<size_t, IOError> await_resume();
+
+    IOController* m_controller;                 ///< IO控制器
+    int m_file_fd;                              ///< 文件描述符
+    off_t m_offset;                             ///< 文件偏移量
+    size_t m_count;                             ///< 要发送的字节数
+    Waker m_waker;                              ///< 协程唤醒器
+    std::expected<size_t, IOError> m_result;    ///< 操作结果
+};
+
 } // namespace galay::kernel
 
 #endif // GALAY_KERNEL_AWAITABLE_H

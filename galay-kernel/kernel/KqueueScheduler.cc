@@ -204,6 +204,21 @@ int KqueueScheduler::addFileWrite(IOController* controller)
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
+int KqueueScheduler::addSendFile(IOController* controller)
+{
+    // 先尝试立即发送
+    if (handleSendFile(controller)) {
+        return OK;
+    }
+
+    // 需要等待可写，注册到 kqueue
+    auto awaitable = controller->getAwaitable<SendFileAwaitable>();
+    if(awaitable == nullptr) return -1;
+    struct kevent ev;
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, controller);
+    return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
+}
+
 int KqueueScheduler::remove(IOController* controller)
 {
     struct kevent evs[2];
@@ -459,6 +474,17 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         }
         break;
     }
+    case SENDFILE:
+    {
+        // SendFile 需要 EVFILT_WRITE 事件
+        if (ev.filter == EVFILT_WRITE) {
+            handleSendFile(controller);
+            SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
+            if(awaitable == nullptr) return;
+            awaitable->m_waker.wakeUp();
+        }
+        break;
+    }
     default:
         break;
     }
@@ -562,6 +588,35 @@ bool KqueueScheduler::handleWritev(IOController* controller)
         return true;
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return false;
+        }
+        awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
+        return true;
+    }
+}
+
+bool KqueueScheduler::handleSendFile(IOController* controller)
+{
+    SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
+    if(awaitable == nullptr) return false;
+
+    // macOS sendfile 参数: sendfile(in_fd, out_fd, offset, len, hdtr, flags)
+    off_t len = static_cast<off_t>(awaitable->m_count);
+    int result = ::sendfile(awaitable->m_file_fd, controller->m_handle.fd,
+                           awaitable->m_offset, &len, nullptr, 0);
+
+    if (result == 0) {
+        // 成功发送，len 包含实际发送的字节数
+        awaitable->m_result = static_cast<size_t>(len);
+        return true;
+    } else {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            // 部分发送或需要重试
+            if (len > 0) {
+                // 部分发送成功
+                awaitable->m_result = static_cast<size_t>(len);
+                return true;
+            }
             return false;
         }
         awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));

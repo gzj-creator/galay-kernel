@@ -103,3 +103,13 @@ target_include_directories(test_ringbuffer_io PRIVATE ${CMAKE_SOURCE_DIR})
 add_executable(test_runtime test_runtime.cc)
 target_link_libraries(test_runtime PRIVATE galay-kernel)
 target_include_directories(test_runtime PRIVATE ${CMAKE_SOURCE_DIR})
+
+# SendFile测试 (零拷贝文件传输)
+add_executable(test_sendfile test_sendfile.cc)
+target_link_libraries(test_sendfile PRIVATE galay-kernel)
+target_include_directories(test_sendfile PRIVATE ${CMAKE_SOURCE_DIR})
+
+# SendFile基础功能测试
+add_executable(test_sendfile_basic test_sendfile_basic.cc)
+target_link_libraries(test_sendfile_basic PRIVATE galay-kernel)
+target_include_directories(test_sendfile_basic PRIVATE ${CMAKE_SOURCE_DIR})
