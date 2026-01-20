@@ -235,7 +235,7 @@ Coroutine sendfileServer(size_t file_size) {
     TcpSocket client(acceptResult.value());
     client.option().handleNonBlock();
 
-    co_await handleClient(std::move(client), file_size);
+    co_await handleClient(std::move(client), file_size).wait();
 
     co_await listener.close();
     g_test_done = true;
@@ -292,7 +292,7 @@ Coroutine sendfileClient() {
     char buffer[8192];
 
     while (total_received < file_size) {
-        size_t to_recv = std::min(sizeof(buffer), file_size - total_received);
+        size_t to_recv = std::min(sizeof(buffer), static_cast<size_t>(file_size - total_received));
         auto result = co_await socket.recv(buffer, to_recv);
 
         if (!result) {
@@ -306,7 +306,7 @@ Coroutine sendfileClient() {
             break;
         }
 
-        ofs.write(bytes.data(), bytes.size());
+        ofs.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
         total_received += bytes.size();
 
         if (total_received % (1024 * 1024) == 0 || total_received == file_size) {
@@ -390,8 +390,17 @@ int main() {
     LogInfo("========================================");
 
     // 写入测试结果
-    TestResultWriter writer("test_sendfile");
-    writer.writeResult(g_passed.load(), g_failed.load(), g_total.load());
+    galay::test::TestResultWriter writer("test_sendfile");
+    for (int i = 0; i < g_total.load(); ++i) {
+        writer.addTest();
+    }
+    for (int i = 0; i < g_passed.load(); ++i) {
+        writer.addPassed();
+    }
+    for (int i = 0; i < g_failed.load(); ++i) {
+        writer.addFailed();
+    }
+    writer.writeResult();
 
     return (g_failed.load() == 0) ? 0 : 1;
 }
