@@ -1,6 +1,5 @@
 #include "Coroutine.h"
 #include "Scheduler.hpp"
-#include <iostream>
 
 namespace galay::kernel
 {
@@ -21,7 +20,6 @@ std::suspend_always PromiseType::yield_value(ReSchedulerType flag) noexcept
 }
 
 void PromiseType::return_void() noexcept {
-    std::cout << "return_void" << std::endl;
     m_coroutine.m_data->m_done.store(true, std::memory_order_relaxed);
 
     if( m_coroutine.m_data->m_next.has_value() ) {
