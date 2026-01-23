@@ -113,3 +113,13 @@ target_include_directories(test_sendfile PRIVATE ${CMAKE_SOURCE_DIR})
 add_executable(test_sendfile_basic test_sendfile_basic.cc)
 target_link_libraries(test_sendfile_basic PRIVATE galay-kernel)
 target_include_directories(test_sendfile_basic PRIVATE ${CMAKE_SOURCE_DIR})
+
+# Spawn函数测试
+add_executable(test_spawn test_spawn.cc)
+target_link_libraries(test_spawn PRIVATE galay-kernel)
+target_include_directories(test_spawn PRIVATE ${CMAKE_SOURCE_DIR})
+
+# Spawn函数简单演示
+add_executable(test_spawn_simple test_spawn_simple.cc)
+target_link_libraries(test_spawn_simple PRIVATE galay-kernel)
+target_include_directories(test_spawn_simple PRIVATE ${CMAKE_SOURCE_DIR})

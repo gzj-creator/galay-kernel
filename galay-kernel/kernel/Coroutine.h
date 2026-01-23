@@ -208,6 +208,75 @@ private:
 };
 
 /**
+ * @brief 协程spawn等待体
+ *
+ * @details 用于在协程中spawn另一个协程到当前调度器。
+ * 从当前协程的handle中获取scheduler并spawn传入的协程。
+ *
+ * @code
+ * Coroutine task() {
+ *     // spawn一个新协程到当前调度器
+ *     co_await spawn(someCoroutine());
+ *     co_return;
+ * }
+ * @endcode
+ */
+struct SpawnAwaitable {
+public:
+    /**
+     * @brief 构造函数
+     * @param co 要spawn的协程
+     */
+    explicit SpawnAwaitable(Coroutine co)
+        : m_co(std::move(co)) {}
+
+    /**
+     * @brief 检查是否可以立即返回
+     * @return 始终返回false，需要挂起以获取调度器
+     */
+    bool await_ready() const noexcept {
+        return false;
+    }
+
+    /**
+     * @brief 挂起当前协程并spawn新协程
+     * @param handle 当前协程句柄
+     * @return 始终返回false，不挂起当前协程
+     */
+    bool await_suspend(std::coroutine_handle<PromiseType> handle) noexcept;
+
+    /**
+     * @brief 恢复时调用
+     */
+    void await_resume() noexcept {}
+
+private:
+    Coroutine m_co;  ///< 要spawn的协程
+};
+
+/**
+ * @brief 全局spawn函数
+ *
+ * @details 在协程中spawn另一个协程到当前调度器。
+ * 从当前协程的调度器中spawn新协程，不会阻塞当前协程。
+ *
+ * @param co 要spawn的协程
+ * @return SpawnAwaitable 可等待对象
+ *
+ * @code
+ * Coroutine parent() {
+ *     // spawn子协程到当前调度器
+ *     co_await spawn(childCoroutine());
+ *     // 立即继续执行，不等待子协程完成
+ *     co_return;
+ * }
+ * @endcode
+ */
+inline SpawnAwaitable spawn(Coroutine co) {
+    return SpawnAwaitable(std::move(co));
+}
+
+/**
  * @brief 协程数据结构
  *
  * @details 存储协程的状态信息，使用64字节对齐避免伪共享。

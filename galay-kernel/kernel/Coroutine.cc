@@ -36,6 +36,22 @@ bool WaitResult::await_suspend(std::coroutine_handle<> handle)
     return true;
 }
 
+bool SpawnAwaitable::await_suspend(std::coroutine_handle<PromiseType> handle) noexcept
+{
+    // 从当前协程获取调度器
+    auto& promise = handle.promise();
+    auto current_coro = promise.getCoroutine();
+    auto scheduler = current_coro.belongScheduler();
+
+    if (scheduler) {
+        // 将新协程spawn到当前调度器
+        scheduler->spawn(std::move(m_co));
+    }
+
+    // 不挂起当前协程，立即继续执行
+    return false;
+}
+
 
 // Coroutine implementation
 Coroutine::Coroutine(std::coroutine_handle<promise_type> handle) noexcept
