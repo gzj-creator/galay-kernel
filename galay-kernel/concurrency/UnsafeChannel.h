@@ -10,8 +10,11 @@
 #define GALAY_KERNEL_UNSAFE_CHANNEL_H
 
 #include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Timeout.hpp"
+#include "galay-kernel/common/Error.h"
 #include <deque>
 #include <optional>
+#include <expected>
 #include <vector>
 #include <cassert>
 
@@ -25,24 +28,26 @@ class UnsafeChannel;
  * @brief 单条接收的等待体
  */
 template <typename T>
-class UnsafeRecvAwaitable
+class UnsafeRecvAwaitable : public TimeoutSupport<UnsafeRecvAwaitable<T>>
 {
 public:
     explicit UnsafeRecvAwaitable(UnsafeChannel<T>* channel) : m_channel(channel) {}
 
     bool await_ready() const noexcept;
     bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
-    std::optional<T> await_resume() noexcept;
+    std::expected<T, IOError> await_resume() noexcept;
 
 private:
+    friend struct WithTimeout<UnsafeRecvAwaitable<T>>;
     UnsafeChannel<T>* m_channel;
+    std::expected<T, IOError> m_result;
 };
 
 /**
  * @brief 批量接收的等待体
  */
 template <typename T>
-class UnsafeRecvBatchAwaitable
+class UnsafeRecvBatchAwaitable : public TimeoutSupport<UnsafeRecvBatchAwaitable<T>>
 {
 public:
     explicit UnsafeRecvBatchAwaitable(UnsafeChannel<T>* channel, size_t maxCount)
@@ -50,11 +55,13 @@ public:
 
     bool await_ready() const noexcept;
     bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
-    std::optional<std::vector<T>> await_resume() noexcept;
+    std::expected<std::vector<T>, IOError> await_resume() noexcept;
 
 private:
+    friend struct WithTimeout<UnsafeRecvBatchAwaitable<T>>;
     UnsafeChannel<T>* m_channel;
     size_t m_maxCount;
+    std::expected<std::vector<T>, IOError> m_result;
 };
 
 /**
@@ -245,9 +252,9 @@ inline bool UnsafeRecvAwaitable<T>::await_suspend(
 }
 
 template <typename T>
-inline std::optional<T> UnsafeRecvAwaitable<T>::await_resume() noexcept {
+inline std::expected<T, IOError> UnsafeRecvAwaitable<T>::await_resume() noexcept {
     if (m_channel->m_size == 0) {
-        return std::nullopt;
+        return std::unexpected(IOError(kTimeout, 0));
     }
     T value = std::move(m_channel->m_queue.front());
     m_channel->m_queue.pop_front();
@@ -279,9 +286,9 @@ inline bool UnsafeRecvBatchAwaitable<T>::await_suspend(
 }
 
 template <typename T>
-inline std::optional<std::vector<T>> UnsafeRecvBatchAwaitable<T>::await_resume() noexcept {
+inline std::expected<std::vector<T>, IOError> UnsafeRecvBatchAwaitable<T>::await_resume() noexcept {
     if (m_channel->m_size == 0) {
-        return std::nullopt;
+        return std::unexpected(IOError(kTimeout, 0));
     }
 
     std::vector<T> values;

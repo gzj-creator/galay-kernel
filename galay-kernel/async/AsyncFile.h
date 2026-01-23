@@ -71,7 +71,7 @@ public:
      * @brief 获取IO控制器
      * @return IOController* IO控制器
      */
-     IOController* getController() { return &m_controller; }
+    IOController* getController() { return &m_controller; }
 
 private:
     IOController m_controller;

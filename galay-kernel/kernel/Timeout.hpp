@@ -87,7 +87,10 @@ struct WithTimeout {
         using ResultType = decltype(m_inner.await_resume());
         // 检查是否超时
         if (m_timer->timeouted()) [[unlikely]] {
-            m_inner.m_result = std::unexpected(IOError(kTimeout, 0));
+            // 所有等待体都有 m_result 成员，设置为超时错误
+            if constexpr (requires { m_inner.m_result; }) {
+                m_inner.m_result = std::unexpected(IOError(kTimeout, 0));
+            }
         } else {
             m_timer->cancel();
         }

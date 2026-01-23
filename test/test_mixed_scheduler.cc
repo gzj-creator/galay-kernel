@@ -55,9 +55,10 @@ Coroutine ioCoroutineWithCompute(IOSchedulerType* ioScheduler, ComputeScheduler*
     computeScheduler->spawn(computeHeavyTask(&waiter));
 
     // 等待计算完成
-    int result = co_await waiter.wait();
-
-    g_test1_compute_result.store(result, std::memory_order_relaxed);
+    auto result = co_await waiter.wait();
+    if (result) {
+        g_test1_compute_result.store(result.value(), std::memory_order_relaxed);
+    }
     co_return;
 }
 
@@ -80,7 +81,7 @@ Coroutine ioCoroutineMultiple(IOSchedulerType* ioScheduler, ComputeScheduler* co
     AsyncWaiter<int> waiter;
     computeScheduler->spawn(computeTaskForTest2(&waiter, id));
 
-    int result = co_await waiter.wait();
+    auto result = co_await waiter.wait();
     (void)result;
 
     g_test2_completed.fetch_add(1, std::memory_order_relaxed);
@@ -121,12 +122,12 @@ Coroutine ioChainTask(IOSchedulerType* ioScheduler, ComputeScheduler* computeSch
     AsyncWaiter<int> waiter;
     computeScheduler->spawn(computeMiddleTask(&waiter));
 
-    int result = co_await waiter.wait();
+    auto result = co_await waiter.wait();
 
     g_test4_stage.store(3, std::memory_order_relaxed);  // IO阶段2（计算完成后）
 
     // 验证结果
-    if (result == 49995000) {  // 0+1+2+...+9999
+    if (result && result.value() == 49995000) {  // 0+1+2+...+9999
         g_test4_done.store(true, std::memory_order_relaxed);
     }
     co_return;
@@ -174,7 +175,7 @@ Coroutine computeTaskForTest6(AsyncWaiter<int>* waiter, int id) {
 Coroutine ioCoroutineHighConcurrency(ComputeScheduler* computeScheduler, int id) {
     AsyncWaiter<int> waiter;
     computeScheduler->spawn(computeTaskForTest6(&waiter, id));
-    int result = co_await waiter.wait();
+    auto result = co_await waiter.wait();
     (void)result;
     g_test6_completed.fetch_add(1, std::memory_order_relaxed);
     co_return;
@@ -197,7 +198,7 @@ Coroutine ioMultipleAwait(ComputeScheduler* computeScheduler) {
     for (int i = 0; i < 5; ++i) {
         AsyncWaiter<int> waiter;
         computeScheduler->spawn(computeTaskForTest7(&waiter, i * 100));
-        int result = co_await waiter.wait();
+        auto result = co_await waiter.wait();
         (void)result;
         g_test7_await_count.fetch_add(1, std::memory_order_relaxed);
     }
@@ -224,8 +225,8 @@ Coroutine ioWaitAfterNotify(ComputeScheduler* computeScheduler) {
     }
     (void)delay;
 
-    int result = co_await waiter.wait();
-    if (result == 42) {
+    auto result = co_await waiter.wait();
+    if (result.value() == 42) {
         g_test8_done.store(true, std::memory_order_relaxed);
     }
     co_return;
@@ -272,8 +273,8 @@ Coroutine ioWithMultipleComputeSchedulers(ComputeScheduler* cs1, ComputeSchedule
     cs1->spawn(computeTaskForTest10(&waiter1, 1));
     cs2->spawn(computeTaskForTest10(&waiter2, 2));
 
-    int r1 = co_await waiter1.wait();
-    int r2 = co_await waiter2.wait();
+    auto r1 = co_await waiter1.wait();
+    auto r2 = co_await waiter2.wait();
 
     (void)r1;
     (void)r2;

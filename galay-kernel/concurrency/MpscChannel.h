@@ -8,11 +8,14 @@
 
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Scheduler.hpp"
+#include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/kernel/Waker.h"
+#include "galay-kernel/common/Error.h"
 #include <concurrentqueue/moodycamel/concurrentqueue.h>
 #include <atomic>
 #include <coroutine>
 #include <optional>
+#include <expected>
 #include <vector>
 #include <thread>
 
@@ -26,24 +29,26 @@ class MpscChannel;
  * @brief 单条接收的等待体
  */
 template <typename T>
-class MpscRecvAwaitable
+class MpscRecvAwaitable : public TimeoutSupport<MpscRecvAwaitable<T>>
 {
 public:
     explicit MpscRecvAwaitable(MpscChannel<T>* channel) : m_channel(channel) {}
 
     bool await_ready() const noexcept;
     bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
-    std::optional<T> await_resume() noexcept;
+    std::expected<T, IOError> await_resume() noexcept;
 
 private:
+    friend struct WithTimeout<MpscRecvAwaitable<T>>;
     MpscChannel<T>* m_channel;
+    std::expected<T, IOError> m_result;
 };
 
 /**
  * @brief 批量接收的等待体
  */
 template <typename T>
-class MpscRecvBatchAwaitable
+class MpscRecvBatchAwaitable : public TimeoutSupport<MpscRecvBatchAwaitable<T>>
 {
 public:
     explicit MpscRecvBatchAwaitable(MpscChannel<T>* channel, size_t max_count)
@@ -51,11 +56,13 @@ public:
 
     bool await_ready() const noexcept;
     bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
-    std::optional<std::vector<T>> await_resume() noexcept;
+    std::expected<std::vector<T>, IOError> await_resume() noexcept;
 
 private:
+    friend struct WithTimeout<MpscRecvBatchAwaitable<T>>;
     MpscChannel<T>* m_channel;
     size_t m_maxCount;
+    std::expected<std::vector<T>, IOError> m_result;
 };
 
 /**
@@ -203,13 +210,13 @@ inline bool MpscRecvAwaitable<T>::await_suspend(
 }
 
 template <typename T>
-inline std::optional<T> MpscRecvAwaitable<T>::await_resume() noexcept {
+inline std::expected<T, IOError> MpscRecvAwaitable<T>::await_resume() noexcept {
     T value;
     if (m_channel->m_queue.try_dequeue(value)) {
         m_channel->m_size.fetch_sub(1, std::memory_order_acq_rel);
         return value;
     }
-    return std::nullopt;
+    return std::unexpected(IOError(kTimeout, 0));
 }
 
 // ============================================================================
@@ -237,12 +244,12 @@ inline bool MpscRecvBatchAwaitable<T>::await_suspend(
 }
 
 template <typename T>
-inline std::optional<std::vector<T>> MpscRecvBatchAwaitable<T>::await_resume() noexcept {
+inline std::expected<std::vector<T>, IOError> MpscRecvBatchAwaitable<T>::await_resume() noexcept {
     std::vector<T> values(m_maxCount);
     size_t count = m_channel->m_queue.try_dequeue_bulk(values.data(), m_maxCount);
 
     if (count == 0) {
-        return std::nullopt;
+        return std::unexpected(IOError(kTimeout, 0));
     }
 
     uint32_t current = m_channel->m_size.load(std::memory_order_acquire);

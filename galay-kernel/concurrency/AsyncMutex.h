@@ -12,6 +12,7 @@
  * - 协程友好，支持 co_await
  * - 公平性：FIFO 顺序唤醒等待协程
  * - 线程安全
+ * - 支持超时
  *
  * 使用方式：
  * @code
@@ -24,10 +25,13 @@
  *     co_return;
  * }
  *
- * // 或使用 RAII 守卫（推荐）
+ * // 使用超时
  * Coroutine task2() {
- *     auto guard = co_await mutex.scopedLock();
- *     // 临界区，自动释放锁
+ *     bool acquired = co_await mutex.lock().timeout(100ms);
+ *     if (acquired) {
+ *         // 临界区
+ *         mutex.unlock();
+ *     }
  *     co_return;
  * }
  * @endcode
@@ -36,9 +40,9 @@
 #ifndef GALAY_KERNEL_ASYNC_MUTEX_H
 #define GALAY_KERNEL_ASYNC_MUTEX_H
 
-#include "common/Log.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Scheduler.hpp"
+#include "galay-kernel/kernel/Timeout.hpp"
 #include "kernel/Waker.h"
 #include <concurrentqueue/moodycamel/concurrentqueue.h>
 #include <atomic>
@@ -54,17 +58,19 @@ class AsyncLockGuard;
 /**
  * @brief AsyncMutex 的等待体
  */
-class AsyncMutexAwaitable
+class AsyncMutexAwaitable : public TimeoutSupport<AsyncMutexAwaitable>
 {
 public:
     explicit AsyncMutexAwaitable(AsyncMutex* mutex) : m_mutex(mutex) {}
 
     bool await_ready() const noexcept;
     bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
-    void await_resume() noexcept {}
+    std::expected<void, IOError> await_resume() noexcept { return m_result; }
 
 private:
+    friend struct WithTimeout<AsyncMutexAwaitable>;
     AsyncMutex* m_mutex;
+    std::expected<void, IOError> m_result;
 };
 
 /**
@@ -157,11 +163,20 @@ private:
 
 // AsyncMutexAwaitable 实现
 inline bool AsyncMutexAwaitable::await_ready() const noexcept {
-    return m_mutex->tryLock();
+    if (m_mutex->tryLock()) {
+        const_cast<AsyncMutexAwaitable*>(this)->m_result = {};
+        return true;
+    }
+    return false;
 }
 
 inline bool AsyncMutexAwaitable::await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
     m_mutex->m_waiters.enqueue(Waker(handle));
+    // 再次检查，防止在入队期间锁被释放
+    if (m_mutex->tryLock()) {
+        m_result = {};
+        return false;  // 不挂起
+    }
     return true;
 }
 } // namespace galay::kernel

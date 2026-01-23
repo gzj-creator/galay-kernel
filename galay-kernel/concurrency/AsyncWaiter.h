@@ -12,7 +12,16 @@
  * // IO 协程中
  * AsyncWaiter<int> waiter;
  * computeScheduler.spawn(computeTask(&waiter));
- * int result = co_await waiter.wait();  // 挂起等待
+ * auto result = co_await waiter.wait();  // 挂起等待
+ * if (result) {
+ *     // 使用 result.value()
+ * }
+ *
+ * // 使用超时
+ * auto result = co_await waiter.wait().timeout(100ms);
+ * if (!result) {
+ *     // 超时或错误
+ * }
  *
  * // 计算协程中
  * Coroutine computeTask(AsyncWaiter<int>* waiter) {
@@ -28,9 +37,12 @@
 
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Scheduler.hpp"
+#include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/kernel/Waker.h"
+#include "galay-kernel/common/Error.h"
 #include <atomic>
 #include <optional>
+#include <expected>
 #include <coroutine>
 
 namespace galay::kernel
@@ -43,34 +55,38 @@ class AsyncWaiter;
  * @brief AsyncWaiter 的等待体
  */
 template<typename T>
-class AsyncWaiterAwaitable
+class AsyncWaiterAwaitable : public TimeoutSupport<AsyncWaiterAwaitable<T>>
 {
 public:
     explicit AsyncWaiterAwaitable(AsyncWaiter<T>* waiter) : m_waiter(waiter) {}
 
     bool await_ready() const noexcept;
     bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
-    T await_resume() noexcept;
+    std::expected<T, IOError> await_resume() noexcept;
 
 private:
+    friend struct WithTimeout<AsyncWaiterAwaitable<T>>;
     AsyncWaiter<T>* m_waiter;
+    std::expected<T, IOError> m_result;
 };
 
 /**
  * @brief void 特化的等待体
  */
 template<>
-class AsyncWaiterAwaitable<void>
+class AsyncWaiterAwaitable<void> : public TimeoutSupport<AsyncWaiterAwaitable<void>>
 {
 public:
     explicit AsyncWaiterAwaitable(AsyncWaiter<void>* waiter) : m_waiter(waiter) {}
 
     bool await_ready() const noexcept;
     bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
-    void await_resume() noexcept {}
+    std::expected<void, IOError> await_resume() noexcept { return m_result; }
 
 private:
+    friend struct WithTimeout<AsyncWaiterAwaitable<void>>;
     AsyncWaiter<void>* m_waiter;
+    std::expected<void, IOError> m_result;
 };
 
 /**
@@ -236,8 +252,11 @@ bool AsyncWaiterAwaitable<T>::await_suspend(std::coroutine_handle<Coroutine::pro
 }
 
 template<typename T>
-T AsyncWaiterAwaitable<T>::await_resume() noexcept {
-    return std::move(m_waiter->m_result.value());
+std::expected<T, IOError> AsyncWaiterAwaitable<T>::await_resume() noexcept {
+    if (m_waiter->m_result.has_value()) {
+        return std::move(m_waiter->m_result.value());
+    }
+    return std::unexpected(IOError(kTimeout, 0));
 }
 
 // AsyncWaiterAwaitable<void> 实现

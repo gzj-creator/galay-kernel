@@ -210,7 +210,7 @@ Coroutine ioTask(Runtime* runtime, int id) {
     compute_scheduler->spawn(computeTask(&waiter, id));
 
     // 等待计算完成
-    int result = co_await waiter.wait();
+    auto result = co_await waiter.wait();
     (void)result;
 
     g_test4_io_count.fetch_add(1, std::memory_order_relaxed);
