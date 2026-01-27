@@ -1,7 +1,7 @@
 #ifndef GALAY_KERNEL_TIMEOUT_HPP
 #define GALAY_KERNEL_TIMEOUT_HPP
 
-#include "common/Error.h"
+#include "galay-kernel/common/Error.h"
 #include "galay-kernel/common/Timer.hpp"
 #include "Waker.h"
 #include "Scheduler.hpp"
