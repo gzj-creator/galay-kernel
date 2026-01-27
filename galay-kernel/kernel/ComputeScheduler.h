@@ -22,7 +22,7 @@
 
 #include "Coroutine.h"
 #include "Scheduler.hpp"
-#include "kernel/TimerScheduler.h"
+#include "galay-kernel/kernel/TimerScheduler.h"
 #include <thread>
 #include <atomic>
 #include <concurrentqueue/moodycamel/blockingconcurrentqueue.h>
