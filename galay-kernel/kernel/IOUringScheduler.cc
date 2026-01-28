@@ -210,13 +210,19 @@ int IOUringScheduler::addSendFile(IOController* controller)
 
 int IOUringScheduler::addClose(IOController* controller)
 {
+    if (controller->m_handle == GHandle::invalid()) {
+        return 0;
+    }
+
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         close(controller->m_handle.fd);
+        controller->m_handle = GHandle::invalid();
         return 0;
     }
 
     io_uring_prep_close(sqe, controller->m_handle.fd);
+    controller->m_handle = GHandle::invalid();
     io_uring_sqe_set_data(sqe, nullptr);
     return 0;
 }

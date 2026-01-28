@@ -213,7 +213,11 @@ int EpollScheduler::addSendFile(IOController* controller)
 
 int EpollScheduler::addClose(IOController* controller)
 {
+    if (controller->m_handle == GHandle::invalid()) {
+        return 0;
+    }
     close(controller->m_handle.fd);
+    controller->m_handle = GHandle::invalid();
     remove(controller);
     return 0;
 }

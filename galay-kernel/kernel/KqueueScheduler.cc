@@ -175,7 +175,11 @@ int KqueueScheduler::addWritev(IOController* controller)
 
 int KqueueScheduler::addClose(IOController* contoller)
 {
+    if (contoller->m_handle == GHandle::invalid()) {
+        return 0;
+    }
     close(contoller->m_handle.fd);
+    contoller->m_handle = GHandle::invalid();
     remove(contoller);
     return 0;
 }
