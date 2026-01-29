@@ -48,71 +48,6 @@ off_t getFileSize(int fd) {
 }
 
 /**
- * @brief 使用 sendfile 发送整个文件
- * @param socket TCP socket
- * @param file_path 文件路径
- * @return 发送的字节数，失败返回 -1
- */
-Coroutine<ssize_t> sendFileToClient(TcpSocket& socket, const char* file_path) {
-    // 打开文件
-    int file_fd = open(file_path, O_RDONLY);
-    if (file_fd < 0) {
-        LogError("Failed to open file: {}", strerror(errno));
-        co_return -1;
-    }
-
-    // 获取文件大小
-    off_t file_size = getFileSize(file_fd);
-    if (file_size < 0) {
-        LogError("Failed to get file size: {}", strerror(errno));
-        close(file_fd);
-        co_return -1;
-    }
-
-    LogInfo("Sending file: {} ({} bytes)", file_path, file_size);
-
-    // 使用 sendfile 发送文件
-    size_t total_sent = 0;
-    off_t offset = 0;
-
-    while (total_sent < static_cast<size_t>(file_size)) {
-        size_t remaining = file_size - total_sent;
-        size_t chunk_size = std::min(remaining, size_t(1024 * 1024)); // 每次最多发送 1MB
-
-        auto result = co_await socket.sendfile(file_fd, offset, chunk_size);
-
-        if (!result) {
-            LogError("Sendfile failed: {}", result.error().message());
-            close(file_fd);
-            co_return -1;
-        }
-
-        size_t sent = result.value();
-        if (sent == 0) {
-            LogError("Sendfile returned 0 bytes");
-            break;
-        }
-
-        total_sent += sent;
-        offset += sent;
-
-        // 显示进度
-        int progress = (total_sent * 100) / file_size;
-        LogInfo("Progress: {}% ({}/{} bytes)", progress, total_sent, file_size);
-    }
-
-    close(file_fd);
-
-    if (total_sent == static_cast<size_t>(file_size)) {
-        LogInfo("File sent successfully: {} bytes", total_sent);
-        co_return total_sent;
-    } else {
-        LogError("Incomplete transfer: sent {}/{} bytes", total_sent, file_size);
-        co_return -1;
-    }
-}
-
-/**
  * @brief HTTP 文件服务器示例
  * @details 简单的 HTTP 服务器，使用 sendfile 发送文件
  */
@@ -149,14 +84,46 @@ Coroutine handleHttpRequest(TcpSocket client) {
         co_return;
     }
 
-    // 使用 sendfile 发送文件内容
-    ssize_t sent = co_await sendFileToClient(client, file_to_send);
-
-    if (sent > 0) {
-        LogInfo("HTTP response completed: {} bytes", sent);
-    } else {
-        LogError("HTTP response failed");
+    // 打开文件
+    int file_fd = open(file_to_send, O_RDONLY);
+    if (file_fd < 0) {
+        LogError("Failed to open file: {}", strerror(errno));
+        co_await client.close();
+        co_return;
     }
+
+    // 获取文件大小
+    off_t file_size = getFileSize(file_fd);
+    if (file_size < 0) {
+        LogError("Failed to get file size");
+        close(file_fd);
+        co_await client.close();
+        co_return;
+    }
+
+    // 使用 sendfile 发送文件内容
+    size_t total_sent = 0;
+    off_t offset = 0;
+
+    while (total_sent < static_cast<size_t>(file_size)) {
+        size_t remaining = file_size - total_sent;
+        size_t chunk_size = std::min(remaining, size_t(1024 * 1024));
+
+        auto result = co_await client.sendfile(file_fd, offset, chunk_size);
+        if (!result) {
+            LogError("Sendfile failed: {}", result.error().message());
+            break;
+        }
+
+        size_t sent = result.value();
+        if (sent == 0) break;
+
+        total_sent += sent;
+        offset += sent;
+    }
+
+    close(file_fd);
+    LogInfo("HTTP response completed: {} bytes", total_sent);
 
     co_await client.close();
     LogInfo("Client disconnected");
@@ -171,8 +138,17 @@ Coroutine fileServer() {
     TcpSocket listener;
 
     // 设置 socket 选项
-    listener.option().handleReuseAddr();
-    listener.option().handleNonBlock();
+    auto optResult = listener.option().handleReuseAddr();
+    if (!optResult) {
+        LogError("Failed to set reuse addr: {}", optResult.error().message());
+        co_return;
+    }
+
+    optResult = listener.option().handleNonBlock();
+    if (!optResult) {
+        LogError("Failed to set non-block: {}", optResult.error().message());
+        co_return;
+    }
 
     // 绑定地址
     Host bindHost(IPType::IPV4, "0.0.0.0", 8080);
@@ -206,12 +182,16 @@ Coroutine fileServer() {
 
         // 创建客户端 socket
         TcpSocket client(acceptResult.value());
-        client.option().handleNonBlock();
 
-        // 处理请求（在新协程中）
-        // 注意：这里为了简化示例，直接在当前协程中处理
-        // 实际应用中应该 spawn 新协程来处理每个客户端
-        co_await handleHttpRequest(std::move(client));
+        optResult = client.option().handleNonBlock();
+        if (!optResult) {
+            LogError("Failed to set client non-block: {}", optResult.error().message());
+            co_await client.close();
+            continue;
+        }
+
+        // 处理请求（spawn新协程）
+        co_await spawn(handleHttpRequest(std::move(client)));
     }
 
     co_await listener.close();
