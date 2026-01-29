@@ -27,7 +27,7 @@ echo -e "\n${YELLOW}[1/4] 配置项目...${NC}"
 cmake .. -DCMAKE_BUILD_TYPE=Release
 
 echo -e "\n${YELLOW}[2/4] 编译测试程序...${NC}"
-make test_sendfile_basic bench_sendfile -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+make T23-SendfileBasic B13-Sendfile -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 if [ $? -ne 0 ]; then
     echo -e "${RED}✗ 编译失败${NC}"
@@ -39,7 +39,7 @@ echo -e "${GREEN}✓ 编译成功${NC}"
 # 运行基础功能测试
 echo -e "\n${YELLOW}[3/4] 运行基础功能测试...${NC}"
 echo -e "${BLUE}========================================${NC}"
-./bin/test_sendfile_basic
+./bin/T23-SendfileBasic
 BASIC_RESULT=$?
 
 if [ $BASIC_RESULT -eq 0 ]; then
@@ -51,7 +51,7 @@ fi
 # 运行性能对比和压测
 echo -e "\n${YELLOW}[4/4] 运行性能对比和压测...${NC}"
 echo -e "${BLUE}========================================${NC}"
-./bin/bench_sendfile
+./bin/B13-Sendfile
 BENCHMARK_RESULT=$?
 
 if [ $BENCHMARK_RESULT -eq 0 ]; then

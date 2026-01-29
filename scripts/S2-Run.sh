@@ -45,23 +45,23 @@ echo ""
 
 # 定义测试列表（不需要配对的独立测试）
 STANDALONE_TESTS=(
-    "test_compute_scheduler"
-    "test_file_io"
-    "test_file_watcher"
-    "test_timeout"
-    "test_mixed_scheduler"
-    "test_async_mutex"
-    "test_mpsc_channel"
-    "test_timing_wheel"
-    "test_unsafe_channel"
-    "test_timer_scheduler"
+    "T11-ComputeScheduler"
+    "T8-FileIo"
+    "T9-FileWatcher"
+    "T10-Timeout"
+    "T12-MixedScheduler"
+    "T13-AsyncMutex"
+    "T14-MpscChannel"
+    "T15-TimingWheel"
+    "T17-UnsafeChannel"
+    "T18-TimerScheduler"
 )
 
 # 定义需要 client-server 配对的测试
 # 格式: "server_name:client_name:description"
 CS_TESTS=(
-    "test_tcp_server:test_tcp_client:TCP Echo"
-    "test_udp_server:test_udp_client:UDP Echo"
+    "T3-TcpServer:T4-TcpClient:TCP Echo"
+    "T6-UdpServer:T7-UdpClient:UDP Echo"
 )
 
 # 运行独立测试

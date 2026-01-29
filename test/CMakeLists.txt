@@ -1,125 +1,126 @@
 # 测试可执行文件
 
-add_executable(test_coroutine_chain test_coroutine_chain.cc)
-target_link_libraries(test_coroutine_chain PRIVATE galay-kernel)
-target_include_directories(test_coroutine_chain PRIVATE ${CMAKE_SOURCE_DIR})
+# T1 - CoroutineChain测试
+add_executable(T1-CoroutineChain T1-CoroutineChain.cc)
+target_link_libraries(T1-CoroutineChain PRIVATE galay-kernel)
+target_include_directories(T1-CoroutineChain PRIVATE ${CMAKE_SOURCE_DIR})
 
-# TcpSocket测试 (旧版本，包含 client 和 server)
-add_executable(test_tcp_socket test_tcp_socket.cc)
-target_link_libraries(test_tcp_socket PRIVATE galay-kernel)
-target_include_directories(test_tcp_socket PRIVATE ${CMAKE_SOURCE_DIR})
+# T2 - TcpSocket测试 (旧版本，包含 client 和 server)
+add_executable(T2-TcpSocket T2-TcpSocket.cc)
+target_link_libraries(T2-TcpSocket PRIVATE galay-kernel)
+target_include_directories(T2-TcpSocket PRIVATE ${CMAKE_SOURCE_DIR})
 
-# TCP Server测试 (独立)
-add_executable(test_tcp_server test_tcp_server.cc)
-target_link_libraries(test_tcp_server PRIVATE galay-kernel)
-target_include_directories(test_tcp_server PRIVATE ${CMAKE_SOURCE_DIR})
+# T3 - TCP Server测试 (独立)
+add_executable(T3-TcpServer T3-TcpServer.cc)
+target_link_libraries(T3-TcpServer PRIVATE galay-kernel)
+target_include_directories(T3-TcpServer PRIVATE ${CMAKE_SOURCE_DIR})
 
-# TCP Client测试 (独立)
-add_executable(test_tcp_client test_tcp_client.cc)
-target_link_libraries(test_tcp_client PRIVATE galay-kernel)
-target_include_directories(test_tcp_client PRIVATE ${CMAKE_SOURCE_DIR})
+# T4 - TCP Client测试 (独立)
+add_executable(T4-TcpClient T4-TcpClient.cc)
+target_link_libraries(T4-TcpClient PRIVATE galay-kernel)
+target_include_directories(T4-TcpClient PRIVATE ${CMAKE_SOURCE_DIR})
 
-# UdpSocket测试 (旧版本，包含 client 和 server)
-add_executable(test_udp_socket test_udp_socket.cc)
-target_link_libraries(test_udp_socket PRIVATE galay-kernel)
-target_include_directories(test_udp_socket PRIVATE ${CMAKE_SOURCE_DIR})
+# T5 - UdpSocket测试 (旧版本，包含 client 和 server)
+add_executable(T5-UdpSocket T5-UdpSocket.cc)
+target_link_libraries(T5-UdpSocket PRIVATE galay-kernel)
+target_include_directories(T5-UdpSocket PRIVATE ${CMAKE_SOURCE_DIR})
 
-# UDP Server测试 (独立)
-add_executable(test_udp_server test_udp_server.cc)
-target_link_libraries(test_udp_server PRIVATE galay-kernel)
-target_include_directories(test_udp_server PRIVATE ${CMAKE_SOURCE_DIR})
+# T6 - UDP Server测试 (独立)
+add_executable(T6-UdpServer T6-UdpServer.cc)
+target_link_libraries(T6-UdpServer PRIVATE galay-kernel)
+target_include_directories(T6-UdpServer PRIVATE ${CMAKE_SOURCE_DIR})
 
-# UDP Client测试 (独立)
-add_executable(test_udp_client test_udp_client.cc)
-target_link_libraries(test_udp_client PRIVATE galay-kernel)
-target_include_directories(test_udp_client PRIVATE ${CMAKE_SOURCE_DIR})
+# T7 - UDP Client测试 (独立)
+add_executable(T7-UdpClient T7-UdpClient.cc)
+target_link_libraries(T7-UdpClient PRIVATE galay-kernel)
+target_include_directories(T7-UdpClient PRIVATE ${CMAKE_SOURCE_DIR})
 
-# File IO测试
-add_executable(test_file_io test_file_io.cc)
-target_link_libraries(test_file_io PRIVATE galay-kernel)
-target_include_directories(test_file_io PRIVATE ${CMAKE_SOURCE_DIR})
+# T8 - File IO测试
+add_executable(T8-FileIo T8-FileIo.cc)
+target_link_libraries(T8-FileIo PRIVATE galay-kernel)
+target_include_directories(T8-FileIo PRIVATE ${CMAKE_SOURCE_DIR})
 
-# FileWatcher测试
-add_executable(test_file_watcher test_file_watcher.cc)
-target_link_libraries(test_file_watcher PRIVATE galay-kernel)
-target_include_directories(test_file_watcher PRIVATE ${CMAKE_SOURCE_DIR})
+# T9 - FileWatcher测试
+add_executable(T9-FileWatcher T9-FileWatcher.cc)
+target_link_libraries(T9-FileWatcher PRIVATE galay-kernel)
+target_include_directories(T9-FileWatcher PRIVATE ${CMAKE_SOURCE_DIR})
 
-# Timeout测试
-add_executable(test_timeout test_timeout.cc)
-target_link_libraries(test_timeout PRIVATE galay-kernel)
-target_include_directories(test_timeout PRIVATE ${CMAKE_SOURCE_DIR})
+# T10 - Timeout测试
+add_executable(T10-Timeout T10-Timeout.cc)
+target_link_libraries(T10-Timeout PRIVATE galay-kernel)
+target_include_directories(T10-Timeout PRIVATE ${CMAKE_SOURCE_DIR})
 
-# ComputeScheduler测试
-add_executable(test_compute_scheduler test_compute_scheduler.cc)
-target_link_libraries(test_compute_scheduler PRIVATE galay-kernel)
-target_include_directories(test_compute_scheduler PRIVATE ${CMAKE_SOURCE_DIR})
+# T11 - ComputeScheduler测试
+add_executable(T11-ComputeScheduler T11-ComputeScheduler.cc)
+target_link_libraries(T11-ComputeScheduler PRIVATE galay-kernel)
+target_include_directories(T11-ComputeScheduler PRIVATE ${CMAKE_SOURCE_DIR})
 
-# Mixed Scheduler测试 (IOScheduler + ComputeScheduler)
-add_executable(test_mixed_scheduler test_mixed_scheduler.cc)
-target_link_libraries(test_mixed_scheduler PRIVATE galay-kernel)
-target_include_directories(test_mixed_scheduler PRIVATE ${CMAKE_SOURCE_DIR})
+# T12 - Mixed Scheduler测试 (IOScheduler + ComputeScheduler)
+add_executable(T12-MixedScheduler T12-MixedScheduler.cc)
+target_link_libraries(T12-MixedScheduler PRIVATE galay-kernel)
+target_include_directories(T12-MixedScheduler PRIVATE ${CMAKE_SOURCE_DIR})
 
-# AsyncMutex测试
-add_executable(test_async_mutex test_async_mutex.cc)
-target_link_libraries(test_async_mutex PRIVATE galay-kernel)
-target_include_directories(test_async_mutex PRIVATE ${CMAKE_SOURCE_DIR})
+# T13 - AsyncMutex测试
+add_executable(T13-AsyncMutex T13-AsyncMutex.cc)
+target_link_libraries(T13-AsyncMutex PRIVATE galay-kernel)
+target_include_directories(T13-AsyncMutex PRIVATE ${CMAKE_SOURCE_DIR})
 
-# MpscChannel测试
-add_executable(test_mpsc_channel test_mpsc_channel.cc)
-target_link_libraries(test_mpsc_channel PRIVATE galay-kernel)
-target_include_directories(test_mpsc_channel PRIVATE ${CMAKE_SOURCE_DIR})
+# T14 - MpscChannel测试
+add_executable(T14-MpscChannel T14-MpscChannel.cc)
+target_link_libraries(T14-MpscChannel PRIVATE galay-kernel)
+target_include_directories(T14-MpscChannel PRIVATE ${CMAKE_SOURCE_DIR})
 
-# TimingWheel测试
-add_executable(test_timing_wheel test_timing_wheel.cc)
-target_link_libraries(test_timing_wheel PRIVATE galay-kernel)
-target_include_directories(test_timing_wheel PRIVATE ${CMAKE_SOURCE_DIR})
+# T15 - TimingWheel测试
+add_executable(T15-TimingWheel T15-TimingWheel.cc)
+target_link_libraries(T15-TimingWheel PRIVATE galay-kernel)
+target_include_directories(T15-TimingWheel PRIVATE ${CMAKE_SOURCE_DIR})
 
-# NotifyAwaitable测试 (RecvNotify/SendNotify)
-add_executable(test_notify_awaitable test_notify_awaitable.cc)
-target_link_libraries(test_notify_awaitable PRIVATE galay-kernel)
-target_include_directories(test_notify_awaitable PRIVATE ${CMAKE_SOURCE_DIR})
+# T16 - NotifyAwaitable测试 (RecvNotify/SendNotify)
+add_executable(T16-NotifyAwaitable T16-NotifyAwaitable.cc)
+target_link_libraries(T16-NotifyAwaitable PRIVATE galay-kernel)
+target_include_directories(T16-NotifyAwaitable PRIVATE ${CMAKE_SOURCE_DIR})
 
-# UnsafeChannel测试
-add_executable(test_unsafe_channel test_unsafe_channel.cc)
-target_link_libraries(test_unsafe_channel PRIVATE galay-kernel)
-target_include_directories(test_unsafe_channel PRIVATE ${CMAKE_SOURCE_DIR})
+# T17 - UnsafeChannel测试
+add_executable(T17-UnsafeChannel T17-UnsafeChannel.cc)
+target_link_libraries(T17-UnsafeChannel PRIVATE galay-kernel)
+target_include_directories(T17-UnsafeChannel PRIVATE ${CMAKE_SOURCE_DIR})
 
-# TimerScheduler多线程测试
-add_executable(test_timer_scheduler test_timer_scheduler.cc)
-target_link_libraries(test_timer_scheduler PRIVATE galay-kernel)
-target_include_directories(test_timer_scheduler PRIVATE ${CMAKE_SOURCE_DIR})
+# T18 - TimerScheduler多线程测试
+add_executable(T18-TimerScheduler T18-TimerScheduler.cc)
+target_link_libraries(T18-TimerScheduler PRIVATE galay-kernel)
+target_include_directories(T18-TimerScheduler PRIVATE ${CMAKE_SOURCE_DIR})
 
-# readv/writev测试
-add_executable(test_readv_writev test_readv_writev.cc)
-target_link_libraries(test_readv_writev PRIVATE galay-kernel)
-target_include_directories(test_readv_writev PRIVATE ${CMAKE_SOURCE_DIR})
+# T19 - readv/writev测试
+add_executable(T19-ReadvWritev T19-ReadvWritev.cc)
+target_link_libraries(T19-ReadvWritev PRIVATE galay-kernel)
+target_include_directories(T19-ReadvWritev PRIVATE ${CMAKE_SOURCE_DIR})
 
-# RingBuffer + readv/writev 集成测试
-add_executable(test_ringbuffer_io test_ringbuffer_io.cc)
-target_link_libraries(test_ringbuffer_io PRIVATE galay-kernel)
-target_include_directories(test_ringbuffer_io PRIVATE ${CMAKE_SOURCE_DIR})
+# T20 - RingBuffer + readv/writev 集成测试
+add_executable(T20-RingbufferIo T20-RingbufferIo.cc)
+target_link_libraries(T20-RingbufferIo PRIVATE galay-kernel)
+target_include_directories(T20-RingbufferIo PRIVATE ${CMAKE_SOURCE_DIR})
 
-# Runtime测试 (管理多个调度器)
-add_executable(test_runtime test_runtime.cc)
-target_link_libraries(test_runtime PRIVATE galay-kernel)
-target_include_directories(test_runtime PRIVATE ${CMAKE_SOURCE_DIR})
+# T21 - Runtime测试 (管理多个调度器)
+add_executable(T21-Runtime T21-Runtime.cc)
+target_link_libraries(T21-Runtime PRIVATE galay-kernel)
+target_include_directories(T21-Runtime PRIVATE ${CMAKE_SOURCE_DIR})
 
-# SendFile测试 (零拷贝文件传输)
-add_executable(test_sendfile test_sendfile.cc)
-target_link_libraries(test_sendfile PRIVATE galay-kernel)
-target_include_directories(test_sendfile PRIVATE ${CMAKE_SOURCE_DIR})
+# T22 - SendFile测试 (零拷贝文件传输)
+add_executable(T22-Sendfile T22-Sendfile.cc)
+target_link_libraries(T22-Sendfile PRIVATE galay-kernel)
+target_include_directories(T22-Sendfile PRIVATE ${CMAKE_SOURCE_DIR})
 
-# SendFile基础功能测试
-add_executable(test_sendfile_basic test_sendfile_basic.cc)
-target_link_libraries(test_sendfile_basic PRIVATE galay-kernel)
-target_include_directories(test_sendfile_basic PRIVATE ${CMAKE_SOURCE_DIR})
+# T23 - SendFile基础功能测试
+add_executable(T23-SendfileBasic T23-SendfileBasic.cc)
+target_link_libraries(T23-SendfileBasic PRIVATE galay-kernel)
+target_include_directories(T23-SendfileBasic PRIVATE ${CMAKE_SOURCE_DIR})
 
-# Spawn函数测试
-add_executable(test_spawn test_spawn.cc)
-target_link_libraries(test_spawn PRIVATE galay-kernel)
-target_include_directories(test_spawn PRIVATE ${CMAKE_SOURCE_DIR})
+# T24 - Spawn函数测试
+add_executable(T24-Spawn T24-Spawn.cc)
+target_link_libraries(T24-Spawn PRIVATE galay-kernel)
+target_include_directories(T24-Spawn PRIVATE ${CMAKE_SOURCE_DIR})
 
-# Spawn函数简单演示
-add_executable(test_spawn_simple test_spawn_simple.cc)
-target_link_libraries(test_spawn_simple PRIVATE galay-kernel)
-target_include_directories(test_spawn_simple PRIVATE ${CMAKE_SOURCE_DIR})
+# T25 - Spawn函数简单演示
+add_executable(T25-SpawnSimple T25-SpawnSimple.cc)
+target_link_libraries(T25-SpawnSimple PRIVATE galay-kernel)
+target_include_directories(T25-SpawnSimple PRIVATE ${CMAKE_SOURCE_DIR})
