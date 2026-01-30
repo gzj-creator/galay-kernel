@@ -324,7 +324,7 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
     return true;
 }
 
-inline void IOController::removeAwaitable(IOEventType type) {
+inline void IOController::removeAwaitable(IOEventType /*type*/) {
     switch (m_type) {
     case IOEventType::RECV:
     case IOEventType::READV:

@@ -37,8 +37,8 @@ namespace galay::kernel
 {
 
 class PromiseType;
-class CoroutineData;
-class WaitResult;
+struct CoroutineData;
+struct WaitResult;
 class Waker;
 class Scheduler;
 

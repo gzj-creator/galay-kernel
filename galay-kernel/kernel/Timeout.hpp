@@ -84,7 +84,6 @@ struct WithTimeout {
     }
 
     auto await_resume() -> decltype(m_inner.await_resume()) {
-        using ResultType = decltype(m_inner.await_resume());
         // 检查是否超时
         if (m_timer->timeouted()) [[unlikely]] {
             // 所有等待体都有 m_result 成员，设置为超时错误

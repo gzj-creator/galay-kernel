@@ -42,7 +42,7 @@
 namespace galay::kernel
 {
 
-class IOController;
+struct IOController;
 
 /**
  * @brief Accept操作的可等待对象
