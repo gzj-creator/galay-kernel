@@ -6,6 +6,7 @@
 #include <sys/eventfd.h>
 #include <sys/inotify.h>
 #include <sys/socket.h>
+#include <sys/sendfile.h>
 #include <sys/poll.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -192,18 +193,15 @@ int IOUringScheduler::addSendFile(IOController* controller)
     auto awaitable = controller->getAwaitable<SendFileAwaitable>();
     if (awaitable == nullptr) return -1;
 
+    // io_uring 的 splice 不能直接从普通文件到 socket
+    // 使用 poll 监听 socket 可写，然后在 processCompletion 中调用 sendfile
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         return -EAGAIN;
     }
 
-    // io_uring 使用 splice 实现零拷贝文件传输
-    // 或者使用 IORING_OP_SENDMSG 配合 MSG_SPLICE_PAGES (Linux 6.5+)
-    // 这里使用 splice 方式：file -> pipe -> socket
-    // 简化实现：直接使用 io_uring_prep_splice
-    io_uring_prep_splice(sqe, awaitable->m_file_fd, awaitable->m_offset,
-                         controller->m_handle.fd, -1,
-                         awaitable->m_count, SPLICE_F_MOVE);
+    // 使用 poll 等待 socket 可写
+    io_uring_prep_poll_add(sqe, controller->m_handle.fd, POLLOUT);
     io_uring_sqe_set_data(sqe, controller);
     return 0;
 }
@@ -670,10 +668,19 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     {
         SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
         if (awaitable == nullptr) return;
-        if (res > 0) {
-            awaitable->m_result = static_cast<size_t>(res);
-        } else if (res == 0) {
-            awaitable->m_result = 0;
+
+        // poll 完成后，调用 sendfile 系统调用
+        if (res >= 0) {
+            off_t offset = awaitable->m_offset;
+            ssize_t sentBytes = ::sendfile(controller->m_handle.fd, awaitable->m_file_fd,
+                                           &offset, awaitable->m_count);
+            if (sentBytes > 0) {
+                awaitable->m_result = static_cast<size_t>(sentBytes);
+            } else if (sentBytes == 0) {
+                awaitable->m_result = 0;
+            } else {
+                awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
+            }
         } else {
             awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res)));
         }

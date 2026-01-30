@@ -7,6 +7,7 @@
 #include <sys/eventfd.h>
 #include <sys/inotify.h>
 #include <sys/socket.h>
+#include <sys/sendfile.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -194,12 +195,15 @@ int EpollScheduler::addWritev(IOController* controller)
 
 int EpollScheduler::addSendFile(IOController* controller)
 {
+    auto awaitable = controller->getAwaitable<SendFileAwaitable>();
+    if (awaitable == nullptr) return -1;
+
+    // 先尝试直接发送
     if (handleSendFile(controller)) {
         return OK;
     }
 
-    auto awaitable = controller->getAwaitable<SendFileAwaitable>();
-    if (awaitable == nullptr) return -1;
+    // 如果 EAGAIN，注册 EPOLLOUT 等待 socket 可写
     struct epoll_event ev;
     ev.events = EPOLLOUT | EPOLLET;
     ev.data.ptr = controller;

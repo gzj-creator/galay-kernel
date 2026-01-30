@@ -152,7 +152,7 @@ void testHighConcurrency() {
 
     std::cout << "  Added " << (numThreads * timersPerThread) << " timers in "
               << addTime << " ms" << std::endl;
-    std::cout << "  Throughput: " << (numThreads * timersPerThread * 1000 / std::max(1LL, addTime))
+    std::cout << "  Throughput: " << (numThreads * timersPerThread * 1000 / std::max(1LL, static_cast<long long>(addTime)))
               << " timers/sec" << std::endl;
 
     // 等待所有定时器触发
