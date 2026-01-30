@@ -87,7 +87,7 @@ void EpollScheduler::stop()
 void EpollScheduler::notify()
 {
     uint64_t val = 1;
-    write(m_event_fd, &val, sizeof(val));
+    if (write(m_event_fd, &val, sizeof(val)) < 0) {}
 }
 
 int EpollScheduler::addAccept(IOController* controller)

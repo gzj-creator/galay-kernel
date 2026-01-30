@@ -212,7 +212,7 @@ Coroutine performanceComparison() {
             const size_t size = 10 * 1024 * 1024; // 10MB
             char buffer[4096] = {0};
             for (size_t i = 0; i < size; i += sizeof(buffer)) {
-                write(fd, buffer, sizeof(buffer));
+                if (write(fd, buffer, sizeof(buffer)) < 0) break;
             }
             close(fd);
             LogInfo("Created test file: {} (10MB)", test_file);

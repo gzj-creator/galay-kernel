@@ -44,7 +44,7 @@ public:
 
         // 创建输出目录
         std::string mkdir_cmd = "mkdir -p " + output_dir;
-        system(mkdir_cmd.c_str());
+        if (system(mkdir_cmd.c_str()) != 0) {}
 
         // 写入结果文件
         std::string filename = output_dir + "/" + m_test_name + ".result";
