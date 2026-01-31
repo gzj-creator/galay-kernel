@@ -13,6 +13,7 @@
  * - 公平性：FIFO 顺序唤醒等待协程
  * - 线程安全
  * - 支持超时
+ * - 零分配：等待体复用，减少内存分配开销
  *
  * 使用方式：
  * @code
@@ -83,7 +84,6 @@ private:
  * 实现细节：
  * - 使用 atomic<bool> 管理锁状态
  * - 使用 moodycamel::ConcurrentQueue 作为无锁等待队列
- * - 使用 atomic<size_t> 计数器确保正确性
  *
  * @note 线程安全，无锁实现
  */
@@ -158,7 +158,7 @@ private:
     friend class AsyncScopedLockAwaitable;
 
     std::atomic<bool> m_locked{false};                      ///< 锁状态
-    moodycamel::ConcurrentQueue<Waker> m_waiters;     ///< 无锁等待队列
+    moodycamel::ConcurrentQueue<Waker> m_waiters;           ///< 无锁等待队列
 };
 
 // AsyncMutexAwaitable 实现

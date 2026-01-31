@@ -316,7 +316,7 @@ void test_runtime_specified_count() {
     std::cout << "\n[测试6] 指定调度器数量" << std::endl;
 
     // 指定创建 3 个 IO 调度器和 5 个计算调度器
-    Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, 3, 5);
+    Runtime runtime(3, 5);
 
     runtime.start();
 
@@ -343,7 +343,7 @@ void test_runtime_manual_priority() {
     std::cout << "\n[测试7] 手动添加优先于自动配置" << std::endl;
 
     // 指定自动创建数量，但手动添加调度器
-    Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, 10, 10);
+    Runtime runtime(10, 10);
 
     // 手动添加 2 个 IO 调度器
     auto io1 = std::make_unique<IOSchedulerType>();
