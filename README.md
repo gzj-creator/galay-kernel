@@ -39,6 +39,14 @@
 | 持续压力 | 1300-1500 万 msg/s | 5 秒持续负载 |
 | 平均延迟 | ~3 ms | 消息端到端延迟 |
 
+### Runtime (调度器管理)
+
+| 测试场景 | 性能 | 备注 |
+|---------|------|------|
+| getNextIOScheduler | 472M ops/sec | 无锁轮询，原子操作 |
+| 多线程并发获取 | 完全均匀分布 | 8 线程 × 10 万次 |
+| 高并发任务提交 | 8 万任务/59ms | 8 线程并发提交 |
+
 > 详细报告请查看 [doc/benchmark_report.md](doc/benchmark_report.md)
 
 ## 快速开始
@@ -107,7 +115,7 @@ int main() {
 
 ```cpp
 // 创建 4 个 IO 调度器和 8 个计算调度器
-Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, 4, 8);
+Runtime runtime(4, 8);
 runtime.start();
 ```
 
@@ -213,7 +221,7 @@ galay-kernel/
 │       ├── Defn.hpp        # 平台定义
 │       ├── Buffer.h/cc     # 缓冲区
 │       ├── Bytes.h/cc      # 字节容器
-│       ├── Strategy.hpp/inl # 负载均衡策略
+│       ├── AsyncStrategy.hpp # 负载均衡策略
 │       ├── Error.h/cc      # 错误处理
 │       ├── Host.hpp        # 地址封装
 │       ├── HandleOption.h/cc # 句柄选项
@@ -253,7 +261,6 @@ galay-kernel/
 class Runtime {
     // 构造（支持零配置启动）
     explicit Runtime(
-        LoadBalanceStrategy strategy = LoadBalanceStrategy::ROUND_ROBIN,
         size_t io_count = 0,        // 0 表示自动（2 * CPU 核心数）
         size_t compute_count = 0    // 0 表示自动（CPU 核心数）
     );
@@ -270,19 +277,12 @@ class Runtime {
     // 获取调度器
     IOScheduler* getIOScheduler(size_t index);           // 按索引获取
     ComputeScheduler* getComputeScheduler(size_t index); // 按索引获取
-    IOScheduler* getNextIOScheduler();                   // 负载均衡获取（推荐）
-    ComputeScheduler* getNextComputeScheduler();         // 负载均衡获取（推荐）
+    IOScheduler* getNextIOScheduler();                   // 轮询获取（推荐）
+    ComputeScheduler* getNextComputeScheduler();         // 轮询获取（推荐）
 
     // 查询
     size_t getIOSchedulerCount() const;
     size_t getComputeSchedulerCount() const;
-    LoadBalanceStrategy getLoadBalanceStrategy() const;
-};
-
-// 负载均衡策略
-enum class LoadBalanceStrategy {
-    ROUND_ROBIN,  // 轮询（默认）
-    RANDOM        // 随机
 };
 ```
 
