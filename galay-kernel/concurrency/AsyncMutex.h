@@ -135,17 +135,6 @@ public:
     }
 
     /**
-     * @brief 尝试获取锁（非阻塞）
-     * @return true 成功获取锁，false 锁被占用
-     */
-    bool tryLock() {
-        bool expected = false;
-        return m_locked.compare_exchange_strong(expected, true,
-                                                 std::memory_order_acq_rel,
-                                                 std::memory_order_acquire);
-    }
-
-    /**
      * @brief 检查锁是否被占用
      * @return true 锁被占用
      */
@@ -156,6 +145,17 @@ public:
 private:
     friend class AsyncMutexAwaitable;
     friend class AsyncScopedLockAwaitable;
+
+    /**
+     * @brief 尝试获取锁（非阻塞，仅内部使用）
+     * @return true 成功获取锁，false 锁被占用
+     */
+    bool tryLock() {
+        bool expected = false;
+        return m_locked.compare_exchange_strong(expected, true,
+                                                 std::memory_order_acq_rel,
+                                                 std::memory_order_acquire);
+    }
 
     std::atomic<bool> m_locked{false};                      ///< 锁状态
     moodycamel::ConcurrentQueue<Waker> m_waiters;           ///< 无锁等待队列

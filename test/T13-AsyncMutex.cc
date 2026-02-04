@@ -44,24 +44,6 @@ Coroutine testBasicLockUnlock(AsyncMutex* mutex) {
 }
 
 // ============================================================================
-// 测试2：tryLock
-// ============================================================================
-std::atomic<bool> g_test2_try_failed{false};
-std::atomic<bool> g_test2_done{false};
-
-Coroutine testTryLock(AsyncMutex* mutex) {
-    // 先获取锁
-    co_await mutex->lock();
-
-    // 在持有锁时 tryLock 应该失败
-    g_test2_try_failed = !mutex->tryLock();
-
-    mutex->unlock();
-    g_test2_done = true;
-    co_return;
-}
-
-// ============================================================================
 // 测试3：多协程竞争（互斥性验证）
 // ============================================================================
 std::atomic<int> g_test3_counter{0};
@@ -183,29 +165,6 @@ Coroutine testRapidLockUnlock(AsyncMutex* mutex) {
 }
 
 // ============================================================================
-// 测试10：tryLock 在竞争环境下
-// ============================================================================
-std::atomic<int> g_test10_try_success{0};
-std::atomic<int> g_test10_try_fail{0};
-std::atomic<int> g_test10_completed{0};
-constexpr int TEST10_COROUTINE_COUNT = 20;
-
-Coroutine testTryLockContention(AsyncMutex* mutex) {
-    for (int i = 0; i < 10; ++i) {
-        if (mutex->tryLock()) {
-            g_test10_try_success.fetch_add(1, std::memory_order_relaxed);
-            // 已移除 sleep_for
-            mutex->unlock();
-        } else {
-            g_test10_try_fail.fetch_add(1, std::memory_order_relaxed);
-        }
-        // 已移除 sleep_for
-    }
-    g_test10_completed.fetch_add(1, std::memory_order_relaxed);
-    co_return;
-}
-
-// ============================================================================
 // 测试12：队列容量边界（小容量队列）
 // ============================================================================
 std::atomic<int> g_test12_completed{0};
@@ -233,31 +192,6 @@ Coroutine testEarlyExit(AsyncMutex* mutex, bool shouldExit) {
     // 已移除 sleep_for
     mutex->unlock();
     g_test13_completed.fetch_add(1, std::memory_order_relaxed);
-    co_return;
-}
-
-// ============================================================================
-// 测试14：混合 lock 和 tryLock
-// ============================================================================
-std::atomic<int> g_test14_lock_count{0};
-std::atomic<int> g_test14_trylock_count{0};
-std::atomic<int> g_test14_completed{0};
-constexpr int TEST14_COROUTINE_COUNT = 10;
-
-Coroutine testMixedLockTryLock(AsyncMutex* mutex, bool useTryLock) {
-    for (int i = 0; i < 5; ++i) {
-        if (useTryLock) {
-            while (!mutex->tryLock()) {
-                // 自旋等待（已移除 sleep_for）
-            }
-            g_test14_trylock_count.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            co_await mutex->lock();
-            g_test14_lock_count.fetch_add(1, std::memory_order_relaxed);
-        }
-        mutex->unlock();
-    }
-    g_test14_completed.fetch_add(1, std::memory_order_relaxed);
     co_return;
 }
 
@@ -338,33 +272,6 @@ void runTests() {
             g_passed++;
         } else {
             LogError("[FAIL] Basic lock/unlock timeout");
-        }
-    }
-
-    // 测试2：tryLock
-    {
-        LogInfo("\n--- Test 2: tryLock ---");
-        g_total++;
-
-        IOSchedulerType scheduler;
-        AsyncMutex mutex(8);
-
-        scheduler.start();
-        scheduler.spawn(testTryLock(&mutex));
-
-        auto start = std::chrono::steady_clock::now();
-        while (!g_test2_done) {
-            // 使用调度器的空闲等待
-            if (std::chrono::steady_clock::now() - start > 2s) break;
-        }
-
-        scheduler.stop();
-
-        if (g_test2_done && g_test2_try_failed) {
-            LogInfo("[PASS] tryLock failed when lock is held");
-            g_passed++;
-        } else {
-            LogError("[FAIL] tryLock test: done={}, try_failed={}", g_test2_done.load(), g_test2_try_failed.load());
         }
     }
 
@@ -586,43 +493,6 @@ void runTests() {
         }
     }
 
-    // 测试10：tryLock 竞争
-    {
-        LogInfo("\n--- Test 10: tryLock contention ({} coroutines) ---", TEST10_COROUTINE_COUNT);
-        g_total++;
-
-        IOSchedulerType scheduler;
-        AsyncMutex mutex(32);
-
-        scheduler.start();
-
-        for (int i = 0; i < TEST10_COROUTINE_COUNT; ++i) {
-            scheduler.spawn(testTryLockContention(&mutex));
-        }
-
-        auto start = std::chrono::steady_clock::now();
-        while (g_test10_completed < TEST10_COROUTINE_COUNT) {
-            // 使用调度器的空闲等待
-            if (std::chrono::steady_clock::now() - start > 30s) break;
-        }
-
-        scheduler.stop();
-
-        bool passed = (g_test10_completed == TEST10_COROUTINE_COUNT);
-        int total_attempts = g_test10_try_success + g_test10_try_fail;
-
-        if (passed) {
-            LogInfo("[PASS] tryLock contention: completed={}, success={}, fail={}, total={}",
-                    g_test10_completed.load(), g_test10_try_success.load(),
-                    g_test10_try_fail.load(), total_attempts);
-            g_passed++;
-        } else {
-            LogError("[FAIL] tryLock contention: completed={}/{}",
-                    g_test10_completed.load(), TEST10_COROUTINE_COUNT);
-        }
-    }
-
-
     // 测试12：队列容量边界
     {
         LogInfo("\n--- Test 12: Queue capacity boundary ({} coroutines, capacity=4) ---",
@@ -688,45 +558,6 @@ void runTests() {
         } else {
             LogError("[FAIL] Early exit: completed={} (expected 2), lock_released={}",
                     g_test13_completed.load(), lock_ok);
-        }
-    }
-
-    // 测试14：混合 lock 和 tryLock
-    {
-        LogInfo("\n--- Test 14: Mixed lock and tryLock ---");
-        g_total++;
-
-        IOSchedulerType scheduler;
-        AsyncMutex mutex(16);
-
-        scheduler.start();
-
-        for (int i = 0; i < TEST14_COROUTINE_COUNT; ++i) {
-            scheduler.spawn(testMixedLockTryLock(&mutex, i % 2 == 0));
-        }
-
-        auto start = std::chrono::steady_clock::now();
-        while (g_test14_completed < TEST14_COROUTINE_COUNT) {
-            // 使用调度器的空闲等待
-            if (std::chrono::steady_clock::now() - start > 60s) break;
-        }
-
-        scheduler.stop();
-
-        int expected_total = TEST14_COROUTINE_COUNT * 5;
-        int actual_total = g_test14_lock_count + g_test14_trylock_count;
-        bool passed = (g_test14_completed == TEST14_COROUTINE_COUNT) &&
-                      (actual_total == expected_total);
-
-        if (passed) {
-            LogInfo("[PASS] Mixed lock/tryLock: completed={}, lock={}, trylock={}, total={}",
-                    g_test14_completed.load(), g_test14_lock_count.load(),
-                    g_test14_trylock_count.load(), actual_total);
-            g_passed++;
-        } else {
-            LogError("[FAIL] Mixed lock/tryLock: completed={}/{}, total={}/{}",
-                    g_test14_completed.load(), TEST14_COROUTINE_COUNT,
-                    actual_total, expected_total);
         }
     }
 
