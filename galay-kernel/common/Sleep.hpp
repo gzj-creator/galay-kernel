@@ -3,6 +3,7 @@
 
 #include "Timer.hpp"
 #include <memory>
+#include "galay-kernel/common/Concepts.h"
 #include "galay-kernel/kernel/Waker.h"
 #include "galay-kernel/kernel/TimerScheduler.h"
 
@@ -13,8 +14,8 @@ class SleepTimer final: public Timer
 {
 public:
     using ptr = std::shared_ptr<SleepTimer>;
-    template<typename Rep, typename Period>
-    SleepTimer(std::chrono::duration<Rep, Period> duration)
+    template<concepts::ChronoDuration Duration>
+    SleepTimer(Duration duration)
         :Timer(duration) {}
     void setWaker(Waker waker) { m_waker = waker; }
     void handleTimeout() override {  m_waker.wakeUp(); Timer::handleTimeout(); }
@@ -27,8 +28,8 @@ struct SleepAwaitable
 {
     SleepTimer::ptr m_timer;
 
-    template<typename Rep, typename Period>
-    SleepAwaitable(std::chrono::duration<Rep, Period> duration)
+    template<concepts::ChronoDuration Duration>
+    SleepAwaitable(Duration duration)
         :m_timer(std::make_shared<SleepTimer>(duration)) {}
 
     bool await_ready() { return false; }
@@ -46,8 +47,8 @@ struct SleepAwaitable
 
 };
 
-template<typename Rep, typename Period>
-SleepAwaitable sleep(std::chrono::duration<Rep, Period> duration) {
+template<concepts::ChronoDuration Duration>
+SleepAwaitable sleep(Duration duration) {
     return SleepAwaitable(duration);
 }
 

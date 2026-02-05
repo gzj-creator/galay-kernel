@@ -6,6 +6,9 @@
 #include <iostream>
 #include <chrono>
 #include <atomic>
+#include <concepts>
+#include <type_traits>
+#include <utility>
 
 // 模拟 Awaitable 对象
 struct MockResult {
@@ -106,8 +109,26 @@ private:
     AwaitableByRefNoReset m_awaitable;
 };
 
+template <typename T>
+using LockRef = decltype(std::declval<T&>().lock());
+
+template <typename T>
+concept BenchmarkTarget =
+    std::default_initializable<T> &&
+    std::is_lvalue_reference_v<LockRef<T>> &&
+    requires(T t) {
+        { t.getCounter() } -> std::convertible_to<int>;
+    } &&
+    requires(std::remove_reference_t<LockRef<T>> awaitable) {
+        { awaitable.await_ready() } -> std::convertible_to<bool>;
+        { awaitable.await_suspend(nullptr) } -> std::convertible_to<bool>;
+        awaitable.await_resume();
+    };
+
 template<typename T>
 void benchmark(const char* name, int iterations) {
+    static_assert(BenchmarkTarget<T>,
+                  "benchmark<T> requires lock() returning lvalue ref and awaitable methods");
     T obj;
 
     auto start = std::chrono::high_resolution_clock::now();

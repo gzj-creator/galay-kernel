@@ -41,9 +41,11 @@
 #include "galay-kernel/kernel/Waker.h"
 #include "galay-kernel/common/Error.h"
 #include <atomic>
+#include <concepts>
 #include <optional>
 #include <expected>
 #include <coroutine>
+#include <type_traits>
 
 namespace galay::kernel
 {
@@ -58,6 +60,8 @@ template<typename T>
 class AsyncWaiterAwaitable : public TimeoutSupport<AsyncWaiterAwaitable<T>>
 {
 public:
+    static_assert(std::movable<T> && (!std::is_void_v<T>),
+                  "AsyncWaiterAwaitable<T> requires movable, non-void T");
     explicit AsyncWaiterAwaitable(AsyncWaiter<T>* waiter) : m_waiter(waiter) {}
 
     bool await_ready() const noexcept;
@@ -103,6 +107,8 @@ template<typename T>
 class AsyncWaiter
 {
 public:
+    static_assert(std::movable<T> && (!std::is_void_v<T>),
+                  "AsyncWaiter<T> requires movable, non-void T");
     AsyncWaiter() = default;
 
     // 禁止拷贝和移动

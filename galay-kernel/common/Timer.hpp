@@ -6,6 +6,8 @@
 #include <functional>
 #include <memory>
 
+#include "galay-kernel/common/Concepts.h"
+
 namespace galay::kernel
 {
 
@@ -19,8 +21,8 @@ class Timer
 public:
     using ptr = std::shared_ptr<Timer>;
 
-    template<typename Rep, typename Period>
-    Timer(std::chrono::duration<Rep, Period> duration) {
+    template<concepts::ChronoDuration Duration>
+    Timer(Duration duration) {
         // 存储相对时间间隔（纳秒）
         m_delay = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
         // 过期时间延迟到 getExpireTime() 时计算
@@ -55,8 +57,8 @@ protected:
 class CBTimer final: public Timer
 {
 public:
-    template<typename Rep, typename Period>
-    CBTimer(std::chrono::duration<Rep, Period> duration, std::function<void()>&& callback)
+    template<concepts::ChronoDuration Duration>
+    CBTimer(Duration duration, std::function<void()>&& callback)
         : Timer(duration), m_callback(std::move(callback)) {}
 
     void handleTimeout() override {

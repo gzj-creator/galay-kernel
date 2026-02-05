@@ -3,6 +3,7 @@
 
 #include "galay-kernel/common/Error.h"
 #include "galay-kernel/common/Timer.hpp"
+#include "galay-kernel/common/Concepts.h"
 #include "Waker.h"
 #include "Scheduler.hpp"
 #include <memory>
@@ -16,8 +17,8 @@ class TimeoutTimer final: public Timer
 public:
     using ptr = std::shared_ptr<TimeoutTimer>;
 
-    template<typename Rep, typename Period>
-    TimeoutTimer(std::chrono::duration<Rep, Period> duration)
+    template<concepts::ChronoDuration Duration>
+    TimeoutTimer(Duration duration)
         : Timer(duration) {}
 
     void setWaker(Waker waker) { m_waker = waker; }
@@ -44,10 +45,14 @@ struct WithTimeout;
 */
 template<typename Derived>
 struct TimeoutSupport {
+    template<typename D = Derived>
+    requires concepts::Awaitable<D>
     auto timeout(std::chrono::milliseconds t) && {
         return WithTimeout<Derived>{std::move(static_cast<Derived&>(*this)), t};
     }
 
+    template<typename D = Derived>
+    requires concepts::Awaitable<D>
     auto timeout(std::chrono::milliseconds t) & {
         return WithTimeout<Derived>{static_cast<Derived&>(*this), t};
     }
@@ -72,7 +77,9 @@ struct WithTimeout {
 
     bool await_ready() { return m_inner.await_ready(); }
 
-    bool await_suspend(std::coroutine_handle<> handle) {
+    template<typename Promise>
+    requires concepts::AwaitableWith<Awaitable, Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
         bool suspended = m_inner.await_suspend(handle);
         if (!suspended) {
             return false;

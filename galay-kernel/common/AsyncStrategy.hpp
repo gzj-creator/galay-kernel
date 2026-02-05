@@ -23,6 +23,7 @@
 #include <memory>
 #include <random>
 #include <optional>
+#include <concepts>
 
 namespace galay::details
 {
@@ -32,7 +33,7 @@ namespace galay::details
  * @tparam Type 节点类型
  * @details 使用原子操作实现，天然线程安全
  */
-template<typename Type>
+template<std::copy_constructible Type>
 class RoundRobinLoadBalancer
 {
 private:
@@ -71,7 +72,7 @@ public:
  * @brief 加权轮询负载均衡器（平滑加权轮询算法）
  * @tparam Type 节点类型
  */
-template<typename Type>
+template<std::copy_constructible Type>
 class WeightRoundRobinLoadBalancer
 {
 private:
@@ -148,7 +149,7 @@ public:
  * @brief 随机负载均衡器
  * @tparam Type 节点类型
  */
-template<typename Type>
+template<std::copy_constructible Type>
 class RandomLoadBalancer
 {
 private:
@@ -194,7 +195,7 @@ public:
  * @brief 加权随机负载均衡器
  * @tparam Type 节点类型
  */
-template<typename Type>
+template<std::copy_constructible Type>
 class WeightedRandomLoadBalancer
 {
 private:

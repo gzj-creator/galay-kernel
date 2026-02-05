@@ -12,6 +12,7 @@
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/common/Error.h"
+#include <concepts>
 #include <deque>
 #include <optional>
 #include <expected>
@@ -20,6 +21,9 @@
 
 namespace galay::kernel
 {
+
+template <typename T>
+concept UnsafeChannelValue = std::movable<T>;
 
 template <typename T>
 class UnsafeChannel;
@@ -31,6 +35,7 @@ template <typename T>
 class UnsafeRecvAwaitable : public TimeoutSupport<UnsafeRecvAwaitable<T>>
 {
 public:
+    static_assert(UnsafeChannelValue<T>, "UnsafeRecvAwaitable requires movable T");
     explicit UnsafeRecvAwaitable(UnsafeChannel<T>* channel) : m_channel(channel) {}
 
     bool await_ready() const noexcept;
@@ -50,6 +55,7 @@ template <typename T>
 class UnsafeRecvBatchAwaitable : public TimeoutSupport<UnsafeRecvBatchAwaitable<T>>
 {
 public:
+    static_assert(UnsafeChannelValue<T>, "UnsafeRecvBatchAwaitable requires movable T");
     explicit UnsafeRecvBatchAwaitable(UnsafeChannel<T>* channel, size_t maxCount)
         : m_channel(channel), m_maxCount(maxCount) {}
 
@@ -86,6 +92,7 @@ template <typename T>
 class UnsafeChannel
 {
 public:
+    static_assert(UnsafeChannelValue<T>, "UnsafeChannel requires movable T");
     static constexpr size_t DEFAULT_BATCH_SIZE = 1024;
 
     UnsafeChannel() = default;
@@ -108,7 +115,7 @@ public:
         return true;
     }
 
-    bool send(const T& value) {
+    bool send(const T& value) requires std::copy_constructible<T> {
         m_queue.push_back(value);
         ++m_size;
         if (m_size == 1 && m_hasWaiter) {
@@ -121,7 +128,7 @@ public:
      * @brief 批量发送数据
      * @warning 仅在调度器线程内调用
      */
-    bool sendBatch(const std::vector<T>& values) {
+    bool sendBatch(const std::vector<T>& values) requires std::copy_constructible<T> {
         if (values.empty()) return true;
         bool wasEmpty = (m_size == 0);
         for (const auto& value : values) {

@@ -5,9 +5,27 @@
 #include "Scheduler.hpp"
 #include "Awaitable.h"
 #include "galay-kernel/common/TimerManager.hpp"
+#include <concepts>
 
 namespace galay::kernel 
 {
+
+template<typename T>
+concept IOControllerAwaitable =
+    std::same_as<T, AcceptAwaitable> ||
+    std::same_as<T, RecvAwaitable> ||
+    std::same_as<T, SendAwaitable> ||
+    std::same_as<T, ConnectAwaitable> ||
+    std::same_as<T, RecvFromAwaitable> ||
+    std::same_as<T, SendToAwaitable> ||
+    std::same_as<T, FileReadAwaitable> ||
+    std::same_as<T, FileWriteAwaitable> ||
+    std::same_as<T, FileWatchAwaitable> ||
+    std::same_as<T, RecvNotifyAwaitable> ||
+    std::same_as<T, SendNotifyAwaitable> ||
+    std::same_as<T, ReadvAwaitable> ||
+    std::same_as<T, WritevAwaitable> ||
+    std::same_as<T, SendFileAwaitable>;
 
 /**
  * @brief IO事件控制器
@@ -50,7 +68,7 @@ namespace galay::kernel
      */
     void removeAwaitable(IOEventType type);
 
-    template<typename T>
+    template<IOControllerAwaitable T>
     T* getAwaitable() { return nullptr; }
 
     GHandle m_handle = GHandle::invalid();

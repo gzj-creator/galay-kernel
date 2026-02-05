@@ -13,6 +13,7 @@
 #include "galay-kernel/common/Error.h"
 #include <concurrentqueue/moodycamel/concurrentqueue.h>
 #include <atomic>
+#include <concepts>
 #include <coroutine>
 #include <optional>
 #include <expected>
@@ -21,6 +22,9 @@
 
 namespace galay::kernel
 {
+
+template <typename T>
+concept MpscValue = std::movable<T> && std::default_initializable<T>;
 
 template <typename T>
 class MpscChannel;
@@ -32,6 +36,7 @@ template <typename T>
 class MpscRecvAwaitable : public TimeoutSupport<MpscRecvAwaitable<T>>
 {
 public:
+    static_assert(MpscValue<T>, "MpscRecvAwaitable requires movable and default initializable T");
     explicit MpscRecvAwaitable(MpscChannel<T>* channel) : m_channel(channel) {}
 
     bool await_ready() const noexcept;
@@ -51,6 +56,7 @@ template <typename T>
 class MpscRecvBatchAwaitable : public TimeoutSupport<MpscRecvBatchAwaitable<T>>
 {
 public:
+    static_assert(MpscValue<T>, "MpscRecvBatchAwaitable requires movable and default initializable T");
     explicit MpscRecvBatchAwaitable(MpscChannel<T>* channel, size_t max_count)
         : m_channel(channel), m_maxCount(max_count){}
 
@@ -72,6 +78,7 @@ template <typename T>
 class MpscChannel
 {
 public:
+    static_assert(MpscValue<T>, "MpscChannel requires movable and default initializable T");
     using MpscToken = std::thread::id;
 
     static constexpr size_t DEFAULT_BATCH_SIZE = 1024;
@@ -97,7 +104,7 @@ public:
         return true;
     }
 
-    bool send(const T& value) {
+    bool send(const T& value) requires std::copy_constructible<T> {
         T copy = value;
         return send(std::move(copy));
     }
@@ -105,7 +112,7 @@ public:
     /**
      * @brief 批量发送数据
      */
-    bool sendBatch(const std::vector<T>& values) {
+    bool sendBatch(const std::vector<T>& values) requires std::copy_constructible<T> {
         if (values.empty()) return true;
         if (!m_queue.enqueue_bulk(values.data(), values.size())) {
             return false;
