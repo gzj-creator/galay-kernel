@@ -1,13 +1,17 @@
 /**
  * T26-ConcurrentRecvSend
  *
- * 测试同一个 TcpSocket 上同时进行 recv 和 send（全双工）。
+ * 压测同一个 TcpSocket 上同时进行 recv 和 send（全双工）。
  *
  * 架构：
+ *   Server 和 Client 各使用独立的调度器（独立线程），避免单线程饥饿。
  *   Server accept 后，对同一个 client socket 同时 spawn 读协程和写协程。
  *   Client connect 后，也对同一个 socket 同时 spawn 读协程和写协程。
- *   写协程每轮发送后 sleep 一小段时间，确保消息不会全部合并到一个 TCP 段。
- *   读协程累计接收字节数，达到预期总字节数即视为成功。
+ *
+ *   每条消息 256KB，发 200 轮，双向各约 50MB。
+ *   同时将 socket 的 SO_SNDBUF/SO_RCVBUF 压到 16KB，
+ *   recv 端使用 4KB 小 buffer，制造背压使 send 端 buffer 填满触发 EAGAIN，
+ *   从而迫使 fd 真正注册到 epoll/kqueue/io_uring 的读写事件。
  *
  * 预期：所有三个后端（kqueue / epoll / io_uring）均通过。
  */
@@ -17,75 +21,112 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <vector>
+#include <sys/socket.h>
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/common/Log.h"
 
 #ifdef USE_KQUEUE
 #include "galay-kernel/kernel/KqueueScheduler.h"
+using TestScheduler = galay::kernel::KqueueScheduler;
 #endif
 
 #ifdef USE_EPOLL
 #include "galay-kernel/kernel/EpollScheduler.h"
+using TestScheduler = galay::kernel::EpollScheduler;
 #endif
 
 #ifdef USE_IOURING
 #include "galay-kernel/kernel/IOUringScheduler.h"
+using TestScheduler = galay::kernel::IOUringScheduler;
 #endif
 
 using namespace galay::async;
 using namespace galay::kernel;
 
-static std::atomic<bool> g_server_ready{false};
-static std::atomic<int>  g_server_recv_bytes{0};
-static std::atomic<int>  g_server_send_rounds{0};
-static std::atomic<int>  g_client_recv_bytes{0};
-static std::atomic<int>  g_client_send_rounds{0};
+static std::atomic<bool>    g_server_ready{false};
+static std::atomic<int64_t> g_server_recv_bytes{0};
+static std::atomic<int>     g_server_send_rounds{0};
+static std::atomic<int64_t> g_client_recv_bytes{0};
+static std::atomic<int>     g_client_send_rounds{0};
 
-constexpr int kRounds = 5;
-constexpr int kPort   = 19876;
-// 每条消息固定 8 字节: "C2S-XXXX" 或 "S2C-XXXX"
-constexpr int kMsgLen = 8;
-constexpr int kExpectedBytes = kRounds * kMsgLen;
+constexpr int     kRounds   = 2000;
+constexpr int     kPort     = 19876;
+constexpr size_t  kMsgLen   = 256 * 1024;  // 256KB per message
+constexpr int64_t kExpectedBytes = static_cast<int64_t>(kRounds) * kMsgLen;
+constexpr size_t  kRecvBuf  = 64 * 1024;   // 64KB recv buffer
+constexpr int     kSockBuf  = 64 * 1024;   // 64KB SO_SNDBUF/SO_RCVBUF — 制造背压但不至于太小
 
 // 使用共享指针管理 socket 生命周期
 static std::shared_ptr<TcpSocket> g_server_client;
 static std::shared_ptr<TcpSocket> g_server_listener;
 static std::shared_ptr<TcpSocket> g_client_sock;
 
-// ==================== Server ====================
+// 构造填充数据：用可辨识的 pattern 方便调试
+static std::vector<char> makeSendBuf(char tag) {
+    std::vector<char> buf(kMsgLen);
+    std::memset(buf.data(), tag, kMsgLen);
+    return buf;
+}
 
-Coroutine serverRecvLoop(std::shared_ptr<TcpSocket> client) {
-    char buffer[256];
-    int totalBytes = 0;
+// 压小内核 socket 缓冲区，迫使 send 更快触发 EAGAIN
+static void shrinkSocketBuf(int fd) {
+    int val = kSockBuf;
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &val, sizeof(val));
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &val, sizeof(val));
+}
+
+// ==================== 通用收发协程 ====================
+
+// recv 端：用小 buffer 接收，制造背压
+Coroutine recvLoop(std::shared_ptr<TcpSocket> sock,
+                   std::atomic<int64_t>& counter,
+                   const char* label) {
+    char buffer[kRecvBuf];
+    int64_t totalBytes = 0;
     while (totalBytes < kExpectedBytes) {
-        auto result = co_await client->recv(buffer, sizeof(buffer));
+        auto result = co_await sock->recv(buffer, sizeof(buffer));
         if (!result) {
-            LogError("[S-Recv] failed after {} bytes: {}", totalBytes, result.error().message());
+            LogError("[{}] failed after {} bytes: {}", label, totalBytes, result.error().message());
             co_return;
         }
-        int n = static_cast<int>(result.value().size());
+        int64_t n = static_cast<int64_t>(result.value().size());
+        if (n == 0) {
+            LogError("[{}] peer closed after {} bytes", label, totalBytes);
+            co_return;
+        }
         totalBytes += n;
-        LogInfo("[S-Recv] got {} bytes (total: {}/{})", n, totalBytes, kExpectedBytes);
-        g_server_recv_bytes.store(totalBytes);
+        counter.store(totalBytes);
     }
+    LogInfo("[{}] done, total {} bytes", label, totalBytes);
     co_return;
 }
 
-Coroutine serverSendLoop(std::shared_ptr<TcpSocket> client) {
+// send 端：每轮发 256KB，处理 partial write
+Coroutine sendLoop(std::shared_ptr<TcpSocket> sock,
+                   std::atomic<int>& counter,
+                   const char* label,
+                   char tag) {
+    auto buf = makeSendBuf(tag);
     for (int i = 0; i < kRounds; ++i) {
-        char msg[kMsgLen + 1];
-        snprintf(msg, sizeof(msg), "S2C-%04d", i);
-        auto result = co_await client->send(msg, kMsgLen);
-        if (!result) {
-            LogError("[S-Send] round {} failed: {}", i, result.error().message());
-            co_return;
+        size_t sent = 0;
+        while (sent < kMsgLen) {
+            auto result = co_await sock->send(buf.data() + sent, kMsgLen - sent);
+            if (!result) {
+                LogError("[{}] round {} failed after {} bytes: {}",
+                         label, i, sent, result.error().message());
+                co_return;
+            }
+            sent += result.value();
         }
-        LogInfo("[S-Send] round {}: sent {} bytes", i, result.value());
-        g_server_send_rounds.fetch_add(1);
+        counter.fetch_add(1);
     }
+    LogInfo("[{}] done, {} rounds", label, kRounds);
     co_return;
 }
+
+// ==================== Server ====================
 
 Coroutine serverMain(IOScheduler* scheduler) {
     g_server_listener = std::make_shared<TcpSocket>();
@@ -118,46 +159,15 @@ Coroutine serverMain(IOScheduler* scheduler) {
 
     g_server_client = std::make_shared<TcpSocket>(acceptResult.value());
     g_server_client->option().handleNonBlock();
+    shrinkSocketBuf(g_server_client->handle().fd);
 
     // 关键：同一个 socket 同时 spawn 读和写
-    scheduler->spawn(serverRecvLoop(g_server_client));
-    scheduler->spawn(serverSendLoop(g_server_client));
+    scheduler->spawn(recvLoop(g_server_client, g_server_recv_bytes, "S-Recv"));
+    scheduler->spawn(sendLoop(g_server_client, g_server_send_rounds, "S-Send", 'S'));
     co_return;
 }
 
 // ==================== Client ====================
-
-Coroutine clientRecvLoop(std::shared_ptr<TcpSocket> sock) {
-    char buffer[256];
-    int totalBytes = 0;
-    while (totalBytes < kExpectedBytes) {
-        auto result = co_await sock->recv(buffer, sizeof(buffer));
-        if (!result) {
-            LogError("[C-Recv] failed after {} bytes: {}", totalBytes, result.error().message());
-            co_return;
-        }
-        int n = static_cast<int>(result.value().size());
-        totalBytes += n;
-        LogInfo("[C-Recv] got {} bytes (total: {}/{})", n, totalBytes, kExpectedBytes);
-        g_client_recv_bytes.store(totalBytes);
-    }
-    co_return;
-}
-
-Coroutine clientSendLoop(std::shared_ptr<TcpSocket> sock) {
-    for (int i = 0; i < kRounds; ++i) {
-        char msg[kMsgLen + 1];
-        snprintf(msg, sizeof(msg), "C2S-%04d", i);
-        auto result = co_await sock->send(msg, kMsgLen);
-        if (!result) {
-            LogError("[C-Send] round {} failed: {}", i, result.error().message());
-            co_return;
-        }
-        LogInfo("[C-Send] round {}: sent {} bytes", i, result.value());
-        g_client_send_rounds.fetch_add(1);
-    }
-    co_return;
-}
 
 Coroutine clientMain(IOScheduler* scheduler) {
     while (!g_server_ready.load()) {
@@ -166,6 +176,7 @@ Coroutine clientMain(IOScheduler* scheduler) {
 
     g_client_sock = std::make_shared<TcpSocket>();
     g_client_sock->option().handleNonBlock();
+    shrinkSocketBuf(g_client_sock->handle().fd);
 
     Host serverHost(IPType::IPV4, "127.0.0.1", kPort);
     auto connectResult = co_await g_client_sock->connect(serverHost);
@@ -177,8 +188,8 @@ Coroutine clientMain(IOScheduler* scheduler) {
     LogInfo("[Client] connected");
 
     // 关键：同一个 socket 同时 spawn 读和写
-    scheduler->spawn(clientRecvLoop(g_client_sock));
-    scheduler->spawn(clientSendLoop(g_client_sock));
+    scheduler->spawn(recvLoop(g_client_sock, g_client_recv_bytes, "C-Recv"));
+    scheduler->spawn(sendLoop(g_client_sock, g_client_send_rounds, "C-Send", 'C'));
     co_return;
 }
 
@@ -187,27 +198,31 @@ Coroutine clientMain(IOScheduler* scheduler) {
 int main() {
     LogInfo("=== T26: Concurrent Recv+Send on same socket ===");
 
-#ifdef USE_KQUEUE
-    LogInfo("Backend: KqueueScheduler");
-    KqueueScheduler scheduler;
-#elif defined(USE_EPOLL)
-    LogInfo("Backend: EpollScheduler");
-    EpollScheduler scheduler;
-#elif defined(USE_IOURING)
-    LogInfo("Backend: IOUringScheduler");
-    IOUringScheduler scheduler;
-#else
+#if !defined(USE_KQUEUE) && !defined(USE_EPOLL) && !defined(USE_IOURING)
     LogWarn("No supported scheduler");
     return 1;
+#else
+
+#ifdef USE_KQUEUE
+    LogInfo("Backend: KqueueScheduler");
+#elif defined(USE_EPOLL)
+    LogInfo("Backend: EpollScheduler");
+#elif defined(USE_IOURING)
+    LogInfo("Backend: IOUringScheduler");
 #endif
 
-    scheduler.start();
+    // Server 和 Client 各用独立调度器，避免单线程调度饥饿
+    TestScheduler serverScheduler;
+    TestScheduler clientScheduler;
 
-    scheduler.spawn(serverMain(&scheduler));
-    scheduler.spawn(clientMain(&scheduler));
+    serverScheduler.start();
+    clientScheduler.start();
+
+    serverScheduler.spawn(serverMain(&serverScheduler));
+    clientScheduler.spawn(clientMain(&clientScheduler));
 
     // 在 main 线程等待
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (std::chrono::steady_clock::now() < deadline) {
         if (g_server_recv_bytes.load() >= kExpectedBytes &&
             g_server_send_rounds.load() >= kRounds &&
@@ -217,7 +232,8 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
-    scheduler.stop();
+    serverScheduler.stop();
+    clientScheduler.stop();
 
     g_server_client.reset();
     g_server_listener.reset();
@@ -241,4 +257,6 @@ int main() {
         LogError("=== TEST FAILED ===");
         return 1;
     }
+
+#endif
 }

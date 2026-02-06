@@ -9,7 +9,7 @@ endif()
 option(BUILD_SHARED_LIBS "Build shared library instead of static" OFF)
 
 # IO后端选项
-option(DISABLE_IOURING "Disable io_uring and use epoll on Linux" ON)
+option(DISABLE_IOURING "Disable io_uring and use epoll on Linux" OFF)
 
 # 平台特定的异步IO后端检测
 function(configure_io_backend)

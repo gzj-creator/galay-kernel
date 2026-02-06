@@ -271,6 +271,10 @@ bool EpollScheduler::spawn(Coroutine co)
         if(scheduler != this) return false;
     }
     m_coro_queue.enqueue(std::move(co));
+    // 非事件循环线程入队时唤醒 epoll_wait，避免等待超时
+    if (std::this_thread::get_id() != m_threadId) {
+        notify();
+    }
     return true;
 }
 
@@ -441,6 +445,10 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
             RecvNotifyAwaitable* awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
             if (awaitable) awaitable->m_waker.wakeUp();
         }
+        else {
+            // 残留的 EPOLLIN 事件，m_type 中已无读类型
+            // syncEpollEvents 会在末尾更新 epoll 注册
+        }
     }
 
     // ===== 写方向事件 =====
@@ -479,7 +487,28 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
             SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
             if (awaitable) awaitable->m_waker.wakeUp();
         }
+        else {
+            // 残留的 EPOLLOUT 事件，m_type 中已无写类型（对端 awaitable 已完成）
+            // ET 模式下必须更新 epoll 注册，否则此事件不会再触发且掩码过时
+        }
     }
+
+    // 事件处理完毕后，同步 epoll 注册与当前 m_type
+    // 防止 ET 模式下残留事件掩码导致后续事件丢失
+    syncEpollEvents(controller);
+}
+
+void EpollScheduler::syncEpollEvents(IOController* controller)
+{
+    uint32_t newEvents = buildEpollEvents(controller);
+    if (newEvents == EPOLLET) {
+        epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, controller->m_handle.fd, nullptr);
+        return;
+    }
+    struct epoll_event ev;
+    ev.events = newEvents;
+    ev.data.ptr = controller;
+    epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
 }
 
 bool EpollScheduler::handleAccept(IOController* controller)

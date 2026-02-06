@@ -111,6 +111,7 @@ private:
     void eventLoop();
     void processPendingCoroutines();
     void processEvent(struct epoll_event& ev);
+    void syncEpollEvents(IOController* controller);
     uint32_t buildEpollEvents(IOController* controller);
 };
 
