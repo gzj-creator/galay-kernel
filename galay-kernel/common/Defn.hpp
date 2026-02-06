@@ -76,20 +76,36 @@
 
     enum IOEventType: uint32_t {
         INVALID     = 0,
-        ACCEPT      ,
-        CONNECT     ,
-        RECV        ,
-        SEND        ,
-        READV       ,   ///< scatter-gather 读取（readv）
-        WRITEV      ,   ///< scatter-gather 写入（writev）
-        SENDFILE    ,   ///< 零拷贝发送文件（sendfile）
-        FILEREAD    ,
-        FILEWRITE   ,
-        FILEWATCH   ,
-        RECVFROM    ,
-        SENDTO      ,
-        RECV_NOTIFY ,   ///< 仅通知可读，不执行IO操作（用于SSL等自定义IO）
-        SEND_NOTIFY ,   ///< 仅通知可写，不执行IO操作（用于SSL等自定义IO）
+        ACCEPT      = 1u << 0,
+        CONNECT     = 1u << 1,
+        RECV        = 1u << 2,
+        SEND        = 1u << 3,
+        READV       = 1u << 4,   ///< scatter-gather 读取（readv）
+        WRITEV      = 1u << 5,   ///< scatter-gather 写入（writev）
+        SENDFILE    = 1u << 6,   ///< 零拷贝发送文件（sendfile）
+        FILEREAD    = 1u << 7,
+        FILEWRITE   = 1u << 8,
+        FILEWATCH   = 1u << 9,
+        RECVFROM    = 1u << 10,
+        SENDTO      = 1u << 11,
+        RECV_NOTIFY = 1u << 12,  ///< 仅通知可读，不执行IO操作（用于SSL等自定义IO）
+        SEND_NOTIFY = 1u << 13,  ///< 仅通知可写，不执行IO操作（用于SSL等自定义IO）
     };
+
+    inline IOEventType operator|(IOEventType a, IOEventType b) {
+        return static_cast<IOEventType>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+    }
+    inline IOEventType operator&(IOEventType a, IOEventType b) {
+        return static_cast<IOEventType>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
+    }
+    inline IOEventType operator~(IOEventType a) {
+        return static_cast<IOEventType>(~static_cast<uint32_t>(a));
+    }
+    inline IOEventType& operator|=(IOEventType& a, IOEventType b) {
+        a = a | b; return a;
+    }
+    inline IOEventType& operator&=(IOEventType& a, IOEventType b) {
+        a = a & b; return a;
+    }
 
 #endif

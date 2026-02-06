@@ -42,6 +42,10 @@
 namespace galay::kernel
 {
 
+struct AwaitableBase {
+    IOEventType m_sqe_type = IOEventType::INVALID;
+};
+
 struct IOController;
 
 /**
@@ -52,7 +56,7 @@ struct IOController;
  *
  * @note 由TcpSocket::accept()创建
  */
-struct AcceptAwaitable: public TimeoutSupport<AcceptAwaitable> {
+struct AcceptAwaitable: public AwaitableBase, public TimeoutSupport<AcceptAwaitable> {
     /**
      * @brief 构造函数
      * @param controller IO控制器
@@ -95,7 +99,7 @@ struct AcceptAwaitable: public TimeoutSupport<AcceptAwaitable> {
  *
  * @note 由TcpSocket::recv()创建
  */
-struct RecvAwaitable: public TimeoutSupport<RecvAwaitable> {
+struct RecvAwaitable: public AwaitableBase, public TimeoutSupport<RecvAwaitable> {
     /**
      * @brief 构造函数
      * @param controller IO控制器
@@ -139,7 +143,7 @@ struct RecvAwaitable: public TimeoutSupport<RecvAwaitable> {
  *
  * @note 由TcpSocket::send()创建
  */
-struct SendAwaitable: public TimeoutSupport<SendAwaitable> {
+struct SendAwaitable: public AwaitableBase, public TimeoutSupport<SendAwaitable> {
     /**
      * @brief 构造函数
      * @param controller IO控制器
@@ -184,7 +188,7 @@ struct SendAwaitable: public TimeoutSupport<SendAwaitable> {
  *
  * @note 适用于需要将数据分散读取到多个缓冲区的场景
  */
-struct ReadvAwaitable: public TimeoutSupport<ReadvAwaitable> {
+struct ReadvAwaitable: public AwaitableBase, public TimeoutSupport<ReadvAwaitable> {
     /**
      * @brief 构造函数
      * @param controller IO控制器
@@ -227,7 +231,7 @@ struct ReadvAwaitable: public TimeoutSupport<ReadvAwaitable> {
  *
  * @note 适用于需要将多个缓冲区的数据聚合发送的场景
  */
-struct WritevAwaitable: public TimeoutSupport<WritevAwaitable> {
+struct WritevAwaitable: public AwaitableBase, public TimeoutSupport<WritevAwaitable> {
     /**
      * @brief 构造函数
      * @param controller IO控制器
@@ -269,7 +273,7 @@ struct WritevAwaitable: public TimeoutSupport<WritevAwaitable> {
  *
  * @note 由TcpSocket::connect()创建
  */
-struct ConnectAwaitable: public TimeoutSupport<ConnectAwaitable> {
+struct ConnectAwaitable: public AwaitableBase, public TimeoutSupport<ConnectAwaitable> {
     /**
      * @brief 构造函数
      * @param controller IO控制器
@@ -311,7 +315,7 @@ struct ConnectAwaitable: public TimeoutSupport<ConnectAwaitable> {
  *
  * @note 由TcpSocket::close()创建
  */
-struct CloseAwaitable: public TimeoutSupport<CloseAwaitable> {
+struct CloseAwaitable: public AwaitableBase, public TimeoutSupport<CloseAwaitable> {
     /**
      * @brief 构造函数
      * @param controller IO控制器
@@ -351,7 +355,7 @@ struct CloseAwaitable: public TimeoutSupport<CloseAwaitable> {
  *
  * @note 由UdpSocket::recvfrom()创建
  */
-struct RecvFromAwaitable: public TimeoutSupport<RecvFromAwaitable> {
+struct RecvFromAwaitable: public AwaitableBase, public TimeoutSupport<RecvFromAwaitable> {
     /**
      * @brief 构造函数
      * @param controller IO控制器
@@ -404,7 +408,7 @@ struct RecvFromAwaitable: public TimeoutSupport<RecvFromAwaitable> {
  *
  * @note 由UdpSocket::sendto()创建
  */
-struct SendToAwaitable: public TimeoutSupport<SendToAwaitable> {
+struct SendToAwaitable: public AwaitableBase, public TimeoutSupport<SendToAwaitable> {
     /**
      * @brief 构造函数
      * @param controller IO控制器
@@ -456,7 +460,7 @@ struct SendToAwaitable: public TimeoutSupport<SendToAwaitable> {
  *
  * @note 由AsyncFile::read()创建
  */
-struct FileReadAwaitable: public TimeoutSupport<FileReadAwaitable> {
+struct FileReadAwaitable: public AwaitableBase, public TimeoutSupport<FileReadAwaitable> {
 #ifdef USE_EPOLL
     // epoll 平台：需要 eventfd 和 libaio context
     FileReadAwaitable(IOController* controller,
@@ -499,7 +503,7 @@ struct FileReadAwaitable: public TimeoutSupport<FileReadAwaitable> {
  *
  * @note 由AsyncFile::write()创建
  */
-struct FileWriteAwaitable: public TimeoutSupport<FileWriteAwaitable> {
+struct FileWriteAwaitable: public AwaitableBase, public TimeoutSupport<FileWriteAwaitable> {
 #ifdef USE_EPOLL
     // epoll 平台：需要 eventfd 和 libaio context
     FileWriteAwaitable(IOController* controller,
@@ -588,7 +592,7 @@ struct FileWatchResult {
  *
  * @note 由FileWatcher::watch()创建
  */
-struct FileWatchAwaitable: public TimeoutSupport<FileWatchAwaitable> {
+struct FileWatchAwaitable: public AwaitableBase, public TimeoutSupport<FileWatchAwaitable> {
 #ifdef USE_KQUEUE
     /**
      * @brief 构造函数 (kqueue)
@@ -654,7 +658,7 @@ struct FileWatchAwaitable: public TimeoutSupport<FileWatchAwaitable> {
  *
  * @note 事件就绪时只唤醒协程，不会调用recv()
  */
-struct RecvNotifyAwaitable: public TimeoutSupport<RecvNotifyAwaitable> {
+struct RecvNotifyAwaitable: public AwaitableBase, public TimeoutSupport<RecvNotifyAwaitable> {
     /**
      * @brief 构造函数
      * @param controller IO控制器
@@ -694,7 +698,7 @@ struct RecvNotifyAwaitable: public TimeoutSupport<RecvNotifyAwaitable> {
  *
  * @note 事件就绪时只唤醒协程，不会调用send()
  */
-struct SendNotifyAwaitable: public TimeoutSupport<SendNotifyAwaitable> {
+struct SendNotifyAwaitable: public AwaitableBase, public TimeoutSupport<SendNotifyAwaitable> {
     /**
      * @brief 构造函数
      * @param controller IO控制器
@@ -739,7 +743,7 @@ struct SendNotifyAwaitable: public TimeoutSupport<SendNotifyAwaitable> {
  *   - macOS: sendfile(in_fd, out_fd, offset, len, hdtr, flags)
  * - offset 会被更新为发送后的位置
  */
-struct SendFileAwaitable: public TimeoutSupport<SendFileAwaitable> {
+struct SendFileAwaitable: public AwaitableBase, public TimeoutSupport<SendFileAwaitable> {
     /**
      * @brief 构造函数
      * @param controller IO控制器（socket的控制器）

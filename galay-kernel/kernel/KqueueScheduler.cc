@@ -328,169 +328,98 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         return;
     }
 
-    switch (controller->m_type)
-    {
-    case ACCEPT:
-    {
-        // Accept 需要 EVFILT_READ 事件
-        if (ev.filter == EVFILT_READ) {
+    uint32_t t = static_cast<uint32_t>(controller->m_type);
+
+    // ===== 读方向事件 =====
+    if (ev.filter == EVFILT_READ) {
+        if (t & ACCEPT) {
             handleAccept(controller);
             AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
-            if(awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
-    }
-    case CONNECT:
-    {
-        // Connect 需要 EVFILT_WRITE 事件
-        if (ev.filter == EVFILT_WRITE) {
-            handleConnect(controller);
-            ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
-            if(awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
-        }
-        break;
-    }
-    case RECV:
-    {
-        // Recv 需要 EVFILT_READ 事件
-        if (ev.filter == EVFILT_READ) {
+        else if (t & RECV) {
             handleRecv(controller);
             RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
-            if(awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
-    }
-    case SEND:
-    {
-        // Send 需要 EVFILT_WRITE 事件
-        if (ev.filter == EVFILT_WRITE) {
-            handleSend(controller);
-            SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
-            if(awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
-        }
-        break;
-    }
-    case READV:
-    {
-        // Readv 需要 EVFILT_READ 事件
-        if (ev.filter == EVFILT_READ) {
+        else if (t & READV) {
             handleReadv(controller);
             ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
-            if(awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
-    }
-    case WRITEV:
-    {
-        // Writev 需要 EVFILT_WRITE 事件
-        if (ev.filter == EVFILT_WRITE) {
-            handleWritev(controller);
-            WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
-            if(awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
-        }
-        break;
-    }
-    case FILEREAD:
-    {
-        if (ev.filter == EVFILT_READ) {
-            handleFileRead(controller);
-            FileReadAwaitable* awaitable = controller->getAwaitable<FileReadAwaitable>();
-            if(awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
-        }
-        break;
-    }
-    case FILEWRITE:
-    {
-        if (ev.filter == EVFILT_WRITE) {
-            handleFileWrite(controller);
-            FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
-            if(awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
-        }
-        break;
-    }
-    case RECVFROM:
-    {
-        if (ev.filter == EVFILT_READ) {
+        else if (t & RECVFROM) {
             handleRecvFrom(controller);
             RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
-            if(awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
+        else if (t & FILEREAD) {
+            handleFileRead(controller);
+            FileReadAwaitable* awaitable = controller->getAwaitable<FileReadAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
+        }
+        else if (t & RECV_NOTIFY) {
+            RecvNotifyAwaitable* awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
+        }
     }
-    case SENDTO:
-    {
-        if (ev.filter == EVFILT_WRITE) {
+    // ===== 写方向事件 =====
+    else if (ev.filter == EVFILT_WRITE) {
+        if (t & CONNECT) {
+            handleConnect(controller);
+            ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
+        }
+        else if (t & SEND) {
+            handleSend(controller);
+            SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
+        }
+        else if (t & WRITEV) {
+            handleWritev(controller);
+            WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
+        }
+        else if (t & SENDTO) {
             handleSendTo(controller);
             SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
-            if(awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
-    }
-    case FILEWATCH:
-    {
-        if (ev.filter == EVFILT_VNODE) {
-            FileWatchAwaitable* awaitable = controller->getAwaitable<FileWatchAwaitable>();
-            if(awaitable == nullptr) return;
-            FileWatchResult result;
-            result.isDir = false;  // kqueue 不直接提供此信息
-
-            // 转换 kqueue fflags 到 FileWatchEvent
-            uint32_t mask = 0;
-            if (ev.fflags & NOTE_WRITE)   mask |= static_cast<uint32_t>(FileWatchEvent::Modify);
-            if (ev.fflags & NOTE_DELETE)  mask |= static_cast<uint32_t>(FileWatchEvent::DeleteSelf);
-            if (ev.fflags & NOTE_RENAME)  mask |= static_cast<uint32_t>(FileWatchEvent::MoveSelf);
-            if (ev.fflags & NOTE_ATTRIB)  mask |= static_cast<uint32_t>(FileWatchEvent::Attrib);
-            if (ev.fflags & NOTE_EXTEND)  mask |= static_cast<uint32_t>(FileWatchEvent::Modify);
-            result.event = static_cast<FileWatchEvent>(mask);
-
-            awaitable->m_result = std::move(result);
-            awaitable->m_waker.wakeUp();
+        else if (t & FILEWRITE) {
+            handleFileWrite(controller);
+            FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
-    }
-    case RECV_NOTIFY:
-    {
-        // 仅通知可读，不执行IO操作
-        if (ev.filter == EVFILT_READ) {
-            RecvNotifyAwaitable* awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
-            if(awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
-        }
-        break;
-    }
-    case SEND_NOTIFY:
-    {
-        // 仅通知可写，不执行IO操作
-        if (ev.filter == EVFILT_WRITE) {
-            SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
-            if(awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
-        }
-        break;
-    }
-    case SENDFILE:
-    {
-        // SendFile 需要 EVFILT_WRITE 事件
-        if (ev.filter == EVFILT_WRITE) {
+        else if (t & SENDFILE) {
             handleSendFile(controller);
             SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
-            if(awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
+        else if (t & SEND_NOTIFY) {
+            SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
+        }
     }
-    default:
-        break;
+    // ===== 文件监控事件 =====
+    else if (ev.filter == EVFILT_VNODE) {
+        if (t & FILEWATCH) {
+            FileWatchAwaitable* awaitable = controller->getAwaitable<FileWatchAwaitable>();
+            if (awaitable) {
+                FileWatchResult result;
+                result.isDir = false;  // kqueue 不直接提供此信息
+
+                // 转换 kqueue fflags 到 FileWatchEvent
+                uint32_t mask = 0;
+                if (ev.fflags & NOTE_WRITE)   mask |= static_cast<uint32_t>(FileWatchEvent::Modify);
+                if (ev.fflags & NOTE_DELETE)  mask |= static_cast<uint32_t>(FileWatchEvent::DeleteSelf);
+                if (ev.fflags & NOTE_RENAME)  mask |= static_cast<uint32_t>(FileWatchEvent::MoveSelf);
+                if (ev.fflags & NOTE_ATTRIB)  mask |= static_cast<uint32_t>(FileWatchEvent::Attrib);
+                if (ev.fflags & NOTE_EXTEND)  mask |= static_cast<uint32_t>(FileWatchEvent::Modify);
+                result.event = static_cast<FileWatchEvent>(mask);
+
+                awaitable->m_result = std::move(result);
+                awaitable->m_waker.wakeUp();
+            }
+        }
     }
 }
 

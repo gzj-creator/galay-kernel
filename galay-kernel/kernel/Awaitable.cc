@@ -15,6 +15,7 @@ namespace galay::kernel
 {
 
 bool AcceptAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = ACCEPT;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(ACCEPT, this);
     auto scheduler = m_waker.getScheduler();
@@ -35,6 +36,7 @@ std::expected<GHandle, IOError> AcceptAwaitable::await_resume() {
 }
 
 bool RecvAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = RECV;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(RECV, this);
     auto scheduler = m_waker.getScheduler();
@@ -55,6 +57,7 @@ std::expected<Bytes, IOError> RecvAwaitable::await_resume() {
 }
 
 bool SendAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = SEND;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(SEND, this);
     auto scheduler = m_waker.getScheduler();
@@ -75,6 +78,7 @@ std::expected<size_t, IOError> SendAwaitable::await_resume() {
 }
 
 bool ReadvAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = READV;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(READV, this);
     auto scheduler = m_waker.getScheduler();
@@ -95,6 +99,7 @@ std::expected<size_t, IOError> ReadvAwaitable::await_resume() {
 }
 
 bool WritevAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = WRITEV;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(WRITEV, this);
     auto scheduler = m_waker.getScheduler();
@@ -115,6 +120,7 @@ std::expected<size_t, IOError> WritevAwaitable::await_resume() {
 }
 
 bool ConnectAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = CONNECT;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(CONNECT, this);
     auto scheduler = m_waker.getScheduler();
@@ -156,6 +162,7 @@ std::expected<void, IOError> CloseAwaitable::await_resume() {
 }
 
 bool FileReadAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = FILEREAD;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(FILEREAD, this);
     auto scheduler = m_waker.getScheduler();
@@ -176,6 +183,7 @@ std::expected<Bytes, IOError> FileReadAwaitable::await_resume() {
 }
 
 bool FileWriteAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = FILEWRITE;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(FILEWRITE, this);
     auto scheduler = m_waker.getScheduler();
@@ -196,6 +204,7 @@ std::expected<size_t, IOError> FileWriteAwaitable::await_resume() {
 }
 
 bool RecvFromAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = RECVFROM;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(RECVFROM, this);
     auto scheduler = m_waker.getScheduler();
@@ -216,6 +225,7 @@ std::expected<Bytes, IOError> RecvFromAwaitable::await_resume() {
 }
 
 bool SendToAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = SENDTO;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(SENDTO, this);
     auto scheduler = m_waker.getScheduler();
@@ -236,6 +246,7 @@ std::expected<size_t, IOError> SendToAwaitable::await_resume() {
 }
 
 bool FileWatchAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = FILEWATCH;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(FILEWATCH, this);
     auto scheduler = m_waker.getScheduler();
@@ -256,6 +267,7 @@ std::expected<FileWatchResult, IOError> FileWatchAwaitable::await_resume() {
 }
 
 bool RecvNotifyAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = RECV_NOTIFY;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(RECV_NOTIFY, this);
     auto scheduler = m_waker.getScheduler();
@@ -274,6 +286,7 @@ void RecvNotifyAwaitable::await_resume() {
 }
 
 bool SendNotifyAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = SEND_NOTIFY;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(SEND_NOTIFY, this);
     auto scheduler = m_waker.getScheduler();
@@ -292,6 +305,7 @@ void SendNotifyAwaitable::await_resume() {
 }
 
 bool SendFileAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    m_sqe_type = SENDFILE;
     m_waker = Waker(handle);
     m_controller->fillAwaitable(SENDFILE, this);
     auto scheduler = m_waker.getScheduler();

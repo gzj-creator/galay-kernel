@@ -101,7 +101,7 @@ int IOUringScheduler::addAccept(IOController* controller)
     io_uring_prep_accept(sqe, controller->m_handle.fd,
                          awaitable->m_host->sockAddr(),
                          awaitable->m_host->addrLen(), 0);
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -118,7 +118,7 @@ int IOUringScheduler::addConnect(IOController* controller)
     io_uring_prep_connect(sqe, controller->m_handle.fd,
                           awaitable->m_host.sockAddr(),
                           *awaitable->m_host.addrLen());
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -134,7 +134,7 @@ int IOUringScheduler::addRecv(IOController* controller)
 
     io_uring_prep_recv(sqe, controller->m_handle.fd,
                        awaitable->m_buffer, awaitable->m_length, 0);
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -150,7 +150,7 @@ int IOUringScheduler::addSend(IOController* controller)
 
     io_uring_prep_send(sqe, controller->m_handle.fd,
                        awaitable->m_buffer, awaitable->m_length, 0);
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -167,7 +167,7 @@ int IOUringScheduler::addReadv(IOController* controller)
     io_uring_prep_readv(sqe, controller->m_handle.fd,
                         awaitable->m_iovecs.data(),
                         static_cast<unsigned>(awaitable->m_iovecs.size()), 0);
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -184,7 +184,7 @@ int IOUringScheduler::addWritev(IOController* controller)
     io_uring_prep_writev(sqe, controller->m_handle.fd,
                          awaitable->m_iovecs.data(),
                          static_cast<unsigned>(awaitable->m_iovecs.size()), 0);
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -202,7 +202,7 @@ int IOUringScheduler::addSendFile(IOController* controller)
 
     // 使用 poll 等待 socket 可写
     io_uring_prep_poll_add(sqe, controller->m_handle.fd, POLLOUT);
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -237,7 +237,7 @@ int IOUringScheduler::addFileRead(IOController* controller)
 
     io_uring_prep_read(sqe, controller->m_handle.fd,
                        awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -253,7 +253,7 @@ int IOUringScheduler::addFileWrite(IOController* controller)
 
     io_uring_prep_write(sqe, controller->m_handle.fd,
                         awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -279,7 +279,7 @@ int IOUringScheduler::addRecvFrom(IOController* controller)
     awaitable->m_msg.msg_namelen = sizeof(awaitable->m_addr);
 
     io_uring_prep_recvmsg(sqe, controller->m_handle.fd, &awaitable->m_msg, 0);
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -304,7 +304,7 @@ int IOUringScheduler::addSendTo(IOController* controller)
     awaitable->m_msg.msg_namelen = *awaitable->m_to.addrLen();
 
     io_uring_prep_sendmsg(sqe, controller->m_handle.fd, &awaitable->m_msg, 0);
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -321,7 +321,7 @@ int IOUringScheduler::addFileWatch(IOController* controller)
     // inotify fd 是可读的，当有事件时读取
     io_uring_prep_read(sqe, controller->m_handle.fd,
                        awaitable->m_buffer, awaitable->m_buffer_size, 0);
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -330,13 +330,16 @@ int IOUringScheduler::addRecvNotify(IOController* controller)
     // 仅注册读事件，不执行IO操作
     // 用于SSL等需要自定义IO处理的场景
     // io_uring 使用 poll 来监听可读事件
+    auto awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
+    if (awaitable == nullptr) return -1;
+
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         return -EAGAIN;
     }
 
     io_uring_prep_poll_add(sqe, controller->m_handle.fd, POLLIN);
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -345,13 +348,16 @@ int IOUringScheduler::addSendNotify(IOController* controller)
     // 仅注册写事件，不执行IO操作
     // 用于SSL等需要自定义IO处理的场景
     // io_uring 使用 poll 来监听可写事件
+    auto awaitable = controller->getAwaitable<SendNotifyAwaitable>();
+    if (awaitable == nullptr) return -1;
+
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         return -EAGAIN;
     }
 
     io_uring_prep_poll_add(sqe, controller->m_handle.fd, POLLOUT);
-    io_uring_sqe_set_data(sqe, controller);
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
     return 0;
 }
 
@@ -470,19 +476,18 @@ void IOUringScheduler::eventLoop()
 
 void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
 {
-    IOController* controller = static_cast<IOController*>(io_uring_cqe_get_data(cqe));
-    if (!controller) {
+    auto* base = static_cast<AwaitableBase*>(io_uring_cqe_get_data(cqe));
+    if (!base) {
         return;
     }
 
     int res = cqe->res;
 
-    switch (controller->m_type)
+    switch (base->m_sqe_type)
     {
     case ACCEPT:
     {
-        AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<AcceptAwaitable*>(base);
         if (res >= 0) {
             GHandle handle { .fd = res };
             awaitable->m_result = handle;
@@ -494,8 +499,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case CONNECT:
     {
-        ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<ConnectAwaitable*>(base);
         if (res == 0) {
             awaitable->m_result = {};
         } else {
@@ -506,8 +510,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case RECV:
     {
-        RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<RecvAwaitable*>(base);
         if (res > 0) {
             Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
             awaitable->m_result = std::move(bytes);
@@ -521,8 +524,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case SEND:
     {
-        SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<SendAwaitable*>(base);
         if (res >= 0) {
             awaitable->m_result = static_cast<size_t>(res);
         } else {
@@ -533,8 +535,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case READV:
     {
-        ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<ReadvAwaitable*>(base);
         if (res > 0) {
             awaitable->m_result = static_cast<size_t>(res);
         } else if (res == 0) {
@@ -547,8 +548,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case WRITEV:
     {
-        WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<WritevAwaitable*>(base);
         if (res >= 0) {
             awaitable->m_result = static_cast<size_t>(res);
         } else {
@@ -559,8 +559,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case FILEREAD:
     {
-        FileReadAwaitable* awaitable = controller->getAwaitable<FileReadAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<FileReadAwaitable*>(base);
         if (res > 0) {
             Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
             awaitable->m_result = std::move(bytes);
@@ -574,8 +573,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case FILEWRITE:
     {
-        FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<FileWriteAwaitable*>(base);
         if (res >= 0) {
             awaitable->m_result = static_cast<size_t>(res);
         } else {
@@ -586,8 +584,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case RECVFROM:
     {
-        RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<RecvFromAwaitable*>(base);
         if (res > 0) {
             Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
             awaitable->m_result = std::move(bytes);
@@ -604,8 +601,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case SENDTO:
     {
-        SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<SendToAwaitable*>(base);
         if (res >= 0) {
             awaitable->m_result = static_cast<size_t>(res);
         } else {
@@ -616,8 +612,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     }
     case FILEWATCH:
     {
-        FileWatchAwaitable* awaitable = controller->getAwaitable<FileWatchAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<FileWatchAwaitable*>(base);
         if (res > 0) {
             struct inotify_event* event = reinterpret_cast<struct inotify_event*>(awaitable->m_buffer);
             FileWatchResult result;
@@ -651,28 +646,25 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case RECV_NOTIFY:
     {
         // poll 完成，仅唤醒协程，不执行IO操作
-        RecvNotifyAwaitable* awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<RecvNotifyAwaitable*>(base);
         awaitable->m_waker.wakeUp();
         break;
     }
     case SEND_NOTIFY:
     {
         // poll 完成，仅唤醒协程，不执行IO操作
-        SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<SendNotifyAwaitable*>(base);
         awaitable->m_waker.wakeUp();
         break;
     }
     case SENDFILE:
     {
-        SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
-        if (awaitable == nullptr) return;
+        auto* awaitable = static_cast<SendFileAwaitable*>(base);
 
         // poll 完成后，调用 sendfile 系统调用
         if (res >= 0) {
             off_t offset = awaitable->m_offset;
-            ssize_t sentBytes = ::sendfile(controller->m_handle.fd, awaitable->m_file_fd,
+            ssize_t sentBytes = ::sendfile(awaitable->m_controller->m_handle.fd, awaitable->m_file_fd,
                                            &offset, awaitable->m_count);
             if (sentBytes > 0) {
                 awaitable->m_result = static_cast<size_t>(sentBytes);

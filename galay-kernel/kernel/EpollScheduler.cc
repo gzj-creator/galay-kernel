@@ -90,6 +90,17 @@ void EpollScheduler::notify()
     if (write(m_event_fd, &val, sizeof(val)) < 0) {}
 }
 
+uint32_t EpollScheduler::buildEpollEvents(IOController* controller)
+{
+    uint32_t events = EPOLLET;
+    uint32_t t = static_cast<uint32_t>(controller->m_type);
+    if (t & (ACCEPT | RECV | READV | RECVFROM | FILEREAD | FILEWATCH | RECV_NOTIFY))
+        events |= EPOLLIN;
+    if (t & (CONNECT | SEND | WRITEV | SENDTO | SENDFILE | FILEWRITE | SEND_NOTIFY))
+        events |= EPOLLOUT;
+    return events;
+}
+
 int EpollScheduler::addAccept(IOController* controller)
 {
     if (handleAccept(controller)) {
@@ -98,7 +109,7 @@ int EpollScheduler::addAccept(IOController* controller)
     auto awaitable = controller->getAwaitable<AcceptAwaitable>();
     if (awaitable == nullptr) return -1;
     struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLET;
+    ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
     return epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, controller->m_handle.fd, &ev);
 }
@@ -112,7 +123,7 @@ int EpollScheduler::addConnect(IOController* controller)
     auto awaitable = controller->getAwaitable<ConnectAwaitable>();
     if (awaitable == nullptr) return -1;
     struct epoll_event ev;
-    ev.events = EPOLLOUT | EPOLLET;
+    ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
     return epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, controller->m_handle.fd, &ev);
 }
@@ -126,7 +137,7 @@ int EpollScheduler::addRecv(IOController* controller)
     auto awaitable = controller->getAwaitable<RecvAwaitable>();
     if (awaitable == nullptr) return -1;
     struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLET;
+    ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
 
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
@@ -145,7 +156,7 @@ int EpollScheduler::addSend(IOController* controller)
     auto awaitable = controller->getAwaitable<SendAwaitable>();
     if (awaitable == nullptr) return -1;
     struct epoll_event ev;
-    ev.events = EPOLLOUT | EPOLLET;
+    ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
 
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
@@ -164,7 +175,7 @@ int EpollScheduler::addReadv(IOController* controller)
     auto awaitable = controller->getAwaitable<ReadvAwaitable>();
     if (awaitable == nullptr) return -1;
     struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLET;
+    ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
 
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
@@ -183,7 +194,7 @@ int EpollScheduler::addWritev(IOController* controller)
     auto awaitable = controller->getAwaitable<WritevAwaitable>();
     if (awaitable == nullptr) return -1;
     struct epoll_event ev;
-    ev.events = EPOLLOUT | EPOLLET;
+    ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
 
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
@@ -205,7 +216,7 @@ int EpollScheduler::addSendFile(IOController* controller)
 
     // 如果 EAGAIN，注册 EPOLLOUT 等待 socket 可写
     struct epoll_event ev;
-    ev.events = EPOLLOUT | EPOLLET;
+    ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
 
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
@@ -334,203 +345,140 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         return;
     }
 
-    switch (controller->m_type)
-    {
-    case ACCEPT:
-    {
-        if (ev.events & EPOLLIN) {
+    uint32_t t = static_cast<uint32_t>(controller->m_type);
+
+    // ===== 读方向事件 =====
+    if (ev.events & EPOLLIN) {
+        if (t & ACCEPT) {
             handleAccept(controller);
             AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
-            if (awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
-    }
-    case CONNECT:
-    {
-        if (ev.events & EPOLLOUT) {
-            handleConnect(controller);
-            ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
-            if (awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
-        }
-        break;
-    }
-    case RECV:
-    {
-        if (ev.events & EPOLLIN) {
+        else if (t & RECV) {
             handleRecv(controller);
             RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
-            if (awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
-    }
-    case SEND:
-    {
-        if (ev.events & EPOLLOUT) {
-            handleSend(controller);
-            SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
-            if (awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
-        }
-        break;
-    }
-    case READV:
-    {
-        if (ev.events & EPOLLIN) {
+        else if (t & READV) {
             handleReadv(controller);
             ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
-            if (awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
-    }
-    case WRITEV:
-    {
-        if (ev.events & EPOLLOUT) {
-            handleWritev(controller);
-            WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
-            if (awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+        else if (t & RECVFROM) {
+            handleRecvFrom(controller);
+            RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
-    }
-    case FILEREAD:
-    {
-        if (ev.events & EPOLLIN) {
+        else if (t & FILEREAD) {
             // AIO eventfd 处理：读取 eventfd 获取完成的事件数
             auto* aioAwaitable = static_cast<galay::async::AioCommitAwaitable*>(controller->m_awaitable[IOController::READ]);
-            if (aioAwaitable == nullptr) return;
-
-            uint64_t completed = 0;
-            ssize_t n = read(controller->m_handle.fd, &completed, sizeof(completed));
-            if (n == sizeof(completed) && completed > 0) {
-                // 获取 AIO 结果
-                std::vector<struct io_event> events(aioAwaitable->m_pending_count);
-                int num_events = io_getevents(aioAwaitable->m_aio_ctx, 1, aioAwaitable->m_pending_count,
-                                               events.data(), nullptr);
-                if (num_events > 0) {
-                    std::vector<ssize_t> results;
-                    results.reserve(num_events);
-                    for (int i = 0; i < num_events; ++i) {
-                        results.push_back(events[i].res);
+            if (aioAwaitable) {
+                uint64_t completed = 0;
+                ssize_t n = read(controller->m_handle.fd, &completed, sizeof(completed));
+                if (n == sizeof(completed) && completed > 0) {
+                    // 获取 AIO 结果
+                    std::vector<struct io_event> events(aioAwaitable->m_pending_count);
+                    int num_events = io_getevents(aioAwaitable->m_aio_ctx, 1, aioAwaitable->m_pending_count,
+                                                   events.data(), nullptr);
+                    if (num_events > 0) {
+                        std::vector<ssize_t> results;
+                        results.reserve(num_events);
+                        for (int i = 0; i < num_events; ++i) {
+                            results.push_back(events[i].res);
+                        }
+                        aioAwaitable->m_result = std::move(results);
+                    } else {
+                        aioAwaitable->m_result = std::unexpected(IOError(kReadFailed, errno));
                     }
-                    aioAwaitable->m_result = std::move(results);
                 } else {
                     aioAwaitable->m_result = std::unexpected(IOError(kReadFailed, errno));
                 }
-            } else {
-                aioAwaitable->m_result = std::unexpected(IOError(kReadFailed, errno));
+                // 从 epoll 移除 eventfd
+                epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, controller->m_handle.fd, nullptr);
+                aioAwaitable->m_waker.wakeUp();
             }
-            // 从 epoll 移除 eventfd
-            epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, controller->m_handle.fd, nullptr);
-            aioAwaitable->m_waker.wakeUp();
         }
-        break;
-    }
-    case FILEWRITE:
-    {
-        if (ev.events & EPOLLOUT) {
-            handleFileWrite(controller);
-            FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
-            if (awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+        else if (t & FILEWATCH) {
+            FileWatchAwaitable* awaitable = controller->getAwaitable<FileWatchAwaitable>();
+            if (awaitable) {
+                // 从 inotify fd 读取事件
+                ssize_t len = read(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_buffer_size);
+                if (len > 0) {
+                    // 解析 inotify 事件
+                    struct inotify_event* event = reinterpret_cast<struct inotify_event*>(awaitable->m_buffer);
+                    FileWatchResult result;
+                    result.isDir = (event->mask & IN_ISDIR) != 0;
+                    if (event->len > 0) {
+                        result.name = std::string(event->name);
+                    }
+                    // 转换 inotify 事件掩码到 FileWatchEvent
+                    uint32_t mask = 0;
+                    if (event->mask & IN_ACCESS)      mask |= static_cast<uint32_t>(FileWatchEvent::Access);
+                    if (event->mask & IN_MODIFY)      mask |= static_cast<uint32_t>(FileWatchEvent::Modify);
+                    if (event->mask & IN_ATTRIB)      mask |= static_cast<uint32_t>(FileWatchEvent::Attrib);
+                    if (event->mask & IN_CLOSE_WRITE) mask |= static_cast<uint32_t>(FileWatchEvent::CloseWrite);
+                    if (event->mask & IN_CLOSE_NOWRITE) mask |= static_cast<uint32_t>(FileWatchEvent::CloseNoWrite);
+                    if (event->mask & IN_OPEN)        mask |= static_cast<uint32_t>(FileWatchEvent::Open);
+                    if (event->mask & IN_MOVED_FROM)  mask |= static_cast<uint32_t>(FileWatchEvent::MovedFrom);
+                    if (event->mask & IN_MOVED_TO)    mask |= static_cast<uint32_t>(FileWatchEvent::MovedTo);
+                    if (event->mask & IN_CREATE)      mask |= static_cast<uint32_t>(FileWatchEvent::Create);
+                    if (event->mask & IN_DELETE)      mask |= static_cast<uint32_t>(FileWatchEvent::Delete);
+                    if (event->mask & IN_DELETE_SELF) mask |= static_cast<uint32_t>(FileWatchEvent::DeleteSelf);
+                    if (event->mask & IN_MOVE_SELF)   mask |= static_cast<uint32_t>(FileWatchEvent::MoveSelf);
+                    result.event = static_cast<FileWatchEvent>(mask);
+                    awaitable->m_result = std::move(result);
+                } else if (len == 0) {
+                    awaitable->m_result = std::unexpected(IOError(kReadFailed, 0));
+                } else {
+                    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                        awaitable->m_result = std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(errno)));
+                    }
+                }
+                awaitable->m_waker.wakeUp();
+            }
         }
-        break;
-    }
-    case RECVFROM:
-    {
-        if (ev.events & EPOLLIN) {
-            handleRecvFrom(controller);
-            RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
-            if (awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+        else if (t & RECV_NOTIFY) {
+            RecvNotifyAwaitable* awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
     }
-    case SENDTO:
-    {
-        if (ev.events & EPOLLOUT) {
+
+    // ===== 写方向事件 =====
+    if (ev.events & EPOLLOUT) {
+        if (t & CONNECT) {
+            handleConnect(controller);
+            ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
+        }
+        else if (t & SEND) {
+            handleSend(controller);
+            SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
+        }
+        else if (t & WRITEV) {
+            handleWritev(controller);
+            WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
+        }
+        else if (t & SENDTO) {
             handleSendTo(controller);
             SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
-            if (awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
-    }
-    case FILEWATCH:
-    {
-        if (ev.events & EPOLLIN) {
-            FileWatchAwaitable* awaitable = controller->getAwaitable<FileWatchAwaitable>();
-            if (awaitable == nullptr) return;
-            // 从 inotify fd 读取事件
-            ssize_t len = read(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_buffer_size);
-            if (len > 0) {
-                // 解析 inotify 事件
-                struct inotify_event* event = reinterpret_cast<struct inotify_event*>(awaitable->m_buffer);
-                FileWatchResult result;
-                result.isDir = (event->mask & IN_ISDIR) != 0;
-                if (event->len > 0) {
-                    result.name = std::string(event->name);
-                }
-                // 转换 inotify 事件掩码到 FileWatchEvent
-                uint32_t mask = 0;
-                if (event->mask & IN_ACCESS)      mask |= static_cast<uint32_t>(FileWatchEvent::Access);
-                if (event->mask & IN_MODIFY)      mask |= static_cast<uint32_t>(FileWatchEvent::Modify);
-                if (event->mask & IN_ATTRIB)      mask |= static_cast<uint32_t>(FileWatchEvent::Attrib);
-                if (event->mask & IN_CLOSE_WRITE) mask |= static_cast<uint32_t>(FileWatchEvent::CloseWrite);
-                if (event->mask & IN_CLOSE_NOWRITE) mask |= static_cast<uint32_t>(FileWatchEvent::CloseNoWrite);
-                if (event->mask & IN_OPEN)        mask |= static_cast<uint32_t>(FileWatchEvent::Open);
-                if (event->mask & IN_MOVED_FROM)  mask |= static_cast<uint32_t>(FileWatchEvent::MovedFrom);
-                if (event->mask & IN_MOVED_TO)    mask |= static_cast<uint32_t>(FileWatchEvent::MovedTo);
-                if (event->mask & IN_CREATE)      mask |= static_cast<uint32_t>(FileWatchEvent::Create);
-                if (event->mask & IN_DELETE)      mask |= static_cast<uint32_t>(FileWatchEvent::Delete);
-                if (event->mask & IN_DELETE_SELF) mask |= static_cast<uint32_t>(FileWatchEvent::DeleteSelf);
-                if (event->mask & IN_MOVE_SELF)   mask |= static_cast<uint32_t>(FileWatchEvent::MoveSelf);
-                result.event = static_cast<FileWatchEvent>(mask);
-                awaitable->m_result = std::move(result);
-            } else if (len == 0) {
-                awaitable->m_result = std::unexpected(IOError(kReadFailed, 0));
-            } else {
-                if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                    awaitable->m_result = std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(errno)));
-                }
-            }
-            awaitable->m_waker.wakeUp();
+        else if (t & FILEWRITE) {
+            handleFileWrite(controller);
+            FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
-    }
-    case RECV_NOTIFY:
-    {
-        if (ev.events & EPOLLIN) {
-            RecvNotifyAwaitable* awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
-            if (awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
-        }
-        break;
-    }
-    case SEND_NOTIFY:
-    {
-        if (ev.events & EPOLLOUT) {
-            SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
-            if (awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
-        }
-        break;
-    }
-    case SENDFILE:
-    {
-        if (ev.events & EPOLLOUT) {
+        else if (t & SENDFILE) {
             handleSendFile(controller);
             SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
-            if (awaitable == nullptr) return;
-            awaitable->m_waker.wakeUp();
+            if (awaitable) awaitable->m_waker.wakeUp();
         }
-        break;
-    }
-    default:
-        break;
+        else if (t & SEND_NOTIFY) {
+            SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
+            if (awaitable) awaitable->m_waker.wakeUp();
+        }
     }
 }
 
@@ -736,7 +684,7 @@ int EpollScheduler::addRecvFrom(IOController* controller)
     auto awaitable = controller->getAwaitable<RecvFromAwaitable>();
     if (awaitable == nullptr) return -1;
     struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLET;
+    ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
 
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
@@ -755,7 +703,7 @@ int EpollScheduler::addSendTo(IOController* controller)
     auto awaitable = controller->getAwaitable<SendToAwaitable>();
     if (awaitable == nullptr) return -1;
     struct epoll_event ev;
-    ev.events = EPOLLOUT | EPOLLET;
+    ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
 
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
@@ -821,7 +769,7 @@ int EpollScheduler::addFileWatch(IOController* controller)
     if (awaitable == nullptr) return -1;
 
     struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLET;
+    ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
 
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, controller->m_handle.fd, &ev);
@@ -836,7 +784,7 @@ int EpollScheduler::addRecvNotify(IOController* controller)
     // 仅注册读事件，不执行IO操作
     // 用于SSL等需要自定义IO处理的场景
     struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLET;
+    ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
 
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
@@ -851,7 +799,7 @@ int EpollScheduler::addSendNotify(IOController* controller)
     // 仅注册写事件，不执行IO操作
     // 用于SSL等需要自定义IO处理的场景
     struct epoll_event ev;
-    ev.events = EPOLLOUT | EPOLLET;
+    ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
 
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
