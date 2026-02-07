@@ -239,7 +239,7 @@ public:
     }
 
     /**
-     * @brief 挂起当前协程并spawn新协程
+     * @brief spawn新协程
      * @param handle 当前协程句柄
      * @return 始终返回false，不挂起当前协程
      */
