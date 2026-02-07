@@ -146,12 +146,6 @@ public:
     std::thread::id threadId() const;
 
     /**
-     * @brief 设置所属线程ID
-     * @param id 线程ID
-     */
-    void threadId(std::thread::id id);
-
-    /**
      * @brief 恢复协程执行
      * @note 仅供Waker和Scheduler调用，会在协程所属的scheduler上spawn
      */
@@ -285,11 +279,10 @@ inline SpawnAwaitable spawn(Coroutine co) {
  */
 struct alignas(64) CoroutineData
 {
-    std::coroutine_handle<Coroutine::promise_type> m_handle = nullptr;   ///< 底层协程句柄
+    std::coroutine_handle<Coroutine::promise_type> m_handle = nullptr;    ///< 底层协程句柄
     Scheduler* m_scheduler = nullptr;                                     ///< 所属调度器
-    std::thread::id m_threadId;                                           ///< 所属线程ID
     std::optional<Coroutine> m_next;                                      ///< 后续协程（用于链式执行）
-    std::atomic<bool> m_done{false};                                      ///< 协程是否完成（线程安全）
+    std::atomic<bool> m_done{false};                                   ///< 协程是否完成（线程安全）
 };
 
 /**

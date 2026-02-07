@@ -266,7 +266,6 @@ bool EpollScheduler::spawn(Coroutine co)
     // 如果协程未绑定 scheduler，绑定到当前 scheduler
     if (!scheduler) {
         co.belongScheduler(this);
-        co.threadId(m_threadId);
     } else {
         if(scheduler != this) return false;
     }
@@ -285,7 +284,6 @@ bool EpollScheduler::spawnImmidiately(Coroutine co)
         return false;
     }
     co.belongScheduler(this);
-    co.threadId(m_threadId);
     resume(co);
     return true;
 }
