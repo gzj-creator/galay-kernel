@@ -4,198 +4,193 @@ namespace galay::kernel
 {
     Bytes::Bytes(std::string &str)
     {
-        std::string data(str);
-        m_string = std::move(data);
+        m_meta.size = str.size();
+        m_meta.capacity = str.size();
+        m_meta.data = (uint8_t*)malloc(str.size());
+        std::memcpy(m_meta.data, str.data(), str.size());
+        m_owned = true;
     }
 
     Bytes::Bytes(std::string &&str)
     {
-        m_string = std::move(str);
+        m_meta.size = str.size();
+        m_meta.capacity = str.size();
+        m_meta.data = (uint8_t*)malloc(str.size());
+        std::memcpy(m_meta.data, str.data(), str.size());
+        m_owned = true;
     }
 
     Bytes::Bytes(const char *str)
     {
-        std::string data(str);
-        m_string = std::move(data);
+        size_t len = std::strlen(str);
+        m_meta.size = len;
+        m_meta.capacity = len;
+        m_meta.data = (uint8_t*)malloc(len);
+        std::memcpy(m_meta.data, str, len);
+        m_owned = true;
     }
 
     Bytes::Bytes(const uint8_t *str)
     {
-        std::string data(reinterpret_cast<const char*>(str));
-        m_string = std::move(data);
+        size_t len = std::strlen(reinterpret_cast<const char*>(str));
+        m_meta.size = len;
+        m_meta.capacity = len;
+        m_meta.data = (uint8_t*)malloc(len);
+        std::memcpy(m_meta.data, str, len);
+        m_owned = true;
     }
 
     Bytes::Bytes(const char *str, size_t length)
     {
-        std::string data(str, length);
-        m_string = std::move(data);
+        m_meta.size = length;
+        m_meta.capacity = length;
+        m_meta.data = (uint8_t*)malloc(length);
+        std::memcpy(m_meta.data, str, length);
+        m_owned = true;
     }
-    
+
     Bytes::Bytes(const uint8_t *str, size_t length)
     {
-        std::string data(reinterpret_cast<const char*>(str), length);
-        m_string = std::move(data);
+        m_meta.size = length;
+        m_meta.capacity = length;
+        m_meta.data = (uint8_t*)malloc(length);
+        std::memcpy(m_meta.data, str, length);
+        m_owned = true;
     }
 
     Bytes::Bytes(size_t capacity)
     {
-        std::string data;
-        data.reserve(capacity);
-        m_string = std::move(data);
+        m_meta.size = 0;
+        m_meta.capacity = capacity;
+        m_meta.data = (uint8_t*)malloc(capacity);
+        m_owned = true;
     }
 
     Bytes::Bytes(Bytes &&other) noexcept
     {
-        m_string = std::move(other.m_string);
+        m_meta.data = other.m_meta.data;
+        m_meta.size = other.m_meta.size;
+        m_meta.capacity = other.m_meta.capacity;
+        m_owned = other.m_owned;
+        other.m_meta.data = nullptr;
+        other.m_meta.size = 0;
+        other.m_meta.capacity = 0;
+        other.m_owned = false;
     }
 
     Bytes &Bytes::operator=(Bytes &&other) noexcept
     {
-        m_string = std::move(other.m_string);
+        if (this != &other) {
+            if (m_owned && m_meta.data) {
+                free(m_meta.data);
+            }
+            m_meta.data = other.m_meta.data;
+            m_meta.size = other.m_meta.size;
+            m_meta.capacity = other.m_meta.capacity;
+            m_owned = other.m_owned;
+            other.m_meta.data = nullptr;
+            other.m_meta.size = 0;
+            other.m_meta.capacity = 0;
+            other.m_owned = false;
+        }
         return *this;
+    }
+
+    Bytes::~Bytes()
+    {
+        if (m_owned && m_meta.data) {
+            free(m_meta.data);
+        }
     }
 
     Bytes Bytes::fromString(std::string &str)
     {
-        StringMetaData data;
-        data.data = reinterpret_cast<uint8_t*>(str.data());
-        data.size = str.size();
-        data.capacity = str.capacity();
         Bytes bytes;
-        bytes.m_string = std::move(data);
+        bytes.m_meta.data = reinterpret_cast<uint8_t*>(str.data());
+        bytes.m_meta.size = str.size();
+        bytes.m_meta.capacity = str.capacity();
+        bytes.m_owned = false;
         return bytes;
     }
 
     Bytes Bytes::fromString(const std::string_view &str)
     {
-        StringMetaData data;
-        data.data = reinterpret_cast<uint8_t*>(const_cast<char*>(str.data()));
-        data.size = str.size();
-        data.capacity = str.size();
         Bytes bytes;
-        bytes.m_string = std::move(data);
+        bytes.m_meta.data = reinterpret_cast<uint8_t*>(const_cast<char*>(str.data()));
+        bytes.m_meta.size = str.size();
+        bytes.m_meta.capacity = str.size();
+        bytes.m_owned = false;
         return bytes;
     }
 
     Bytes Bytes::fromCString(const char *str, size_t length, size_t capacity)
     {
-        StringMetaData data;
-        data.data = reinterpret_cast<uint8_t*>(const_cast<char*>(str));
-        data.size = length;
-        data.capacity = capacity;
         Bytes bytes;
-        bytes.m_string = std::move(data);
+        bytes.m_meta.data = reinterpret_cast<uint8_t*>(const_cast<char*>(str));
+        bytes.m_meta.size = length;
+        bytes.m_meta.capacity = capacity;
+        bytes.m_owned = false;
         return bytes;
     }
 
     const uint8_t* Bytes::data() const noexcept
     {
-        if(std::holds_alternative<StringMetaData>(m_string)) {
-            return std::get<StringMetaData>(m_string).data;
-        } else if(std::holds_alternative<std::string>(m_string)) {
-            return reinterpret_cast<const uint8_t*>(std::get<std::string>(m_string).data());
-        }
-        return nullptr;
+        return m_meta.data;
     }
 
     const char* Bytes::c_str() const noexcept
     {
-        if(std::holds_alternative<StringMetaData>(m_string)) {
-            auto& data = std::get<StringMetaData>(m_string);
-            if(data.data[data.size - 1] != '\0') {
-                data.data[data.size] = '\0';
-            }
-            return reinterpret_cast<const char*>(data.data);
-        } else if(std::holds_alternative<std::string>(m_string)) {
-            return std::get<std::string>(m_string).c_str();
+        if (!m_meta.data) return nullptr;
+        if (m_meta.size > 0 && m_meta.data[m_meta.size - 1] != '\0') {
+            m_meta.data[m_meta.size] = '\0';
         }
-        return nullptr;
+        return reinterpret_cast<const char*>(m_meta.data);
     }
 
     size_t Bytes::size() const noexcept
     {
-        if(std::holds_alternative<StringMetaData>(m_string)) {
-            return std::get<StringMetaData>(m_string).size;
-        } else if(std::holds_alternative<std::string>(m_string)) {
-            return std::get<std::string>(m_string).size();
-        }
-        return 0;
+        return m_meta.size;
     }
 
     size_t Bytes::capacity() const noexcept
     {
-        if(std::holds_alternative<StringMetaData>(m_string)) {
-            return std::get<StringMetaData>(m_string).capacity;
-        } else if(std::holds_alternative<std::string>(m_string)) {
-            return std::get<std::string>(m_string).capacity();
-        }
-        return 0;
+        return m_meta.capacity;
     }
 
     bool Bytes::empty() const noexcept
     {
-        if(std::holds_alternative<StringMetaData>(m_string)) {
-            return std::get<StringMetaData>(m_string).size == 0;
-        } else if(std::holds_alternative<std::string>(m_string)) {
-            return std::get<std::string>(m_string).empty();
-        }
-        return true;
+        return m_meta.size == 0;
     }
 
     void Bytes::clear() noexcept
     {
-        if(std::holds_alternative<StringMetaData>(m_string)) {
-            auto& str = std::get<StringMetaData>(m_string);
-            str.data = nullptr;
-            str.size = 0;
-            str.capacity = 0;
-        } else if(std::holds_alternative<std::string>(m_string)) {
-            std::get<std::string>(m_string).clear();
+        if (m_owned && m_meta.data) {
+            free(m_meta.data);
         }
+        m_meta.data = nullptr;
+        m_meta.size = 0;
+        m_meta.capacity = 0;
+        m_owned = false;
     }
 
     std::string Bytes::toString() const
     {
-        if(std::holds_alternative<StringMetaData>(m_string)) {
-            auto& str = std::get<StringMetaData>(m_string);
-            return std::string(reinterpret_cast<char*>(str.data), str.size);
-        } else if(std::holds_alternative<std::string>(m_string)) {
-            return std::get<std::string>(m_string);
-        }
-        return "";
+        if (!m_meta.data || m_meta.size == 0) return "";
+        return std::string(reinterpret_cast<const char*>(m_meta.data), m_meta.size);
     }
 
     std::string_view Bytes::toStringView() const
     {
-        if(std::holds_alternative<StringMetaData>(m_string)) {
-            auto& str = std::get<StringMetaData>(m_string);
-            return std::string_view(reinterpret_cast<const char*>(str.data), str.size);
-        } else if(std::holds_alternative<std::string>(m_string)) {
-            return std::get<std::string>(m_string);
-        }
-        return std::string_view();
+        if (!m_meta.data || m_meta.size == 0) return std::string_view();
+        return std::string_view(reinterpret_cast<const char*>(m_meta.data), m_meta.size);
     }
 
     bool Bytes::operator==(const Bytes &other) const
     {
-        if(std::holds_alternative<StringMetaData>(m_string) && std::holds_alternative<StringMetaData>(other.m_string)) {
-            auto& str = std::get<StringMetaData>(m_string);
-            auto& str2 = std::get<StringMetaData>(other.m_string);
-            return str.size == str2.size && std::memcmp(str.data, str2.data, str.size) == 0;
-        } else if(std::holds_alternative<std::string>(m_string) && std::holds_alternative<std::string>(other.m_string)) {
-            auto& str = std::get<std::string>(m_string);
-            auto& str2 = std::get<std::string>(other.m_string);
-            return str == str2;
-        } else if(std::holds_alternative<std::string>(m_string) && std::holds_alternative<StringMetaData>(other.m_string)) {
-            auto& str = std::get<std::string>(m_string);
-            auto& str2 = std::get<StringMetaData>(other.m_string);
-            return str.size() == str2.size && std::memcmp(str.c_str(), str2.data, str.size()) == 0;
-        } else if(std::holds_alternative<StringMetaData>(m_string) && std::holds_alternative<std::string>(other.m_string)) {
-            auto& str = std::get<StringMetaData>(m_string);
-            auto& str2 = std::get<std::string>(other.m_string);
-            return str.size == str2.size() && std::memcmp(str.data, str2.c_str(), str.size) == 0;
-        }
-        return false;
+        return m_meta.size == other.m_meta.size &&
+               (m_meta.data == other.m_meta.data ||
+                (m_meta.data && other.m_meta.data &&
+                 std::memcmp(m_meta.data, other.m_meta.data, m_meta.size) == 0));
     }
 
     bool Bytes::operator!=(const Bytes &other) const
