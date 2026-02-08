@@ -6,6 +6,7 @@
  */
 
 #include "Runtime.h"
+#include "TimerScheduler.h"
 #include <thread>
 
 // 根据平台选择默认的 IO 调度器
@@ -66,6 +67,9 @@ void Runtime::start()
         createDefaultSchedulers();
     }
 
+    // 启动全局定时轮调度器
+    TimerScheduler::getInstance()->start();
+
     // 启动所有 IO 调度器
     for (auto& scheduler : m_io_schedulers) {
         scheduler->start();
@@ -93,6 +97,9 @@ void Runtime::stop()
     for (auto it = m_io_schedulers.rbegin(); it != m_io_schedulers.rend(); ++it) {
         (*it)->stop();
     }
+
+    // 停止全局定时轮调度器
+    TimerScheduler::getInstance()->stop();
 }
 
 IOScheduler* Runtime::getIOScheduler(size_t index)
