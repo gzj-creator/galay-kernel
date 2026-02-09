@@ -129,21 +129,23 @@ public:
 
     /**
      * @brief 发送单条数据
+     * @param value 要发送的数据
+     * @param immediately 是否立即唤醒 waiter，true=立即唤醒，false=等待达到阈值
      * @warning 仅在调度器线程内调用
      */
-    bool send(T&& value) {
+    bool send(T&& value, bool immediately = false) {
         m_queue.push_back(std::forward<T>(value));
         ++m_size;
-        if (m_hasWaiter && m_size >= m_wakeThreshold) {
+        if (m_hasWaiter && (immediately || m_size >= m_wakeThreshold)) {
             wakeUpWaiter();
         }
         return true;
     }
 
-    bool send(const T& value) requires std::copy_constructible<T> {
+    bool send(const T& value, bool immediately = false) requires std::copy_constructible<T> {
         m_queue.push_back(value);
         ++m_size;
-        if (m_hasWaiter && m_size >= m_wakeThreshold) {
+        if (m_hasWaiter && (immediately || m_size >= m_wakeThreshold)) {
             wakeUpWaiter();
         }
         return true;
@@ -151,27 +153,29 @@ public:
 
     /**
      * @brief 批量发送数据
+     * @param values 要发送的数据批次
+     * @param immediately 是否立即唤醒 waiter，true=立即唤醒，false=等待达到阈值
      * @warning 仅在调度器线程内调用
      */
-    bool sendBatch(const std::vector<T>& values) requires std::copy_constructible<T> {
+    bool sendBatch(const std::vector<T>& values, bool immediately = false) requires std::copy_constructible<T> {
         if (values.empty()) return true;
         for (const auto& value : values) {
             m_queue.push_back(value);
         }
         m_size += values.size();
-        if (m_hasWaiter && m_size >= m_wakeThreshold) {
+        if (m_hasWaiter && (immediately || m_size >= m_wakeThreshold)) {
             wakeUpWaiter();
         }
         return true;
     }
 
-    bool sendBatch(std::vector<T>&& values) {
+    bool sendBatch(std::vector<T>&& values, bool immediately = false) {
         if (values.empty()) return true;
         for (auto& value : values) {
             m_queue.push_back(std::move(value));
         }
         m_size += values.size();
-        if (m_hasWaiter && m_size >= m_wakeThreshold) {
+        if (m_hasWaiter && (immediately || m_size >= m_wakeThreshold)) {
             wakeUpWaiter();
         }
         return true;
@@ -376,9 +380,17 @@ inline bool UnsafeRecvBatchedAwaitable<T>::await_suspend(
 template <typename T>
 inline std::expected<std::vector<T>, IOError> UnsafeRecvBatchedAwaitable<T>::await_resume() noexcept {
     m_channel->m_wakeThreshold = 1;
+    m_channel->m_hasWaiter = false;
 
+    // 如果 m_result 已经被 WithTimeout 设置为超时错误，直接返回
+    if (!m_result.has_value()) {
+        return m_result;
+    }
+
+    // 否则，从队列中取数据
     if (m_channel->m_size == 0) {
-        return std::unexpected(IOError(kTimeout, 0));
+        m_result = std::unexpected(IOError(kTimeout, 0));
+        return m_result;
     }
 
     std::vector<T> values;
@@ -388,7 +400,8 @@ inline std::expected<std::vector<T>, IOError> UnsafeRecvBatchedAwaitable<T>::awa
         m_channel->m_queue.pop_front();
         --m_channel->m_size;
     }
-    return values;
+    m_result = std::move(values);
+    return m_result;
 }
 
 } // namespace galay::kernel

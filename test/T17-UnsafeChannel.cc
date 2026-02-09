@@ -279,30 +279,31 @@ Coroutine testRecvBatchedSender(UnsafeChannel<int>* channel) {
 }
 
 // ============================================================================
-// 测试11：recvBatched - 超时返回部分数据
+// 测试11：recvBatched - 超时后用 tryRecvBatch 获取部分数据
 // ============================================================================
 std::atomic<bool> g_test11_done{false};
 int g_test11_received_count{0};
 int g_test11_sum{0};
-bool g_test11_timeout{false};
 
 Coroutine testRecvBatchedTimeout(UnsafeChannel<int>* channel) {
     // 等待 100 条或 100ms 超时
     auto result = co_await channel->recvBatched(100).timeout(100ms);
-    if (result) {
-        g_test11_received_count = result->size();
-        for (int v : *result) {
-            g_test11_sum += v;
+    if (!result) {
+        // 超时了，用 tryRecvBatch 获取队列中的部分数据
+        auto partial = channel->tryRecvBatch();
+        if (partial) {
+            g_test11_received_count = partial->size();
+            for (int v : *partial) {
+                g_test11_sum += v;
+            }
         }
-    } else {
-        g_test11_timeout = true;
     }
     g_test11_done = true;
     co_return;
 }
 
 Coroutine testRecvBatchedTimeoutSender(UnsafeChannel<int>* channel) {
-    // 只发送 5 条，不足 100 条，应该超时返回这 5 条
+    // 只发送 5 条，不足 100 条，会超时
     for (int i = 1; i <= 5; ++i) {
         channel->send(i);
         co_yield true;
@@ -401,6 +402,123 @@ Coroutine testHighConcurrencyProducer(UnsafeChannel<int>* channel, int start, in
         if (i % 10 == 0) {
             co_yield true;
         }
+    }
+    co_return;
+}
+
+// ============================================================================
+// 测试16：send immediately=true 立即唤醒
+// ============================================================================
+std::atomic<bool> g_test16_done{false};
+int g_test16_received_count{0};
+int g_test16_sum{0};
+
+Coroutine testSendImmediatelyConsumer(UnsafeChannel<int>* channel) {
+    // 使用 recvBatched(100)，正常情况下需要等到 100 条
+    auto result = co_await channel->recvBatched(100).timeout(100ms);
+    if (result) {
+        g_test16_received_count = result->size();
+        for (int v : *result) {
+            g_test16_sum += v;
+        }
+    }
+    g_test16_done = true;
+    co_return;
+}
+
+Coroutine testSendImmediatelySender(UnsafeChannel<int>* channel) {
+    // 只发送 5 条，但最后一条使用 immediately=true
+    for (int i = 1; i <= 4; ++i) {
+        channel->send(i, false);  // 不立即唤醒
+        co_yield true;
+    }
+    // 最后一条立即唤醒，即使不足 100 条
+    channel->send(5, true);
+    co_return;
+}
+
+// ============================================================================
+// 测试17：sendBatch immediately=true 立即唤醒
+// ============================================================================
+std::atomic<bool> g_test17_done{false};
+int g_test17_received_count{0};
+
+Coroutine testSendBatchImmediatelyConsumer(UnsafeChannel<int>* channel) {
+    auto result = co_await channel->recvBatched(100).timeout(100ms);
+    if (result) {
+        g_test17_received_count = result->size();
+    }
+    g_test17_done = true;
+    co_return;
+}
+
+Coroutine testSendBatchImmediatelySender(UnsafeChannel<int>* channel) {
+    std::vector<int> batch = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    // 批量发送 10 条，使用 immediately=true 立即唤醒
+    channel->sendBatch(batch, true);
+    co_return;
+}
+
+// ============================================================================
+// 测试18：immediately 参数对比测试
+// ============================================================================
+std::atomic<bool> g_test18_done{false};
+int g_test18_received_count{0};
+
+Coroutine testImmediatelyCompareConsumer(UnsafeChannel<int>* channel) {
+    // 使用普通 recv，不使用 recvBatched
+    int count = 0;
+    for (int i = 0; i < 3; ++i) {
+        auto result = co_await channel->recv();
+        if (result) {
+            count++;
+        }
+    }
+    g_test18_received_count = count;
+    g_test18_done = true;
+    co_return;
+}
+
+Coroutine testImmediatelyCompareSender(UnsafeChannel<int>* channel) {
+    // 发送 3 条数据，第 3 条使用 immediately=true
+    channel->send(1, false);  // 不立即唤醒
+    co_yield true;
+    channel->send(2, false);  // 不立即唤醒
+    co_yield true;
+    channel->send(3, true);   // 立即唤醒，消费者会被唤醒并取走所有 3 条
+    co_return;
+}
+
+// ============================================================================
+// 测试19：超时后使用 tryRecvBatch 获取部分数据
+// ============================================================================
+std::atomic<bool> g_test19_done{false};
+int g_test19_received_count{0};
+int g_test19_sum{0};
+
+Coroutine testTimeoutAutoReturn(UnsafeChannel<int>* channel) {
+    // 尝试等待 100 条数据，但只会收到 5 条，超时后返回错误
+    auto result = co_await channel->recvBatched(100).timeout(50ms);
+
+    if (!result) {
+        // 超时了，使用 tryRecvBatch 获取队列中的部分数据
+        auto partial = channel->tryRecvBatch();
+        if (partial) {
+            g_test19_received_count = partial->size();
+            for (int v : *partial) {
+                g_test19_sum += v;
+            }
+        }
+    }
+
+    g_test19_done = true;
+    co_return;
+}
+
+Coroutine testTimeoutAutoReturnSender(UnsafeChannel<int>* channel) {
+    // 一次性发送 5 条数据，不足 100 条，immediately=false 不会唤醒
+    for (int i = 1; i <= 5; ++i) {
+        channel->send(i, false);
     }
     co_return;
 }
@@ -752,13 +870,13 @@ void runTests() {
         scheduler.stop();
 
         int expected_sum = 15;  // 1+2+3+4+5
-        if (g_test11_done && g_test11_received_count == 5 && g_test11_sum == expected_sum && !g_test11_timeout) {
+        if (g_test11_done && g_test11_received_count == 5 && g_test11_sum == expected_sum) {
             LogInfo("[PASS] recvBatched timeout partial: count={}, sum={}",
                     g_test11_received_count, g_test11_sum);
             g_passed++;
         } else {
-            LogError("[FAIL] recvBatched timeout partial: done={}, count={}, sum={}, timeout={}",
-                    g_test11_done.load(), g_test11_received_count, g_test11_sum, g_test11_timeout);
+            LogError("[FAIL] recvBatched timeout partial: done={}, count={}, sum={}",
+                    g_test11_done.load(), g_test11_received_count, g_test11_sum);
         }
     }
 
@@ -883,6 +1001,122 @@ void runTests() {
         } else {
             LogError("[FAIL] High concurrency: done={}, received={}/{}",
                     g_test15_done.load(), g_test15_received, TEST15_TOTAL);
+        }
+    }
+
+    // 测试16：send immediately=true 立即唤醒
+    {
+        LogInfo("\n--- Test 16: send immediately=true ---");
+        g_total++;
+
+        IOSchedulerType scheduler;
+        UnsafeChannel<int> channel;
+
+        scheduler.start();
+        scheduler.spawn(testSendImmediatelyConsumer(&channel));
+        scheduler.spawn(testSendImmediatelySender(&channel));
+
+        auto start = std::chrono::steady_clock::now();
+        while (!g_test16_done) {
+            if (std::chrono::steady_clock::now() - start > 5s) break;
+        }
+
+        scheduler.stop();
+
+        int expected_sum = 15;  // 1+2+3+4+5
+        if (g_test16_done && g_test16_received_count == 5 && g_test16_sum == expected_sum) {
+            LogInfo("[PASS] send immediately: count={}, sum={}",
+                    g_test16_received_count, g_test16_sum);
+            g_passed++;
+        } else {
+            LogError("[FAIL] send immediately: done={}, count={}, sum={}",
+                    g_test16_done.load(), g_test16_received_count, g_test16_sum);
+        }
+    }
+
+    // 测试17：sendBatch immediately=true 立即唤醒
+    {
+        LogInfo("\n--- Test 17: sendBatch immediately=true ---");
+        g_total++;
+
+        IOSchedulerType scheduler;
+        UnsafeChannel<int> channel;
+
+        scheduler.start();
+        scheduler.spawn(testSendBatchImmediatelyConsumer(&channel));
+        scheduler.spawn(testSendBatchImmediatelySender(&channel));
+
+        auto start = std::chrono::steady_clock::now();
+        while (!g_test17_done) {
+            if (std::chrono::steady_clock::now() - start > 5s) break;
+        }
+
+        scheduler.stop();
+
+        if (g_test17_done && g_test17_received_count == 10) {
+            LogInfo("[PASS] sendBatch immediately: count={}", g_test17_received_count);
+            g_passed++;
+        } else {
+            LogError("[FAIL] sendBatch immediately: done={}, count={}",
+                    g_test17_done.load(), g_test17_received_count);
+        }
+    }
+
+    // 测试18：immediately 参数对比测试
+    {
+        LogInfo("\n--- Test 18: immediately parameter comparison ---");
+        g_total++;
+
+        IOSchedulerType scheduler;
+        UnsafeChannel<int> channel;
+
+        scheduler.start();
+        scheduler.spawn(testImmediatelyCompareConsumer(&channel));
+        scheduler.spawn(testImmediatelyCompareSender(&channel));
+
+        auto start = std::chrono::steady_clock::now();
+        while (!g_test18_done) {
+            if (std::chrono::steady_clock::now() - start > 5s) break;
+        }
+
+        scheduler.stop();
+
+        if (g_test18_done && g_test18_received_count == 3) {
+            LogInfo("[PASS] immediately parameter: received {} items", g_test18_received_count);
+            g_passed++;
+        } else {
+            LogError("[FAIL] immediately parameter: done={}, count={}",
+                    g_test18_done.load(), g_test18_received_count);
+        }
+    }
+
+    // 测试19：超时后使用 tryRecvBatch 获取部分数据
+    {
+        LogInfo("\n--- Test 19: timeout then tryRecvBatch for partial data ---");
+        g_total++;
+
+        IOSchedulerType scheduler;
+        UnsafeChannel<int> channel;
+
+        scheduler.start();
+        scheduler.spawn(testTimeoutAutoReturn(&channel));
+        scheduler.spawn(testTimeoutAutoReturnSender(&channel));
+
+        auto start = std::chrono::steady_clock::now();
+        while (!g_test19_done) {
+            if (std::chrono::steady_clock::now() - start > 5s) break;
+        }
+
+        scheduler.stop();
+
+        int expected_sum = 15;  // 1+2+3+4+5
+        if (g_test19_done && g_test19_received_count == 5 && g_test19_sum == expected_sum) {
+            LogInfo("[PASS] timeout then tryRecvBatch: count={}, sum={}",
+                    g_test19_received_count, g_test19_sum);
+            g_passed++;
+        } else {
+            LogError("[FAIL] timeout then tryRecvBatch: done={}, count={}, sum={}",
+                    g_test19_done.load(), g_test19_received_count, g_test19_sum);
         }
     }
 
