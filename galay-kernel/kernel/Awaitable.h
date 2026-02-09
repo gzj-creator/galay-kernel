@@ -43,7 +43,9 @@ namespace galay::kernel
 {
 
 struct AwaitableBase {
+#ifdef USE_IOURING
     IOEventType m_sqe_type = IOEventType::INVALID;
+#endif
 };
 
 struct IOController;
