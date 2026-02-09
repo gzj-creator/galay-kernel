@@ -85,6 +85,25 @@ Coroutine unsafeBatchConsumer(UnsafeChannel<int64_t>* channel, int64_t expected_
     co_return;
 }
 
+Coroutine unsafeBatchedConsumer(UnsafeChannel<int64_t>* channel, int64_t expected_count, int64_t batch_limit) {
+    int64_t received = 0;
+    int64_t sum = 0;
+    while (received < expected_count) {
+        // 使用 recvBatched 攒批接收，带超时
+        auto batch = co_await channel->recvBatched(batch_limit).timeout(10ms);
+        if (batch) {
+            for (int64_t v : *batch) {
+                sum += v;
+            }
+            received += batch->size();
+        }
+    }
+    g_received.store(received, std::memory_order_relaxed);
+    g_sum.store(sum, std::memory_order_relaxed);
+    g_consumer_done = true;
+    co_return;
+}
+
 Coroutine unsafeLatencyConsumer(UnsafeChannel<TimestampedMessage>* channel, int64_t expected_count) {
     int64_t received = 0;
     int64_t latency_sum_ns = 0;
@@ -236,6 +255,41 @@ void benchUnsafeChannelBatchThroughput(int64_t message_count) {
             g_sum.load(), expected_sum, correct ? "YES" : "NO");
 }
 
+// 2b. UnsafeChannel recvBatched 攒批接收吞吐量测试
+void benchUnsafeChannelBatchedThroughput(int64_t message_count, int64_t batch_limit) {
+    LogInfo("--- UnsafeChannel recvBatched Throughput Test ({} messages, limit={}) ---",
+            message_count, batch_limit);
+    resetCounters();
+
+    UnsafeChannel<int64_t> channel;
+    ComputeScheduler scheduler;
+
+    scheduler.start();
+
+    auto start = std::chrono::steady_clock::now();
+
+    scheduler.spawn(unsafeBatchedConsumer(&channel, message_count, batch_limit));
+    scheduler.spawn(unsafeSimpleProducer(&channel, message_count));
+
+    while (!g_consumer_done) {
+        std::this_thread::sleep_for(1ms);
+    }
+
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+    double throughput = (double)message_count / ms * 1000.0;
+
+    scheduler.stop();
+
+    int64_t expected_sum = (message_count - 1) * message_count / 2;
+    bool correct = (g_received == message_count) && (g_sum == expected_sum);
+
+    LogInfo("  sent={}, received={}, time={}ms, throughput={:.0f} msg/s",
+            g_sent.load(), g_received.load(), ms, throughput);
+    LogInfo("  sum={} (expected {}), correct={}",
+            g_sum.load(), expected_sum, correct ? "YES" : "NO");
+}
+
 // 3. UnsafeChannel 延迟测试
 void benchUnsafeChannelLatency(int64_t message_count) {
     LogInfo("--- UnsafeChannel Latency Test ({} messages) ---", message_count);
@@ -356,6 +410,14 @@ int main(int argc, char* argv[]) {
 
     // 2. UnsafeChannel 批量接收吞吐量
     benchUnsafeChannelBatchThroughput(THROUGHPUT_MESSAGES);
+    LogInfo("");
+
+    // 2b. UnsafeChannel recvBatched 攒批接收吞吐量（不同 limit）
+    benchUnsafeChannelBatchedThroughput(THROUGHPUT_MESSAGES, 100);
+    LogInfo("");
+    benchUnsafeChannelBatchedThroughput(THROUGHPUT_MESSAGES, 500);
+    LogInfo("");
+    benchUnsafeChannelBatchedThroughput(THROUGHPUT_MESSAGES, 1000);
     LogInfo("");
 
     // 3. UnsafeChannel 延迟测试

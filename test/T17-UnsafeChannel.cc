@@ -250,20 +250,148 @@ Coroutine testStringSend(UnsafeChannel<std::string>* channel) {
 }
 
 // ============================================================================
-// 测试10：高并发（同调度器内）
+// 测试10：recvBatched - 达到 limit 时唤醒
 // ============================================================================
-int g_test10_received{0};
 std::atomic<bool> g_test10_done{false};
-constexpr int TEST10_TOTAL = 1000;
+int g_test10_received_count{0};
+int g_test10_sum{0};
+constexpr int TEST10_LIMIT = 10;
 
-Coroutine testHighConcurrencyConsumer(UnsafeChannel<int>* channel) {
-    while (g_test10_received < TEST10_TOTAL) {
-        auto value = co_await channel->recv();
-        if (value) {
-            g_test10_received++;
+Coroutine testRecvBatchedLimit(UnsafeChannel<int>* channel) {
+    auto result = co_await channel->recvBatched(TEST10_LIMIT);
+    if (result) {
+        g_test10_received_count = result->size();
+        for (int v : *result) {
+            g_test10_sum += v;
         }
     }
     g_test10_done = true;
+    co_return;
+}
+
+Coroutine testRecvBatchedSender(UnsafeChannel<int>* channel) {
+    // 逐个发送，当达到 limit 时应该唤醒消费者
+    for (int i = 1; i <= TEST10_LIMIT; ++i) {
+        channel->send(i);
+        co_yield true;
+    }
+    co_return;
+}
+
+// ============================================================================
+// 测试11：recvBatched - 超时返回部分数据
+// ============================================================================
+std::atomic<bool> g_test11_done{false};
+int g_test11_received_count{0};
+int g_test11_sum{0};
+bool g_test11_timeout{false};
+
+Coroutine testRecvBatchedTimeout(UnsafeChannel<int>* channel) {
+    // 等待 100 条或 100ms 超时
+    auto result = co_await channel->recvBatched(100).timeout(100ms);
+    if (result) {
+        g_test11_received_count = result->size();
+        for (int v : *result) {
+            g_test11_sum += v;
+        }
+    } else {
+        g_test11_timeout = true;
+    }
+    g_test11_done = true;
+    co_return;
+}
+
+Coroutine testRecvBatchedTimeoutSender(UnsafeChannel<int>* channel) {
+    // 只发送 5 条，不足 100 条，应该超时返回这 5 条
+    for (int i = 1; i <= 5; ++i) {
+        channel->send(i);
+        co_yield true;
+    }
+    co_return;
+}
+
+// ============================================================================
+// 测试12：recvBatched - 超时且无数据
+// ============================================================================
+std::atomic<bool> g_test12_done{false};
+bool g_test12_got_error{false};
+
+Coroutine testRecvBatchedTimeoutEmpty(UnsafeChannel<int>* channel) {
+    // 等待 100 条或 50ms 超时，但没有数据发送
+    auto result = co_await channel->recvBatched(100).timeout(50ms);
+    if (!result) {
+        g_test12_got_error = true;
+    }
+    g_test12_done = true;
+    co_return;
+}
+
+// ============================================================================
+// 测试13：recvBatched - 队列已有足够数据
+// ============================================================================
+std::atomic<bool> g_test13_done{false};
+int g_test13_received_count{0};
+
+Coroutine testRecvBatchedReady(UnsafeChannel<int>* channel) {
+    // 队列已有 20 条数据，limit 是 10，应该立即返回所有数据
+    auto result = co_await channel->recvBatched(10);
+    if (result) {
+        g_test13_received_count = result->size();
+    }
+    g_test13_done = true;
+    co_return;
+}
+
+// ============================================================================
+// 测试14：recvBatched - 与普通 recv 混用
+// ============================================================================
+std::atomic<bool> g_test14_done{false};
+int g_test14_batched_count{0};
+int g_test14_single_value{0};
+
+Coroutine testRecvBatchedMixed(UnsafeChannel<int>* channel) {
+    // 先用 recvBatched 接收
+    auto batch = co_await channel->recvBatched(5);
+    if (batch) {
+        g_test14_batched_count = batch->size();
+    }
+
+    // 再用普通 recv 接收
+    auto single = co_await channel->recv();
+    if (single) {
+        g_test14_single_value = *single;
+    }
+
+    g_test14_done = true;
+    co_return;
+}
+
+Coroutine testRecvBatchedMixedSender(UnsafeChannel<int>* channel) {
+    // 发送 5 条触发 recvBatched
+    for (int i = 1; i <= 5; ++i) {
+        channel->send(i);
+        co_yield true;
+    }
+    // 再发送 1 条触发 recv
+    channel->send(99);
+    co_return;
+}
+
+// ============================================================================
+// 测试15：高并发（同调度器内）
+// ============================================================================
+int g_test15_received{0};
+std::atomic<bool> g_test15_done{false};
+constexpr int TEST15_TOTAL = 1000;
+
+Coroutine testHighConcurrencyConsumer(UnsafeChannel<int>* channel) {
+    while (g_test15_received < TEST15_TOTAL) {
+        auto value = co_await channel->recv();
+        if (value) {
+            g_test15_received++;
+        }
+    }
+    g_test15_done = true;
     co_return;
 }
 
@@ -573,9 +701,159 @@ void runTests() {
         }
     }
 
-    // 测试10：高并发（同调度器内）
+    // 测试10：recvBatched - 达到 limit 时唤醒
     {
-        LogInfo("\n--- Test 10: High concurrency ({} messages) ---", TEST10_TOTAL);
+        LogInfo("\n--- Test 10: recvBatched - wake on limit ({} items) ---", TEST10_LIMIT);
+        g_total++;
+
+        IOSchedulerType scheduler;
+        UnsafeChannel<int> channel;
+
+        scheduler.start();
+        scheduler.spawn(testRecvBatchedLimit(&channel));
+        scheduler.spawn(testRecvBatchedSender(&channel));
+
+        auto start = std::chrono::steady_clock::now();
+        while (!g_test10_done) {
+            if (std::chrono::steady_clock::now() - start > 5s) break;
+        }
+
+        scheduler.stop();
+
+        int expected_sum = TEST10_LIMIT * (TEST10_LIMIT + 1) / 2;  // 1+2+...+10 = 55
+        if (g_test10_done && g_test10_received_count == TEST10_LIMIT && g_test10_sum == expected_sum) {
+            LogInfo("[PASS] recvBatched limit: count={}, sum={}",
+                    g_test10_received_count, g_test10_sum);
+            g_passed++;
+        } else {
+            LogError("[FAIL] recvBatched limit: done={}, count={}/{}, sum={}/{}",
+                    g_test10_done.load(), g_test10_received_count, TEST10_LIMIT,
+                    g_test10_sum, expected_sum);
+        }
+    }
+
+    // 测试11：recvBatched - 超时返回部分数据
+    {
+        LogInfo("\n--- Test 11: recvBatched - timeout with partial data ---");
+        g_total++;
+
+        IOSchedulerType scheduler;
+        UnsafeChannel<int> channel;
+
+        scheduler.start();
+        scheduler.spawn(testRecvBatchedTimeout(&channel));
+        scheduler.spawn(testRecvBatchedTimeoutSender(&channel));
+
+        auto start = std::chrono::steady_clock::now();
+        while (!g_test11_done) {
+            if (std::chrono::steady_clock::now() - start > 5s) break;
+        }
+
+        scheduler.stop();
+
+        int expected_sum = 15;  // 1+2+3+4+5
+        if (g_test11_done && g_test11_received_count == 5 && g_test11_sum == expected_sum && !g_test11_timeout) {
+            LogInfo("[PASS] recvBatched timeout partial: count={}, sum={}",
+                    g_test11_received_count, g_test11_sum);
+            g_passed++;
+        } else {
+            LogError("[FAIL] recvBatched timeout partial: done={}, count={}, sum={}, timeout={}",
+                    g_test11_done.load(), g_test11_received_count, g_test11_sum, g_test11_timeout);
+        }
+    }
+
+    // 测试12：recvBatched - 超时且无数据
+    {
+        LogInfo("\n--- Test 12: recvBatched - timeout with no data ---");
+        g_total++;
+
+        IOSchedulerType scheduler;
+        UnsafeChannel<int> channel;
+
+        scheduler.start();
+        scheduler.spawn(testRecvBatchedTimeoutEmpty(&channel));
+
+        auto start = std::chrono::steady_clock::now();
+        while (!g_test12_done) {
+            if (std::chrono::steady_clock::now() - start > 5s) break;
+        }
+
+        scheduler.stop();
+
+        if (g_test12_done && g_test12_got_error) {
+            LogInfo("[PASS] recvBatched timeout empty: got timeout error");
+            g_passed++;
+        } else {
+            LogError("[FAIL] recvBatched timeout empty: done={}, got_error={}",
+                    g_test12_done.load(), g_test12_got_error);
+        }
+    }
+
+    // 测试13：recvBatched - 队列已有足够数据
+    {
+        LogInfo("\n--- Test 13: recvBatched - queue already has enough data ---");
+        g_total++;
+
+        IOSchedulerType scheduler;
+        UnsafeChannel<int> channel;
+
+        // 预先发送 20 条数据
+        for (int i = 1; i <= 20; ++i) {
+            channel.send(i);
+        }
+
+        scheduler.start();
+        scheduler.spawn(testRecvBatchedReady(&channel));
+
+        auto start = std::chrono::steady_clock::now();
+        while (!g_test13_done) {
+            if (std::chrono::steady_clock::now() - start > 5s) break;
+        }
+
+        scheduler.stop();
+
+        // 应该立即返回所有 20 条数据（不等待 limit）
+        if (g_test13_done && g_test13_received_count == 20) {
+            LogInfo("[PASS] recvBatched ready: count={}", g_test13_received_count);
+            g_passed++;
+        } else {
+            LogError("[FAIL] recvBatched ready: done={}, count={}",
+                    g_test13_done.load(), g_test13_received_count);
+        }
+    }
+
+    // 测试14：recvBatched - 与普通 recv 混用
+    {
+        LogInfo("\n--- Test 14: recvBatched - mixed with recv ---");
+        g_total++;
+
+        IOSchedulerType scheduler;
+        UnsafeChannel<int> channel;
+
+        scheduler.start();
+        scheduler.spawn(testRecvBatchedMixed(&channel));
+        scheduler.spawn(testRecvBatchedMixedSender(&channel));
+
+        auto start = std::chrono::steady_clock::now();
+        while (!g_test14_done) {
+            if (std::chrono::steady_clock::now() - start > 5s) break;
+        }
+
+        scheduler.stop();
+
+        if (g_test14_done && g_test14_batched_count == 5 && g_test14_single_value == 99) {
+            LogInfo("[PASS] recvBatched mixed: batched_count={}, single_value={}",
+                    g_test14_batched_count, g_test14_single_value);
+            g_passed++;
+        } else {
+            LogError("[FAIL] recvBatched mixed: done={}, batched_count={}, single_value={}",
+                    g_test14_done.load(), g_test14_batched_count, g_test14_single_value);
+        }
+    }
+
+    // 测试15：高并发（同调度器内）
+    {
+        LogInfo("\n--- Test 15: High concurrency ({} messages) ---", TEST15_TOTAL);
         g_total++;
 
         IOSchedulerType scheduler;
@@ -585,26 +863,26 @@ void runTests() {
         scheduler.spawn(testHighConcurrencyConsumer(&channel));
 
         // 启动多个生产者协程
-        int per_producer = TEST10_TOTAL / 4;
+        int per_producer = TEST15_TOTAL / 4;
         for (int i = 0; i < 4; ++i) {
             scheduler.spawn(testHighConcurrencyProducer(&channel, i * per_producer, per_producer));
         }
 
         auto start = std::chrono::steady_clock::now();
-        while (!g_test10_done) {
+        while (!g_test15_done) {
             // 使用调度器的空闲等待
             if (std::chrono::steady_clock::now() - start > 30s) break;
         }
 
         scheduler.stop();
 
-        if (g_test10_done && g_test10_received == TEST10_TOTAL) {
+        if (g_test15_done && g_test15_received == TEST15_TOTAL) {
             LogInfo("[PASS] High concurrency: received={}",
-                    g_test10_received);
+                    g_test15_received);
             g_passed++;
         } else {
             LogError("[FAIL] High concurrency: done={}, received={}/{}",
-                    g_test10_done.load(), g_test10_received, TEST10_TOTAL);
+                    g_test15_done.load(), g_test15_received, TEST15_TOTAL);
         }
     }
 
