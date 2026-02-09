@@ -352,24 +352,32 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
     // ===== 读方向事件 =====
     if (ev.events & EPOLLIN) {
         if (t & ACCEPT) {
-            handleAccept(controller);
-            AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
+            if (handleAccept(controller)) {
+                AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
+                if (awaitable) awaitable->m_waker.wakeUp();
+            }
+            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & RECV) {
-            handleRecv(controller);
-            RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
+            if (handleRecv(controller)) {
+                RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
+                if (awaitable) awaitable->m_waker.wakeUp();
+            }
+            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & READV) {
-            handleReadv(controller);
-            ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
+            if (handleReadv(controller)) {
+                ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
+                if (awaitable) awaitable->m_waker.wakeUp();
+            }
+            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & RECVFROM) {
-            handleRecvFrom(controller);
-            RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
+            if (handleRecvFrom(controller)) {
+                RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
+                if (awaitable) awaitable->m_waker.wakeUp();
+            }
+            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & FILEREAD) {
             // AIO eventfd 处理：读取 eventfd 获取完成的事件数
@@ -452,34 +460,46 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
     // ===== 写方向事件 =====
     if (ev.events & EPOLLOUT) {
         if (t & CONNECT) {
-            handleConnect(controller);
-            ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
+            if (handleConnect(controller)) {
+                ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
+                if (awaitable) awaitable->m_waker.wakeUp();
+            }
+            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & SEND) {
-            handleSend(controller);
-            SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
+            if (handleSend(controller)) {
+                SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
+                if (awaitable) awaitable->m_waker.wakeUp();
+            }
+            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & WRITEV) {
-            handleWritev(controller);
-            WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
+            if (handleWritev(controller)) {
+                WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
+                if (awaitable) awaitable->m_waker.wakeUp();
+            }
+            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & SENDTO) {
-            handleSendTo(controller);
-            SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
+            if (handleSendTo(controller)) {
+                SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
+                if (awaitable) awaitable->m_waker.wakeUp();
+            }
+            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & FILEWRITE) {
-            handleFileWrite(controller);
-            FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
+            if (handleFileWrite(controller)) {
+                FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
+                if (awaitable) awaitable->m_waker.wakeUp();
+            }
+            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & SENDFILE) {
-            handleSendFile(controller);
-            SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
+            if (handleSendFile(controller)) {
+                SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
+                if (awaitable) awaitable->m_waker.wakeUp();
+            }
+            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & SEND_NOTIFY) {
             SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
@@ -522,33 +542,29 @@ bool EpollScheduler::handleAccept(IOController* controller)
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return false;
         }
-        awaitable->m_result = std::unexpected(IOError(kAcceptFailed, static_cast<uint32_t>(errno)));
-        return true;
+        return awaitable->handleComplete(std::unexpected(IOError(kAcceptFailed, static_cast<uint32_t>(errno))));
     }
     Host host = Host::fromSockAddr(addr);
-    awaitable->m_result = handle;
     *(awaitable->m_host) = host;
-    return true;
+    return awaitable->handleComplete(handle);
 }
 
 bool EpollScheduler::handleRecv(IOController* controller)
 {
     RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
     if (awaitable == nullptr) return false;
-    Bytes bytes;
     int recvBytes = recv(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length, 0);
     if (recvBytes > 0) {
-        bytes = Bytes::fromCString(awaitable->m_buffer, recvBytes, recvBytes);
-        awaitable->m_result = std::move(bytes);
+        Bytes bytes = Bytes::fromCString(awaitable->m_buffer, recvBytes, recvBytes);
+        return awaitable->handleComplete(std::move(bytes));
     } else if (recvBytes == 0) {
-        awaitable->m_result = std::unexpected(IOError(kDisconnectError, 0));
+        return awaitable->handleComplete(std::unexpected(IOError(kDisconnectError, 0)));
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return false;
         }
-        awaitable->m_result = std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno)));
+        return awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno))));
     }
-    return true;
 }
 
 bool EpollScheduler::handleSend(IOController* controller)
@@ -558,14 +574,12 @@ bool EpollScheduler::handleSend(IOController* controller)
     ssize_t sentBytes = send(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length, 0);
 
     if (sentBytes >= 0) {
-        awaitable->m_result = static_cast<size_t>(sentBytes);
-        return true;
+        return awaitable->handleComplete(static_cast<size_t>(sentBytes));
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return false;
         }
-        awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
-        return true;
+        return awaitable->handleComplete(std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno))));
     }
 }
 
@@ -578,17 +592,14 @@ bool EpollScheduler::handleReadv(IOController* controller)
                               static_cast<int>(awaitable->m_iovecs.size()));
 
     if (readBytes > 0) {
-        awaitable->m_result = static_cast<size_t>(readBytes);
-        return true;
+        return awaitable->handleComplete(static_cast<size_t>(readBytes));
     } else if (readBytes == 0) {
-        awaitable->m_result = std::unexpected(IOError(kDisconnectError, 0));
-        return true;
+        return awaitable->handleComplete(std::unexpected(IOError(kDisconnectError, 0)));
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return false;
         }
-        awaitable->m_result = std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno)));
-        return true;
+        return awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno))));
     }
 }
 
@@ -601,14 +612,12 @@ bool EpollScheduler::handleWritev(IOController* controller)
                                   static_cast<int>(awaitable->m_iovecs.size()));
 
     if (writtenBytes >= 0) {
-        awaitable->m_result = static_cast<size_t>(writtenBytes);
-        return true;
+        return awaitable->handleComplete(static_cast<size_t>(writtenBytes));
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return false;
         }
-        awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
-        return true;
+        return awaitable->handleComplete(std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno))));
     }
 }
 
@@ -624,18 +633,15 @@ bool EpollScheduler::handleSendFile(IOController* controller)
 
     if (sentBytes > 0) {
         // 成功发送
-        awaitable->m_result = static_cast<size_t>(sentBytes);
-        return true;
+        return awaitable->handleComplete(static_cast<size_t>(sentBytes));
     } else if (sentBytes == 0) {
         // 没有数据发送（可能文件已到末尾）
-        awaitable->m_result = 0;
-        return true;
+        return awaitable->handleComplete(static_cast<size_t>(0));
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return false;
         }
-        awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
-        return true;
+        return awaitable->handleComplete(std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno))));
     }
 }
 
@@ -648,16 +654,13 @@ bool EpollScheduler::handleConnect(IOController* controller)
     int result = connect(controller->m_handle.fd, host.sockAddr(), host.addrLen());
 
     if (result == 0) {
-        awaitable->m_result = {};
-        return true;
+        return awaitable->handleComplete({});
     } else if (errno == EINPROGRESS) {
         return false;
     } else if (errno == EISCONN) {
-        awaitable->m_result = {};
-        return true;
+        return awaitable->handleComplete({});
     } else {
-        awaitable->m_result = std::unexpected(IOError(kConnectFailed, static_cast<uint32_t>(errno)));
-        return true;
+        return awaitable->handleComplete(std::unexpected(IOError(kConnectFailed, static_cast<uint32_t>(errno))));
     }
 }
 
@@ -669,18 +672,15 @@ bool EpollScheduler::handleFileRead(IOController* controller)
 
     if (readBytes > 0) {
         Bytes bytes = Bytes::fromCString(awaitable->m_buffer, readBytes, readBytes);
-        awaitable->m_result = std::move(bytes);
-        return true;
+        return awaitable->handleComplete(std::move(bytes));
     } else if (readBytes == 0) {
         // EOF
-        awaitable->m_result = Bytes();
-        return true;
+        return awaitable->handleComplete(Bytes());
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return false;
         }
-        awaitable->m_result = std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(errno)));
-        return true;
+        return awaitable->handleComplete(std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(errno))));
     }
 }
 
@@ -691,14 +691,12 @@ bool EpollScheduler::handleFileWrite(IOController* controller)
     ssize_t writtenBytes = pwrite(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
 
     if (writtenBytes >= 0) {
-        awaitable->m_result = static_cast<size_t>(writtenBytes);
-        return true;
+        return awaitable->handleComplete(static_cast<size_t>(writtenBytes));
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return false;
         }
-        awaitable->m_result = std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(errno)));
-        return true;
+        return awaitable->handleComplete(std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(errno))));
     }
 }
 
@@ -752,20 +750,17 @@ bool EpollScheduler::handleRecvFrom(IOController* controller)
 
     if (recvBytes > 0) {
         Bytes bytes = Bytes::fromCString(awaitable->m_buffer, recvBytes, recvBytes);
-        awaitable->m_result = std::move(bytes);
         if (awaitable->m_from) {
             *(awaitable->m_from) = Host::fromSockAddr(addr);
         }
-        return true;
+        return awaitable->handleComplete(std::move(bytes));
     } else if (recvBytes == 0) {
-        awaitable->m_result = std::unexpected(IOError(kRecvFailed, 0));
-        return true;
+        return awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, 0)));
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return false;
         }
-        awaitable->m_result = std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno)));
-        return true;
+        return awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno))));
     }
 }
 
@@ -779,14 +774,12 @@ bool EpollScheduler::handleSendTo(IOController* controller)
                                 0, to.sockAddr(), to.addrLen());
 
     if (sentBytes >= 0) {
-        awaitable->m_result = static_cast<size_t>(sentBytes);
-        return true;
+        return awaitable->handleComplete(static_cast<size_t>(sentBytes));
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return false;
         }
-        awaitable->m_result = std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
-        return true;
+        return awaitable->handleComplete(std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno))));
     }
 }
 

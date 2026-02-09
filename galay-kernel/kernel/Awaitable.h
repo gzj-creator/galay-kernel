@@ -90,6 +90,13 @@ struct AcceptAwaitable: public AwaitableBase, public TimeoutSupport<AcceptAwaita
         :m_host(host), m_controller(controller) {}
 
     /**
+     * @brief 构造函数
+     * @param result 异步操作结果
+     * @return true 唤醒，false继续监听
+     */
+    bool handleComplete(std::expected<GHandle, IOError>&& result);
+
+    /**
      * @brief 检查是否可以立即返回
      * @return 始终返回false，需要异步等待
      */
@@ -154,6 +161,16 @@ struct RecvAwaitable: public AwaitableBase, public TimeoutSupport<RecvAwaitable>
      */
     RecvAwaitable(IOController* controller, char* buffer, size_t length)
         : m_controller(controller), m_buffer(buffer), m_length(length) {}
+
+    /**
+     * @brief 处理完成回调
+     * @param result 异步操作结果
+     * @return true 唤醒，false继续监听
+     */
+    bool handleComplete(std::expected<Bytes, IOError>&& result) {
+        m_result = std::move(result);
+        return true;
+    }
 
     /**
      * @brief 检查是否可以立即返回
@@ -222,6 +239,16 @@ struct SendAwaitable: public AwaitableBase, public TimeoutSupport<SendAwaitable>
         : m_controller(controller), m_buffer(buffer), m_length(length) {}
 
     /**
+     * @brief 处理完成回调
+     * @param result 异步操作结果
+     * @return true 唤醒，false继续监听
+     */
+    bool handleComplete(std::expected<size_t, IOError>&& result) {
+        m_result = std::move(result);
+        return true;
+    }
+
+    /**
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
@@ -286,6 +313,16 @@ struct ReadvAwaitable: public AwaitableBase, public TimeoutSupport<ReadvAwaitabl
      */
     ReadvAwaitable(IOController* controller, std::vector<struct iovec> iovecs)
         : m_controller(controller), m_iovecs(std::move(iovecs)) {}
+
+    /**
+     * @brief 处理完成回调
+     * @param result 异步操作结果
+     * @return true 唤醒，false继续监听
+     */
+    bool handleComplete(std::expected<size_t, IOError>&& result) {
+        m_result = std::move(result);
+        return true;
+    }
 
     /**
      * @brief 检查是否可以立即返回
@@ -353,6 +390,16 @@ struct WritevAwaitable: public AwaitableBase, public TimeoutSupport<WritevAwaita
         : m_controller(controller), m_iovecs(std::move(iovecs)) {}
 
     /**
+     * @brief 处理完成回调
+     * @param result 异步操作结果
+     * @return true 唤醒，false继续监听
+     */
+    bool handleComplete(std::expected<size_t, IOError>&& result) {
+        m_result = std::move(result);
+        return true;
+    }
+
+    /**
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
@@ -415,6 +462,16 @@ struct ConnectAwaitable: public AwaitableBase, public TimeoutSupport<ConnectAwai
      */
     ConnectAwaitable(IOController* controller, const Host& host)
         : m_controller(controller), m_host(host) {}
+
+    /**
+     * @brief 处理完成回调
+     * @param result 异步操作结果
+     * @return true 唤醒，false继续监听
+     */
+    bool handleComplete(std::expected<void, IOError>&& result) {
+        m_result = std::move(result);
+        return true;
+    }
 
     /**
      * @brief 检查是否可以立即返回
@@ -523,6 +580,16 @@ struct RecvFromAwaitable: public AwaitableBase, public TimeoutSupport<RecvFromAw
         : m_controller(controller), m_buffer(buffer), m_length(length), m_from(from) {}
 
     /**
+     * @brief 处理完成回调
+     * @param result 异步操作结果
+     * @return true 唤醒，false继续监听
+     */
+    bool handleComplete(std::expected<Bytes, IOError>&& result) {
+        m_result = std::move(result);
+        return true;
+    }
+
+    /**
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
@@ -596,6 +663,16 @@ struct SendToAwaitable: public AwaitableBase, public TimeoutSupport<SendToAwaita
      */
     SendToAwaitable(IOController* controller, const char* buffer, size_t length, const Host& to)
         : m_controller(controller), m_buffer(buffer), m_length(length), m_to(to) {}
+
+    /**
+     * @brief 处理完成回调
+     * @param result 异步操作结果
+     * @return true 唤醒，false继续监听
+     */
+    bool handleComplete(std::expected<size_t, IOError>&& result) {
+        m_result = std::move(result);
+        return true;
+    }
 
     /**
      * @brief 检查是否可以立即返回
@@ -676,6 +753,16 @@ struct FileReadAwaitable: public AwaitableBase, public TimeoutSupport<FileReadAw
           m_buffer(buffer), m_length(length), m_offset(offset) {}
 #endif
 
+    /**
+     * @brief 处理完成回调
+     * @param result 异步操作结果
+     * @return true 唤醒，false继续监听
+     */
+    bool handleComplete(std::expected<Bytes, IOError>&& result) {
+        m_result = std::move(result);
+        return true;
+    }
+
     bool await_ready() { return FileReadActionReady(); }
     bool await_suspend(std::coroutine_handle<> handle);
     std::expected<Bytes, IOError> await_resume();
@@ -740,6 +827,16 @@ struct FileWriteAwaitable: public AwaitableBase, public TimeoutSupport<FileWrite
         : m_controller(controller),
           m_buffer(buffer), m_length(length), m_offset(offset) {}
 #endif
+
+    /**
+     * @brief 处理完成回调
+     * @param result 异步操作结果
+     * @return true 唤醒，false继续监听
+     */
+    bool handleComplete(std::expected<size_t, IOError>&& result) {
+        m_result = std::move(result);
+        return true;
+    }
 
     bool await_ready() { return FileWriteActionReady(); }
     bool await_suspend(std::coroutine_handle<> handle);
@@ -863,6 +960,16 @@ struct FileWatchAwaitable: public AwaitableBase, public TimeoutSupport<FileWatch
         : m_controller(controller),
           m_buffer(buffer), m_buffer_size(buffer_size) {}
 #endif
+
+    /**
+     * @brief 处理完成回调
+     * @param result 异步操作结果
+     * @return true 唤醒，false继续监听
+     */
+    bool handleComplete(std::expected<FileWatchResult, IOError>&& result) {
+        m_result = std::move(result);
+        return true;
+    }
 
     /**
      * @brief 检查是否可以立即返回
@@ -1062,6 +1169,16 @@ struct SendFileAwaitable: public AwaitableBase, public TimeoutSupport<SendFileAw
     SendFileAwaitable(IOController* controller, int file_fd, off_t offset, size_t count)
         : m_controller(controller), m_file_fd(file_fd),
           m_offset(offset), m_count(count) {}
+
+    /**
+     * @brief 处理完成回调
+     * @param result 异步操作结果
+     * @return true 唤醒，false继续监听
+     */
+    bool handleComplete(std::expected<size_t, IOError>&& result) {
+        m_result = std::move(result);
+        return true;
+    }
 
     /**
      * @brief 检查是否可以立即返回

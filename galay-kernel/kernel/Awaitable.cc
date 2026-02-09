@@ -14,6 +14,12 @@
 namespace galay::kernel
 {
 
+bool AcceptAwaitable::handleComplete(std::expected<GHandle, IOError>&& result)
+{
+    m_result = std::move(result);
+    return true;
+}
+
 bool AcceptAwaitable::await_suspend(std::coroutine_handle<> handle) {
     m_waker = Waker(handle);
     return AcceptActionSuspend(this, m_controller, m_waker, m_result);
