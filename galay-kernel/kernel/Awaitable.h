@@ -60,6 +60,28 @@ struct IOController;
  */
 struct AcceptAwaitable: public AwaitableBase, public TimeoutSupport<AcceptAwaitable> {
     /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false，需要异步等待
+     */
+    static bool AcceptActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @param result 结果输出
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool AcceptActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<GHandle, IOError>& result);
+
+    /**
+     * @brief 独立的 resume 操作（仅执行清理）
+     * @param controller IO控制器
+     */
+    static void AcceptActionResume(IOController* controller);
+
+    /**
      * @brief 构造函数
      * @param controller IO控制器
      * @param host 输出参数，接收客户端地址
@@ -71,7 +93,7 @@ struct AcceptAwaitable: public AwaitableBase, public TimeoutSupport<AcceptAwaita
      * @brief 检查是否可以立即返回
      * @return 始终返回false，需要异步等待
      */
-    bool await_ready() { return false; }
+    bool await_ready() { return AcceptActionReady(); }
 
     /**
      * @brief 挂起协程并注册IO事件
@@ -103,6 +125,28 @@ struct AcceptAwaitable: public AwaitableBase, public TimeoutSupport<AcceptAwaita
  */
 struct RecvAwaitable: public AwaitableBase, public TimeoutSupport<RecvAwaitable> {
     /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false
+     */
+    static bool RecvActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @param result 结果输出
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool RecvActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<Bytes, IOError>& result);
+
+    /**
+     * @brief 独立的 resume 操作
+     * @param controller IO控制器
+     */
+    static void RecvActionResume(IOController* controller);
+
+    /**
      * @brief 构造函数
      * @param controller IO控制器
      * @param buffer 接收缓冲区
@@ -115,7 +159,7 @@ struct RecvAwaitable: public AwaitableBase, public TimeoutSupport<RecvAwaitable>
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
-    bool await_ready() { return false; }
+    bool await_ready() { return RecvActionReady(); }
 
     /**
      * @brief 挂起协程并注册IO事件
@@ -147,6 +191,28 @@ struct RecvAwaitable: public AwaitableBase, public TimeoutSupport<RecvAwaitable>
  */
 struct SendAwaitable: public AwaitableBase, public TimeoutSupport<SendAwaitable> {
     /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false，需要异步等待
+     */
+    static bool SendActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @param result 结果输出
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool SendActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<size_t, IOError>& result);
+
+    /**
+     * @brief 独立的 resume 操作
+     * @param controller IO控制器
+     */
+    static void SendActionResume(IOController* controller);
+
+    /**
      * @brief 构造函数
      * @param controller IO控制器
      * @param buffer 发送数据
@@ -159,7 +225,7 @@ struct SendAwaitable: public AwaitableBase, public TimeoutSupport<SendAwaitable>
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
-    bool await_ready() { return false; }
+    bool await_ready() { return SendActionReady(); }
 
     /**
      * @brief 挂起协程并注册IO事件
@@ -192,6 +258,28 @@ struct SendAwaitable: public AwaitableBase, public TimeoutSupport<SendAwaitable>
  */
 struct ReadvAwaitable: public AwaitableBase, public TimeoutSupport<ReadvAwaitable> {
     /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false，需要异步等待
+     */
+    static bool ReadvActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @param result 结果输出
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool ReadvActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<size_t, IOError>& result);
+
+    /**
+     * @brief 独立的 resume 操作
+     * @param controller IO控制器
+     */
+    static void ReadvActionResume(IOController* controller);
+
+    /**
      * @brief 构造函数
      * @param controller IO控制器
      * @param iovecs iovec 向量，描述多个缓冲区
@@ -203,7 +291,7 @@ struct ReadvAwaitable: public AwaitableBase, public TimeoutSupport<ReadvAwaitabl
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
-    bool await_ready() { return false; }
+    bool await_ready() { return ReadvActionReady(); }
 
     /**
      * @brief 挂起协程并注册IO事件
@@ -235,6 +323,28 @@ struct ReadvAwaitable: public AwaitableBase, public TimeoutSupport<ReadvAwaitabl
  */
 struct WritevAwaitable: public AwaitableBase, public TimeoutSupport<WritevAwaitable> {
     /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false，需要异步等待
+     */
+    static bool WritevActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @param result 结果输出
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool WritevActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<size_t, IOError>& result);
+
+    /**
+     * @brief 独立的 resume 操作
+     * @param controller IO控制器
+     */
+    static void WritevActionResume(IOController* controller);
+
+    /**
      * @brief 构造函数
      * @param controller IO控制器
      * @param iovecs iovec 向量，描述多个缓冲区
@@ -246,7 +356,7 @@ struct WritevAwaitable: public AwaitableBase, public TimeoutSupport<WritevAwaita
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
-    bool await_ready() { return false; }
+    bool await_ready() { return WritevActionReady(); }
 
     /**
      * @brief 挂起协程并注册IO事件
@@ -277,6 +387,28 @@ struct WritevAwaitable: public AwaitableBase, public TimeoutSupport<WritevAwaita
  */
 struct ConnectAwaitable: public AwaitableBase, public TimeoutSupport<ConnectAwaitable> {
     /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false，需要异步等待
+     */
+    static bool ConnectActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @param result 结果输出
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool ConnectActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<void, IOError>& result);
+
+    /**
+     * @brief 独立的 resume 操作
+     * @param controller IO控制器
+     */
+    static void ConnectActionResume(IOController* controller);
+
+    /**
      * @brief 构造函数
      * @param controller IO控制器
      * @param host 目标服务器地址
@@ -288,7 +420,7 @@ struct ConnectAwaitable: public AwaitableBase, public TimeoutSupport<ConnectAwai
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
-    bool await_ready() { return false; }
+    bool await_ready() { return ConnectActionReady(); }
 
     /**
      * @brief 挂起协程并注册IO事件
@@ -359,6 +491,28 @@ struct CloseAwaitable: public AwaitableBase, public TimeoutSupport<CloseAwaitabl
  */
 struct RecvFromAwaitable: public AwaitableBase, public TimeoutSupport<RecvFromAwaitable> {
     /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false，需要异步等待
+     */
+    static bool RecvFromActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @param result 结果输出
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool RecvFromActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<Bytes, IOError>& result);
+
+    /**
+     * @brief 独立的 resume 操作
+     * @param controller IO控制器
+     */
+    static void RecvFromActionResume(IOController* controller);
+
+    /**
      * @brief 构造函数
      * @param controller IO控制器
      * @param buffer 接收缓冲区
@@ -372,7 +526,7 @@ struct RecvFromAwaitable: public AwaitableBase, public TimeoutSupport<RecvFromAw
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
-    bool await_ready() { return false; }
+    bool await_ready() { return RecvFromActionReady(); }
 
     /**
      * @brief 挂起协程并注册IO事件
@@ -412,6 +566,28 @@ struct RecvFromAwaitable: public AwaitableBase, public TimeoutSupport<RecvFromAw
  */
 struct SendToAwaitable: public AwaitableBase, public TimeoutSupport<SendToAwaitable> {
     /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false，需要异步等待
+     */
+    static bool SendToActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @param result 结果输出
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool SendToActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<size_t, IOError>& result);
+
+    /**
+     * @brief 独立的 resume 操作
+     * @param controller IO控制器
+     */
+    static void SendToActionResume(IOController* controller);
+
+    /**
      * @brief 构造函数
      * @param controller IO控制器
      * @param buffer 发送数据
@@ -425,7 +601,7 @@ struct SendToAwaitable: public AwaitableBase, public TimeoutSupport<SendToAwaita
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
-    bool await_ready() { return false; }
+    bool await_ready() { return SendToActionReady(); }
 
     /**
      * @brief 挂起协程并注册IO事件
@@ -463,6 +639,28 @@ struct SendToAwaitable: public AwaitableBase, public TimeoutSupport<SendToAwaita
  * @note 由AsyncFile::read()创建
  */
 struct FileReadAwaitable: public AwaitableBase, public TimeoutSupport<FileReadAwaitable> {
+    /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false，需要异步等待
+     */
+    static bool FileReadActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @param result 结果输出
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool FileReadActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<Bytes, IOError>& result);
+
+    /**
+     * @brief 独立的 resume 操作
+     * @param controller IO控制器
+     */
+    static void FileReadActionResume(IOController* controller);
+
 #ifdef USE_EPOLL
     // epoll 平台：需要 eventfd 和 libaio context
     FileReadAwaitable(IOController* controller,
@@ -478,7 +676,7 @@ struct FileReadAwaitable: public AwaitableBase, public TimeoutSupport<FileReadAw
           m_buffer(buffer), m_length(length), m_offset(offset) {}
 #endif
 
-    bool await_ready() { return false; }
+    bool await_ready() { return FileReadActionReady(); }
     bool await_suspend(std::coroutine_handle<> handle);
     std::expected<Bytes, IOError> await_resume();
 
@@ -506,6 +704,28 @@ struct FileReadAwaitable: public AwaitableBase, public TimeoutSupport<FileReadAw
  * @note 由AsyncFile::write()创建
  */
 struct FileWriteAwaitable: public AwaitableBase, public TimeoutSupport<FileWriteAwaitable> {
+    /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false，需要异步等待
+     */
+    static bool FileWriteActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @param result 结果输出
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool FileWriteActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<size_t, IOError>& result);
+
+    /**
+     * @brief 独立的 resume 操作
+     * @param controller IO控制器
+     */
+    static void FileWriteActionResume(IOController* controller);
+
 #ifdef USE_EPOLL
     // epoll 平台：需要 eventfd 和 libaio context
     FileWriteAwaitable(IOController* controller,
@@ -521,7 +741,7 @@ struct FileWriteAwaitable: public AwaitableBase, public TimeoutSupport<FileWrite
           m_buffer(buffer), m_length(length), m_offset(offset) {}
 #endif
 
-    bool await_ready() { return false; }
+    bool await_ready() { return FileWriteActionReady(); }
     bool await_suspend(std::coroutine_handle<> handle);
     std::expected<size_t, IOError> await_resume();
 
@@ -595,6 +815,28 @@ struct FileWatchResult {
  * @note 由FileWatcher::watch()创建
  */
 struct FileWatchAwaitable: public AwaitableBase, public TimeoutSupport<FileWatchAwaitable> {
+    /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false，需要异步等待
+     */
+    static bool FileWatchActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @param result 结果输出
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool FileWatchActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<FileWatchResult, IOError>& result);
+
+    /**
+     * @brief 独立的 resume 操作
+     * @param controller IO控制器
+     */
+    static void FileWatchActionResume(IOController* controller);
+
 #ifdef USE_KQUEUE
     /**
      * @brief 构造函数 (kqueue)
@@ -626,7 +868,7 @@ struct FileWatchAwaitable: public AwaitableBase, public TimeoutSupport<FileWatch
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
-    bool await_ready() { return false; }
+    bool await_ready() { return FileWatchActionReady(); }
 
     /**
      * @brief 挂起协程并注册IO事件
@@ -662,6 +904,27 @@ struct FileWatchAwaitable: public AwaitableBase, public TimeoutSupport<FileWatch
  */
 struct RecvNotifyAwaitable: public AwaitableBase, public TimeoutSupport<RecvNotifyAwaitable> {
     /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false，需要异步等待
+     */
+    static bool RecvNotifyActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool RecvNotifyActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker);
+
+    /**
+     * @brief 独立的 resume 操作
+     * @param controller IO控制器
+     */
+    static void RecvNotifyActionResume(IOController* controller);
+
+    /**
      * @brief 构造函数
      * @param controller IO控制器
      */
@@ -672,7 +935,7 @@ struct RecvNotifyAwaitable: public AwaitableBase, public TimeoutSupport<RecvNoti
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
-    bool await_ready() { return false; }
+    bool await_ready() { return RecvNotifyActionReady(); }
 
     /**
      * @brief 挂起协程并注册IO事件
@@ -702,6 +965,27 @@ struct RecvNotifyAwaitable: public AwaitableBase, public TimeoutSupport<RecvNoti
  */
 struct SendNotifyAwaitable: public AwaitableBase, public TimeoutSupport<SendNotifyAwaitable> {
     /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false，需要异步等待
+     */
+    static bool SendNotifyActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool SendNotifyActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker);
+
+    /**
+     * @brief 独立的 resume 操作
+     * @param controller IO控制器
+     */
+    static void SendNotifyActionResume(IOController* controller);
+
+    /**
      * @brief 构造函数
      * @param controller IO控制器
      */
@@ -712,7 +996,7 @@ struct SendNotifyAwaitable: public AwaitableBase, public TimeoutSupport<SendNoti
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
-    bool await_ready() { return false; }
+    bool await_ready() { return SendNotifyActionReady(); }
 
     /**
      * @brief 挂起协程并注册IO事件
@@ -747,6 +1031,28 @@ struct SendNotifyAwaitable: public AwaitableBase, public TimeoutSupport<SendNoti
  */
 struct SendFileAwaitable: public AwaitableBase, public TimeoutSupport<SendFileAwaitable> {
     /**
+     * @brief 独立的 ready 操作
+     * @return 始终返回false，需要异步等待
+     */
+    static bool SendFileActionReady() { return false; }
+
+    /**
+     * @brief 独立的 suspend 操作
+     * @param awaitable Awaitable对象指针
+     * @param controller IO控制器
+     * @param waker 协程唤醒器
+     * @param result 结果输出
+     * @return true表示挂起，false表示立即完成
+     */
+    static bool SendFileActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<size_t, IOError>& result);
+
+    /**
+     * @brief 独立的 resume 操作
+     * @param controller IO控制器
+     */
+    static void SendFileActionResume(IOController* controller);
+
+    /**
      * @brief 构造函数
      * @param controller IO控制器（socket的控制器）
      * @param file_fd 要发送的文件描述符
@@ -761,7 +1067,7 @@ struct SendFileAwaitable: public AwaitableBase, public TimeoutSupport<SendFileAw
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
-    bool await_ready() { return false; }
+    bool await_ready() { return SendFileActionReady(); }
 
     /**
      * @brief 挂起协程并注册IO事件
