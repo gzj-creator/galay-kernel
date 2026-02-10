@@ -103,11 +103,12 @@ uint32_t EpollScheduler::buildEpollEvents(IOController* controller)
 
 int EpollScheduler::addAccept(IOController* controller)
 {
-    if (handleAccept(controller)) {
+    auto awaitable = controller->getAwaitable<AcceptAwaitable>();
+    if(awaitable == nullptr) return -1;
+    auto result = handleAccept(controller->m_handle);
+    if(awaitable->handleComplete(std::move(result.first), std::move(result.second))) {
         return OK;
     }
-    auto awaitable = controller->getAwaitable<AcceptAwaitable>();
-    if (awaitable == nullptr) return -1;
     struct epoll_event ev;
     ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
@@ -116,12 +117,12 @@ int EpollScheduler::addAccept(IOController* controller)
 
 int EpollScheduler::addConnect(IOController* controller)
 {
-    if (handleConnect(controller)) {
+    auto awaitable = controller->getAwaitable<ConnectAwaitable>();
+    if(awaitable == nullptr) return -1;
+    auto result = handleConnect(controller->m_handle, awaitable->m_host);
+    if(awaitable->handleComplete(std::move(result))) {
         return OK;
     }
-
-    auto awaitable = controller->getAwaitable<ConnectAwaitable>();
-    if (awaitable == nullptr) return -1;
     struct epoll_event ev;
     ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
@@ -130,12 +131,12 @@ int EpollScheduler::addConnect(IOController* controller)
 
 int EpollScheduler::addRecv(IOController* controller)
 {
-    if (handleRecv(controller)) {
+    auto awaitable = controller->getAwaitable<RecvAwaitable>();
+    if(awaitable == nullptr) return -1;
+    auto result = handleRecv(controller->m_handle, awaitable->m_buffer, awaitable->m_length);
+    if(awaitable->handleComplete(std::move(result))) {
         return OK;
     }
-
-    auto awaitable = controller->getAwaitable<RecvAwaitable>();
-    if (awaitable == nullptr) return -1;
     struct epoll_event ev;
     ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
@@ -149,12 +150,12 @@ int EpollScheduler::addRecv(IOController* controller)
 
 int EpollScheduler::addSend(IOController* controller)
 {
-    if (handleSend(controller)) {
+    auto awaitable = controller->getAwaitable<SendAwaitable>();
+    if(awaitable == nullptr) return -1;
+    auto result = handleSend(controller->m_handle, awaitable->m_buffer, awaitable->m_length);
+    if(awaitable->handleComplete(std::move(result))) {
         return OK;
     }
-
-    auto awaitable = controller->getAwaitable<SendAwaitable>();
-    if (awaitable == nullptr) return -1;
     struct epoll_event ev;
     ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
@@ -168,12 +169,12 @@ int EpollScheduler::addSend(IOController* controller)
 
 int EpollScheduler::addReadv(IOController* controller)
 {
-    if (handleReadv(controller)) {
+    auto awaitable = controller->getAwaitable<ReadvAwaitable>();
+    if(awaitable == nullptr) return -1;
+    auto result = handleReadv(controller->m_handle, awaitable->m_iovecs.data(), static_cast<int>(awaitable->m_iovecs.size()));
+    if(awaitable->handleComplete(std::move(result))) {
         return OK;
     }
-
-    auto awaitable = controller->getAwaitable<ReadvAwaitable>();
-    if (awaitable == nullptr) return -1;
     struct epoll_event ev;
     ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
@@ -187,12 +188,12 @@ int EpollScheduler::addReadv(IOController* controller)
 
 int EpollScheduler::addWritev(IOController* controller)
 {
-    if (handleWritev(controller)) {
+    auto awaitable = controller->getAwaitable<WritevAwaitable>();
+    if(awaitable == nullptr) return -1;
+    auto result = handleWritev(controller->m_handle, awaitable->m_iovecs.data(), static_cast<int>(awaitable->m_iovecs.size()));
+    if(awaitable->handleComplete(std::move(result))) {
         return OK;
     }
-
-    auto awaitable = controller->getAwaitable<WritevAwaitable>();
-    if (awaitable == nullptr) return -1;
     struct epoll_event ev;
     ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
@@ -207,14 +208,11 @@ int EpollScheduler::addWritev(IOController* controller)
 int EpollScheduler::addSendFile(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<SendFileAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    // 先尝试直接发送
-    if (handleSendFile(controller)) {
+    if(awaitable == nullptr) return -1;
+    auto result = handleSendFile(controller->m_handle, awaitable->m_file_fd, awaitable->m_offset, awaitable->m_count);
+    if(awaitable->handleComplete(std::move(result))) {
         return OK;
     }
-
-    // 如果 EAGAIN，注册 EPOLLOUT 等待 socket 可写
     struct epoll_event ev;
     ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
@@ -352,32 +350,40 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
     // ===== 读方向事件 =====
     if (ev.events & EPOLLIN) {
         if (t & ACCEPT) {
-            if (handleAccept(controller)) {
-                AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
-                if (awaitable) awaitable->m_waker.wakeUp();
+            auto result = handleAccept(controller->m_handle);
+            AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
+            if (awaitable) {
+                if(awaitable->handleComplete(std::move(result.first), std::move(result.second))) {
+                    awaitable->m_waker.wakeUp();
+                }
             }
-            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & RECV) {
-            if (handleRecv(controller)) {
-                RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
-                if (awaitable) awaitable->m_waker.wakeUp();
+            RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
+            if (awaitable) {
+                auto result = handleRecv(controller->m_handle, awaitable->m_buffer, awaitable->m_length);
+                if(awaitable->handleComplete(std::move(result))) {
+                    awaitable->m_waker.wakeUp();
+                }
             }
-            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & READV) {
-            if (handleReadv(controller)) {
-                ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
-                if (awaitable) awaitable->m_waker.wakeUp();
+            ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
+            if (awaitable) {
+                auto result = handleReadv(controller->m_handle, awaitable->m_iovecs.data(), static_cast<int>(awaitable->m_iovecs.size()));
+                if(awaitable->handleComplete(std::move(result))) {
+                    awaitable->m_waker.wakeUp();
+                }
             }
-            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & RECVFROM) {
-            if (handleRecvFrom(controller)) {
-                RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
-                if (awaitable) awaitable->m_waker.wakeUp();
+            RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
+            if (awaitable) {
+                auto result = handleRecvFrom(controller->m_handle, awaitable->m_buffer, awaitable->m_length);
+                if(awaitable->handleComplete(std::move(result.first), std::move(result.second))) {
+                    awaitable->m_waker.wakeUp();
+                }
             }
-            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & FILEREAD) {
             // AIO eventfd 处理：读取 eventfd 获取完成的事件数
@@ -451,63 +457,67 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
             RecvNotifyAwaitable* awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
             if (awaitable) awaitable->m_waker.wakeUp();
         }
-        else {
-            // 残留的 EPOLLIN 事件，m_type 中已无读类型
-            // syncEpollEvents 会在末尾更新 epoll 注册
-        }
     }
 
     // ===== 写方向事件 =====
     if (ev.events & EPOLLOUT) {
         if (t & CONNECT) {
-            if (handleConnect(controller)) {
-                ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
-                if (awaitable) awaitable->m_waker.wakeUp();
+            ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
+            if (awaitable) {
+                auto result = handleConnect(controller->m_handle, awaitable->m_host);
+                if(awaitable->handleComplete(std::move(result))) {
+                    awaitable->m_waker.wakeUp();
+                }
             }
-            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & SEND) {
-            if (handleSend(controller)) {
-                SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
-                if (awaitable) awaitable->m_waker.wakeUp();
+            SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
+            if (awaitable) {
+                auto result = handleSend(controller->m_handle, awaitable->m_buffer, awaitable->m_length);
+                if(awaitable->handleComplete(std::move(result))) {
+                    awaitable->m_waker.wakeUp();
+                }
             }
-            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & WRITEV) {
-            if (handleWritev(controller)) {
-                WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
-                if (awaitable) awaitable->m_waker.wakeUp();
+            WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
+            if (awaitable) {
+                auto result = handleWritev(controller->m_handle, awaitable->m_iovecs.data(), static_cast<int>(awaitable->m_iovecs.size()));
+                if(awaitable->handleComplete(std::move(result))) {
+                    awaitable->m_waker.wakeUp();
+                }
             }
-            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & SENDTO) {
-            if (handleSendTo(controller)) {
-                SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
-                if (awaitable) awaitable->m_waker.wakeUp();
+            SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
+            if (awaitable) {
+                auto result = handleSendTo(controller->m_handle, awaitable->m_buffer, awaitable->m_length, awaitable->m_to);
+                if(awaitable->handleComplete(std::move(result))) {
+                    awaitable->m_waker.wakeUp();
+                }
             }
-            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & FILEWRITE) {
-            if (handleFileWrite(controller)) {
-                FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
-                if (awaitable) awaitable->m_waker.wakeUp();
+            FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
+            if (awaitable) {
+                auto result = handleFileWrite(controller->m_handle, awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
+                if(awaitable->handleComplete(std::move(result))) {
+                    awaitable->m_waker.wakeUp();
+                }
             }
-            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & SENDFILE) {
-            if (handleSendFile(controller)) {
-                SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
-                if (awaitable) awaitable->m_waker.wakeUp();
+            SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
+            if (awaitable) {
+                auto result = handleSendFile(controller->m_handle, awaitable->m_file_fd, awaitable->m_offset, awaitable->m_count);
+                if(awaitable->handleComplete(std::move(result))) {
+                    awaitable->m_waker.wakeUp();
+                }
             }
-            // handleComplete 返回 false 时，syncEpollEvents 会重新注册事件
         }
         else if (t & SEND_NOTIFY) {
             SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
             if (awaitable) awaitable->m_waker.wakeUp();
-        }
-        else {
-            // 残留的 EPOLLOUT 事件，m_type 中已无写类型（对端 awaitable 已完成）
-            // ET 模式下必须更新 epoll 注册，否则此事件不会再触发且掩码过时
         }
     }
 
@@ -529,185 +539,14 @@ void EpollScheduler::syncEpollEvents(IOController* controller)
     epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
 }
 
-bool EpollScheduler::handleAccept(IOController* controller)
-{
-    AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
-    if (awaitable == nullptr) return false;
-    sockaddr_storage addr{};
-    socklen_t addr_len = sizeof(addr);
-    GHandle handle {
-        .fd = accept(controller->m_handle.fd, reinterpret_cast<sockaddr*>(&addr), &addr_len),
-    };
-    if (handle.fd < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return false;
-        }
-        return awaitable->handleComplete(std::unexpected(IOError(kAcceptFailed, static_cast<uint32_t>(errno))));
-    }
-    Host host = Host::fromSockAddr(addr);
-    *(awaitable->m_host) = host;
-    return awaitable->handleComplete(handle);
-}
-
-bool EpollScheduler::handleRecv(IOController* controller)
-{
-    RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
-    if (awaitable == nullptr) return false;
-    int recvBytes = recv(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length, 0);
-    if (recvBytes > 0) {
-        Bytes bytes = Bytes::fromCString(awaitable->m_buffer, recvBytes, recvBytes);
-        return awaitable->handleComplete(std::move(bytes));
-    } else if (recvBytes == 0) {
-        return awaitable->handleComplete(std::unexpected(IOError(kDisconnectError, 0)));
-    } else {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return false;
-        }
-        return awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno))));
-    }
-}
-
-bool EpollScheduler::handleSend(IOController* controller)
-{
-    SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
-    if (awaitable == nullptr) return false;
-    ssize_t sentBytes = send(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length, 0);
-
-    if (sentBytes >= 0) {
-        return awaitable->handleComplete(static_cast<size_t>(sentBytes));
-    } else {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return false;
-        }
-        return awaitable->handleComplete(std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno))));
-    }
-}
-
-bool EpollScheduler::handleReadv(IOController* controller)
-{
-    ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
-    if (awaitable == nullptr) return false;
-
-    ssize_t readBytes = readv(controller->m_handle.fd, awaitable->m_iovecs.data(),
-                              static_cast<int>(awaitable->m_iovecs.size()));
-
-    if (readBytes > 0) {
-        return awaitable->handleComplete(static_cast<size_t>(readBytes));
-    } else if (readBytes == 0) {
-        return awaitable->handleComplete(std::unexpected(IOError(kDisconnectError, 0)));
-    } else {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return false;
-        }
-        return awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno))));
-    }
-}
-
-bool EpollScheduler::handleWritev(IOController* controller)
-{
-    WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
-    if (awaitable == nullptr) return false;
-
-    ssize_t writtenBytes = writev(controller->m_handle.fd, awaitable->m_iovecs.data(),
-                                  static_cast<int>(awaitable->m_iovecs.size()));
-
-    if (writtenBytes >= 0) {
-        return awaitable->handleComplete(static_cast<size_t>(writtenBytes));
-    } else {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return false;
-        }
-        return awaitable->handleComplete(std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno))));
-    }
-}
-
-bool EpollScheduler::handleSendFile(IOController* controller)
-{
-    SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
-    if (awaitable == nullptr) return false;
-
-    // Linux sendfile 参数: sendfile(out_fd, in_fd, offset, count)
-    off_t offset = awaitable->m_offset;
-    ssize_t sentBytes = ::sendfile(controller->m_handle.fd, awaitable->m_file_fd,
-                                   &offset, awaitable->m_count);
-
-    if (sentBytes > 0) {
-        // 成功发送
-        return awaitable->handleComplete(static_cast<size_t>(sentBytes));
-    } else if (sentBytes == 0) {
-        // 没有数据发送（可能文件已到末尾）
-        return awaitable->handleComplete(static_cast<size_t>(0));
-    } else {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return false;
-        }
-        return awaitable->handleComplete(std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno))));
-    }
-}
-
-bool EpollScheduler::handleConnect(IOController* controller)
-{
-    ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
-    if (awaitable == nullptr) return false;
-
-    const Host& host = awaitable->m_host;
-    int result = connect(controller->m_handle.fd, host.sockAddr(), host.addrLen());
-
-    if (result == 0) {
-        return awaitable->handleComplete({});
-    } else if (errno == EINPROGRESS) {
-        return false;
-    } else if (errno == EISCONN) {
-        return awaitable->handleComplete({});
-    } else {
-        return awaitable->handleComplete(std::unexpected(IOError(kConnectFailed, static_cast<uint32_t>(errno))));
-    }
-}
-
-bool EpollScheduler::handleFileRead(IOController* controller)
-{
-    FileReadAwaitable* awaitable = controller->getAwaitable<FileReadAwaitable>();
-    if (awaitable == nullptr) return false;
-    ssize_t readBytes = pread(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
-
-    if (readBytes > 0) {
-        Bytes bytes = Bytes::fromCString(awaitable->m_buffer, readBytes, readBytes);
-        return awaitable->handleComplete(std::move(bytes));
-    } else if (readBytes == 0) {
-        // EOF
-        return awaitable->handleComplete(Bytes());
-    } else {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return false;
-        }
-        return awaitable->handleComplete(std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(errno))));
-    }
-}
-
-bool EpollScheduler::handleFileWrite(IOController* controller)
-{
-    FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
-    if (awaitable == nullptr) return false;
-    ssize_t writtenBytes = pwrite(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
-
-    if (writtenBytes >= 0) {
-        return awaitable->handleComplete(static_cast<size_t>(writtenBytes));
-    } else {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return false;
-        }
-        return awaitable->handleComplete(std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(errno))));
-    }
-}
-
 int EpollScheduler::addRecvFrom(IOController* controller)
 {
-    if (handleRecvFrom(controller)) {
+    auto awaitable = controller->getAwaitable<RecvFromAwaitable>();
+    if(awaitable == nullptr) return -1;
+    auto result = handleRecvFrom(controller->m_handle, awaitable->m_buffer, awaitable->m_length);
+    if(awaitable->handleComplete(std::move(result.first), std::move(result.second))) {
         return OK;
     }
-
-    auto awaitable = controller->getAwaitable<RecvFromAwaitable>();
-    if (awaitable == nullptr) return -1;
     struct epoll_event ev;
     ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
@@ -721,12 +560,12 @@ int EpollScheduler::addRecvFrom(IOController* controller)
 
 int EpollScheduler::addSendTo(IOController* controller)
 {
-    if (handleSendTo(controller)) {
+    auto awaitable = controller->getAwaitable<SendToAwaitable>();
+    if(awaitable == nullptr) return -1;
+    auto result = handleSendTo(controller->m_handle, awaitable->m_buffer, awaitable->m_length, awaitable->m_to);
+    if(awaitable->handleComplete(std::move(result))) {
         return OK;
     }
-
-    auto awaitable = controller->getAwaitable<SendToAwaitable>();
-    if (awaitable == nullptr) return -1;
     struct epoll_event ev;
     ev.events = buildEpollEvents(controller);
     ev.data.ptr = controller;
@@ -736,51 +575,6 @@ int EpollScheduler::addSendTo(IOController* controller)
         ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, controller->m_handle.fd, &ev);
     }
     return ret;
-}
-
-bool EpollScheduler::handleRecvFrom(IOController* controller)
-{
-    RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
-    if (awaitable == nullptr) return false;
-    sockaddr_storage addr{};
-    socklen_t addr_len = sizeof(addr);
-
-    ssize_t recvBytes = recvfrom(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length,
-                                  0, reinterpret_cast<sockaddr*>(&addr), &addr_len);
-
-    if (recvBytes > 0) {
-        Bytes bytes = Bytes::fromCString(awaitable->m_buffer, recvBytes, recvBytes);
-        if (awaitable->m_from) {
-            *(awaitable->m_from) = Host::fromSockAddr(addr);
-        }
-        return awaitable->handleComplete(std::move(bytes));
-    } else if (recvBytes == 0) {
-        return awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, 0)));
-    } else {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return false;
-        }
-        return awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno))));
-    }
-}
-
-bool EpollScheduler::handleSendTo(IOController* controller)
-{
-    SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
-    if (awaitable == nullptr) return false;
-    const Host& to = awaitable->m_to;
-
-    ssize_t sentBytes = sendto(controller->m_handle.fd, awaitable->m_buffer, awaitable->m_length,
-                                0, to.sockAddr(), to.addrLen());
-
-    if (sentBytes >= 0) {
-        return awaitable->handleComplete(static_cast<size_t>(sentBytes));
-    } else {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return false;
-        }
-        return awaitable->handleComplete(std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno))));
-    }
 }
 
 int EpollScheduler::addFileWatch(IOController* controller)

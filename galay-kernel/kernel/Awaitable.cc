@@ -14,9 +14,25 @@
 namespace galay::kernel
 {
 
-bool AcceptAwaitable::handleComplete(std::expected<GHandle, IOError>&& result)
+bool AcceptAwaitable::handleComplete(std::expected<GHandle, IOError>&& result, Host&& host)
 {
+    if(!result && IOError::contains(result.error().code(), kNotReady)) {
+        return false;
+    }
     m_result = std::move(result);
+    *m_host = std::move(host);
+    return true;
+}
+
+bool RecvFromAwaitable::handleComplete(std::expected<Bytes, IOError>&& result, Host&& from)
+{
+    if(!result && IOError::contains(result.error().code(), kNotReady)) {
+        return false;
+    }
+    m_result = std::move(result);
+    if(m_from) {
+        *m_from = std::move(from);
+    }
     return true;
 }
 

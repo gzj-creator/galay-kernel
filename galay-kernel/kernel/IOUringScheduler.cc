@@ -488,7 +488,9 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         auto* awaitable = static_cast<AcceptAwaitable*>(base);
         if (res >= 0) {
             GHandle handle { .fd = res };
-            if (awaitable->handleComplete(handle)) {
+            // io_uring 已经直接填充了 awaitable->m_host，传入它作为参数
+            Host host = *awaitable->m_host;
+            if (awaitable->handleComplete(std::move(handle), std::move(host))) {
                 awaitable->m_waker.wakeUp();
             } else {
                 // handleComplete 返回 false，需要重新提交 accept
@@ -501,7 +503,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
                 }
             }
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kAcceptFailed, static_cast<uint32_t>(-res))))) {
+            if (awaitable->handleComplete(std::unexpected(IOError(kAcceptFailed, static_cast<uint32_t>(-res))), Host())) {
                 awaitable->m_waker.wakeUp();
             } else {
                 // handleComplete 返回 false，需要重新提交 accept
@@ -751,10 +753,9 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         auto* awaitable = static_cast<RecvFromAwaitable*>(base);
         if (res > 0) {
             Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
-            if (awaitable->m_from) {
-                *awaitable->m_from = Host::fromSockAddr(awaitable->m_addr);
-            }
-            if (awaitable->handleComplete(std::move(bytes))) {
+            // io_uring 已经直接填充了 awaitable->m_addr，传入它作为参数
+            Host host = Host::fromSockAddr(awaitable->m_addr);
+            if (awaitable->handleComplete(std::move(bytes), std::move(host))) {
                 awaitable->m_waker.wakeUp();
             } else {
                 // handleComplete 返回 false，需要重新提交 recvfrom
@@ -773,11 +774,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
                 }
             }
         } else if (res == 0) {
-            if (awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, 0)))) {
+            if (awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, 0)), Host())) {
                 awaitable->m_waker.wakeUp();
             }
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-res))))) {
+            if (awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-res))), Host())) {
                 awaitable->m_waker.wakeUp();
             } else {
                 // handleComplete 返回 false，需要重新提交 recvfrom
