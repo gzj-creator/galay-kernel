@@ -10,21 +10,22 @@ namespace galay::kernel
 // Error codes
 enum IOErrorCode : uint32_t {
     kDisconnectError = 0,
-    kNotifyButSourceNotReady = 1,
-    kRecvFailed = 2,
-    kSendFailed = 3,
-    kAcceptFailed = 4,
-    kConnectFailed = 5,
-    kBindFailed = 6,
-    kListenFailed = 7,
-    kOpenFailed = 8,
-    kReadFailed = 9,
-    kWriteFailed = 10,
-    kStatFailed = 11,
-    kSyncFailed = 12,
-    kSeekFailed = 13,
-    kTimeout = 14,              ///< 操作超时
-    kNotRunningOnIOScheduler = 15
+    kNotReady,
+    kParamInvalid,
+    kRecvFailed,
+    kSendFailed,
+    kAcceptFailed,
+    kConnectFailed,
+    kBindFailed,
+    kListenFailed,
+    kOpenFailed,
+    kReadFailed,
+    kWriteFailed,
+    kStatFailed,
+    kSyncFailed,
+    kSeekFailed,
+    kTimeout,              ///< 操作超时
+    kNotRunningOnIOScheduler
 };
 
 /**
