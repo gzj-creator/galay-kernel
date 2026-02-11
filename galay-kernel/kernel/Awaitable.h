@@ -39,6 +39,12 @@
 #include <libaio.h>
 #endif
 
+#if !defined(USE_IOURING)
+#include "IOHandlers.hpp"
+#endif
+
+#include "IOController.hpp"
+
 namespace galay::kernel
 {
 
@@ -48,8 +54,6 @@ struct AwaitableBase {
 #endif
     virtual ~AwaitableBase() = default;
 };
-
-struct IOController;
 
 /**
  * @brief Accept操作的可等待对象
@@ -92,11 +96,13 @@ struct AcceptAwaitable: public AwaitableBase, public TimeoutSupport<AcceptAwaita
 
     /**
      * @brief 完成操作回调函数
-     * @param result 异步操作结果
-     * @param host  连接主机host
      * @return true 唤醒，false继续监听
      */
+#ifdef USE_IOURING
     virtual bool handleComplete(std::expected<GHandle, IOError>&& result, Host&& host);
+#else
+    virtual bool handleComplete();
+#endif
 
     /**
      * @brief 检查是否可以立即返回
@@ -166,28 +172,19 @@ struct RecvAwaitable: public AwaitableBase, public TimeoutSupport<RecvAwaitable>
 
     /**
      * @brief 处理完成回调
-     * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    virtual bool handleComplete(std::expected<Bytes, IOError>&& result) {
-        if(!result && IOError::contains(result.error().code(), kNotReady)) {
-            return false;
-        }
-        m_result = std::move(result);
-        return true;
-    }
+#ifdef USE_IOURING
+    virtual bool handleComplete(std::expected<Bytes, IOError>&& result);
+#else
+    virtual bool handleComplete();
+#endif
 
     /**
      * @brief 检查是否可以立即返回
      * @return 始终返回false
      */
     bool await_ready() { return RecvActionReady(); }
-
-    /**
-     * @brief 挂起协程并注册IO事件
-     * @param handle 当前协程句柄
-     * @return true表示挂起，false表示立即完成
-     */
     bool await_suspend(std::coroutine_handle<> handle);
 
     /**
@@ -245,16 +242,13 @@ struct SendAwaitable: public AwaitableBase, public TimeoutSupport<SendAwaitable>
 
     /**
      * @brief 处理完成回调
-     * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    virtual bool handleComplete(std::expected<size_t, IOError>&& result) {
-        if(!result && IOError::contains(result.error().code(), kNotReady)) {
-            return false;
-        }
-        m_result = std::move(result);
-        return true;
-    }
+#ifdef USE_IOURING
+    virtual bool handleComplete(std::expected<size_t, IOError>&& result);
+#else
+    virtual bool handleComplete();
+#endif
 
     /**
      * @brief 检查是否可以立即返回
@@ -324,16 +318,13 @@ struct ReadvAwaitable: public AwaitableBase, public TimeoutSupport<ReadvAwaitabl
 
     /**
      * @brief 处理完成回调
-     * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    virtual bool handleComplete(std::expected<size_t, IOError>&& result) {
-        if(!result && IOError::contains(result.error().code(), kNotReady)) {
-            return false;
-        }
-        m_result = std::move(result);
-        return true;
-    }
+#ifdef USE_IOURING
+    virtual bool handleComplete(std::expected<size_t, IOError>&& result);
+#else
+    virtual bool handleComplete();
+#endif
 
     /**
      * @brief 检查是否可以立即返回
@@ -402,16 +393,13 @@ struct WritevAwaitable: public AwaitableBase, public TimeoutSupport<WritevAwaita
 
     /**
      * @brief 处理完成回调
-     * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    virtual bool handleComplete(std::expected<size_t, IOError>&& result) {
-        if(!result && IOError::contains(result.error().code(), kNotReady)) {
-            return false;
-        }
-        m_result = std::move(result);
-        return true;
-    }
+#ifdef USE_IOURING
+    virtual bool handleComplete(std::expected<size_t, IOError>&& result);
+#else
+    virtual bool handleComplete();
+#endif
 
     /**
      * @brief 检查是否可以立即返回
@@ -479,16 +467,13 @@ struct ConnectAwaitable: public AwaitableBase, public TimeoutSupport<ConnectAwai
 
     /**
      * @brief 处理完成回调
-     * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    virtual bool handleComplete(std::expected<void, IOError>&& result) {
-        if(!result && IOError::contains(result.error().code(), kNotReady)) {
-            return false;
-        }
-        m_result = std::move(result);
-        return true;
-    }
+#ifdef USE_IOURING
+    virtual bool handleComplete(std::expected<void, IOError>&& result);
+#else
+    virtual bool handleComplete();
+#endif
 
     /**
      * @brief 检查是否可以立即返回
@@ -524,6 +509,9 @@ struct ConnectAwaitable: public AwaitableBase, public TimeoutSupport<ConnectAwai
  * @note 由TcpSocket::close()创建
  */
 struct CloseAwaitable: public AwaitableBase, public TimeoutSupport<CloseAwaitable> {
+
+    static bool CloseActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<void, IOError>& result);
+
     /**
      * @brief 构造函数
      * @param controller IO控制器
@@ -598,11 +586,13 @@ struct RecvFromAwaitable: public AwaitableBase, public TimeoutSupport<RecvFromAw
 
     /**
      * @brief 处理完成回调
-     * @param result 异步操作结果
-     * @param from 发送方地址
      * @return true 唤醒，false继续监听
      */
+#ifdef USE_IOURING
     virtual bool handleComplete(std::expected<Bytes, IOError>&& result, Host&& from);
+#else
+    virtual bool handleComplete();
+#endif
 
     /**
      * @brief 检查是否可以立即返回
@@ -681,16 +671,13 @@ struct SendToAwaitable: public AwaitableBase, public TimeoutSupport<SendToAwaita
 
     /**
      * @brief 处理完成回调
-     * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    virtual bool handleComplete(std::expected<size_t, IOError>&& result) {
-        if(!result && IOError::contains(result.error().code(), kNotReady)) {
-            return false;
-        }
-        m_result = std::move(result);
-        return true;
-    }
+#ifdef USE_IOURING
+    virtual bool handleComplete(std::expected<size_t, IOError>&& result);
+#else
+    virtual bool handleComplete();
+#endif
 
     /**
      * @brief 检查是否可以立即返回
@@ -773,16 +760,13 @@ struct FileReadAwaitable: public AwaitableBase, public TimeoutSupport<FileReadAw
 
     /**
      * @brief 处理完成回调
-     * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    virtual bool handleComplete(std::expected<Bytes, IOError>&& result) {
-        if(!result && IOError::contains(result.error().code(), kNotReady)) {
-            return false;
-        }
-        m_result = std::move(result);
-        return true;
-    }
+#ifdef USE_IOURING
+    virtual bool handleComplete(std::expected<Bytes, IOError>&& result);
+#else
+    virtual bool handleComplete();
+#endif
 
     bool await_ready() { return FileReadActionReady(); }
     bool await_suspend(std::coroutine_handle<> handle);
@@ -851,16 +835,13 @@ struct FileWriteAwaitable: public AwaitableBase, public TimeoutSupport<FileWrite
 
     /**
      * @brief 处理完成回调
-     * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    virtual bool handleComplete(std::expected<size_t, IOError>&& result) {
-        if(!result && IOError::contains(result.error().code(), kNotReady)) {
-            return false;
-        }
-        m_result = std::move(result);
-        return true;
-    }
+#ifdef USE_IOURING
+    virtual bool handleComplete(std::expected<size_t, IOError>&& result);
+#else
+    virtual bool handleComplete();
+#endif
 
     bool await_ready() { return FileWriteActionReady(); }
     bool await_suspend(std::coroutine_handle<> handle);
@@ -987,13 +968,13 @@ struct FileWatchAwaitable: public AwaitableBase, public TimeoutSupport<FileWatch
 
     /**
      * @brief 处理完成回调
-     * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    virtual bool handleComplete(std::expected<FileWatchResult, IOError>&& result) {
-        m_result = std::move(result);
-        return true;
-    }
+#ifdef USE_IOURING
+    virtual bool handleComplete(std::expected<FileWatchResult, IOError>&& result);
+#else
+    virtual bool handleComplete();
+#endif
 
     /**
      * @brief 检查是否可以立即返回
@@ -1196,16 +1177,13 @@ struct SendFileAwaitable: public AwaitableBase, public TimeoutSupport<SendFileAw
 
     /**
      * @brief 处理完成回调
-     * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    virtual bool handleComplete(std::expected<size_t, IOError>&& result) {
-        if(!result && IOError::contains(result.error().code(), kNotReady)) {
-            return false;
-        }
-        m_result = std::move(result);
-        return true;
-    }
+#ifdef USE_IOURING
+    virtual bool handleComplete(std::expected<size_t, IOError>&& result);
+#else
+    virtual bool handleComplete();
+#endif
 
     /**
      * @brief 检查是否可以立即返回
@@ -1235,5 +1213,7 @@ struct SendFileAwaitable: public AwaitableBase, public TimeoutSupport<SendFileAw
 };
 
 } // namespace galay::kernel
+
+#include "Awaitable.inl"
 
 #endif // GALAY_KERNEL_AWAITABLE_H

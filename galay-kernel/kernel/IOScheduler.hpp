@@ -3,78 +3,12 @@
 
 #include "galay-kernel/common/Defn.hpp"
 #include "Scheduler.hpp"
+#include "IOController.hpp"
 #include "Awaitable.h"
 #include "galay-kernel/common/TimerManager.hpp"
-#include <concepts>
 
-namespace galay::kernel 
+namespace galay::kernel
 {
-
-template<typename T>
-concept IOControllerAwaitable =
-    std::same_as<T, AcceptAwaitable> ||
-    std::same_as<T, RecvAwaitable> ||
-    std::same_as<T, SendAwaitable> ||
-    std::same_as<T, ConnectAwaitable> ||
-    std::same_as<T, RecvFromAwaitable> ||
-    std::same_as<T, SendToAwaitable> ||
-    std::same_as<T, FileReadAwaitable> ||
-    std::same_as<T, FileWriteAwaitable> ||
-    std::same_as<T, FileWatchAwaitable> ||
-    std::same_as<T, RecvNotifyAwaitable> ||
-    std::same_as<T, SendNotifyAwaitable> ||
-    std::same_as<T, ReadvAwaitable> ||
-    std::same_as<T, WritevAwaitable> ||
-    std::same_as<T, SendFileAwaitable>;
-
-/**
- * @brief IO事件控制器
- *
- * @details 管理单个IO操作的状态和回调。
- * 每个异步IO操作都关联一个IOController。
- *
- * @note
- * - 存储当前IO操作类型和对应的Awaitable对象
- * - 支持超时机制，通过 generation 和 state 防止重复唤醒
- * - 支持同时 RECV 和 SEND
- * - !!! 不允许跨调度器执行(非线程安全)
- */
- struct IOController {
-    /**
-     * @brief IO操作索引（用于数组访问）
-     */
-    enum Index : uint8_t {
-        READ = 0,             ///< Read 操作
-        WRITE = 1,            ///< Write 操作
-        SIZE
-    };
-
-    /**
-     * @brief 构造函数
-     */
-    IOController(GHandle handle) 
-        : m_handle(handle) {}
-
-    /**
-     * @brief 填充Awaitable信息（支持 RECVWITHSEND 状态机）
-     * @param type IO事件类型
-     * @param awaitable 对应的Awaitable对象指针
-     */
-    bool fillAwaitable(IOEventType type, void* awaitable);
-
-    /**
-     * @brief 清除Awaitable信息（支持 RECVWITHSEND 状态机）
-     * @param type IO事件类型
-     */
-    void removeAwaitable(IOEventType type);
-
-    template<IOControllerAwaitable T>
-    T* getAwaitable() { return nullptr; }
-
-    GHandle m_handle = GHandle::invalid();
-    IOEventType m_type = IOEventType::INVALID;  ///< 当前IO事件类型
-    void* m_awaitable[IOController::SIZE] = {nullptr, nullptr};
-};
 
 // ========== getAwaitable 模板特化 ==========
 

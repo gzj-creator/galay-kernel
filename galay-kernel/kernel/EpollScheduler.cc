@@ -105,8 +105,7 @@ int EpollScheduler::addAccept(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<AcceptAwaitable>();
     if(awaitable == nullptr) return -1;
-    auto result = handleAccept(controller->m_handle);
-    if(awaitable->handleComplete(std::move(result.first), std::move(result.second))) {
+    if(awaitable->handleComplete()) {
         return OK;
     }
     struct epoll_event ev;
@@ -119,8 +118,7 @@ int EpollScheduler::addConnect(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<ConnectAwaitable>();
     if(awaitable == nullptr) return -1;
-    auto result = handleConnect(controller->m_handle, awaitable->m_host);
-    if(awaitable->handleComplete(std::move(result))) {
+    if(awaitable->handleComplete()) {
         return OK;
     }
     struct epoll_event ev;
@@ -133,8 +131,7 @@ int EpollScheduler::addRecv(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<RecvAwaitable>();
     if(awaitable == nullptr) return -1;
-    auto result = handleRecv(controller->m_handle, awaitable->m_buffer, awaitable->m_length);
-    if(awaitable->handleComplete(std::move(result))) {
+    if(awaitable->handleComplete()) {
         return OK;
     }
     struct epoll_event ev;
@@ -152,8 +149,7 @@ int EpollScheduler::addSend(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<SendAwaitable>();
     if(awaitable == nullptr) return -1;
-    auto result = handleSend(controller->m_handle, awaitable->m_buffer, awaitable->m_length);
-    if(awaitable->handleComplete(std::move(result))) {
+    if(awaitable->handleComplete()) {
         return OK;
     }
     struct epoll_event ev;
@@ -171,8 +167,7 @@ int EpollScheduler::addReadv(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<ReadvAwaitable>();
     if(awaitable == nullptr) return -1;
-    auto result = handleReadv(controller->m_handle, awaitable->m_iovecs.data(), static_cast<int>(awaitable->m_iovecs.size()));
-    if(awaitable->handleComplete(std::move(result))) {
+    if(awaitable->handleComplete()) {
         return OK;
     }
     struct epoll_event ev;
@@ -190,8 +185,7 @@ int EpollScheduler::addWritev(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<WritevAwaitable>();
     if(awaitable == nullptr) return -1;
-    auto result = handleWritev(controller->m_handle, awaitable->m_iovecs.data(), static_cast<int>(awaitable->m_iovecs.size()));
-    if(awaitable->handleComplete(std::move(result))) {
+    if(awaitable->handleComplete()) {
         return OK;
     }
     struct epoll_event ev;
@@ -209,8 +203,7 @@ int EpollScheduler::addSendFile(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<SendFileAwaitable>();
     if(awaitable == nullptr) return -1;
-    auto result = handleSendFile(controller->m_handle, awaitable->m_file_fd, awaitable->m_offset, awaitable->m_count);
-    if(awaitable->handleComplete(std::move(result))) {
+    if(awaitable->handleComplete()) {
         return OK;
     }
     struct epoll_event ev;
@@ -350,10 +343,9 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
     // ===== 读方向事件 =====
     if (ev.events & EPOLLIN) {
         if (t & ACCEPT) {
-            auto result = handleAccept(controller->m_handle);
             AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
             if (awaitable) {
-                if(awaitable->handleComplete(std::move(result.first), std::move(result.second))) {
+                if(awaitable->handleComplete()) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -361,8 +353,7 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         else if (t & RECV) {
             RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
             if (awaitable) {
-                auto result = handleRecv(controller->m_handle, awaitable->m_buffer, awaitable->m_length);
-                if(awaitable->handleComplete(std::move(result))) {
+                if(awaitable->handleComplete()) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -370,8 +361,7 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         else if (t & READV) {
             ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
             if (awaitable) {
-                auto result = handleReadv(controller->m_handle, awaitable->m_iovecs.data(), static_cast<int>(awaitable->m_iovecs.size()));
-                if(awaitable->handleComplete(std::move(result))) {
+                if(awaitable->handleComplete()) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -379,8 +369,7 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         else if (t & RECVFROM) {
             RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
             if (awaitable) {
-                auto result = handleRecvFrom(controller->m_handle, awaitable->m_buffer, awaitable->m_length);
-                if(awaitable->handleComplete(std::move(result.first), std::move(result.second))) {
+                if(awaitable->handleComplete()) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -450,6 +439,7 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
                         awaitable->m_result = std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(errno)));
                     }
                 }
+                awaitable->handleComplete();
                 awaitable->m_waker.wakeUp();
             }
         }
@@ -464,8 +454,7 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         if (t & CONNECT) {
             ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
             if (awaitable) {
-                auto result = handleConnect(controller->m_handle, awaitable->m_host);
-                if(awaitable->handleComplete(std::move(result))) {
+                if(awaitable->handleComplete()) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -473,8 +462,7 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         else if (t & SEND) {
             SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
             if (awaitable) {
-                auto result = handleSend(controller->m_handle, awaitable->m_buffer, awaitable->m_length);
-                if(awaitable->handleComplete(std::move(result))) {
+                if(awaitable->handleComplete()) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -482,8 +470,7 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         else if (t & WRITEV) {
             WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
             if (awaitable) {
-                auto result = handleWritev(controller->m_handle, awaitable->m_iovecs.data(), static_cast<int>(awaitable->m_iovecs.size()));
-                if(awaitable->handleComplete(std::move(result))) {
+                if(awaitable->handleComplete()) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -491,8 +478,7 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         else if (t & SENDTO) {
             SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
             if (awaitable) {
-                auto result = handleSendTo(controller->m_handle, awaitable->m_buffer, awaitable->m_length, awaitable->m_to);
-                if(awaitable->handleComplete(std::move(result))) {
+                if(awaitable->handleComplete()) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -500,8 +486,7 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         else if (t & FILEWRITE) {
             FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
             if (awaitable) {
-                auto result = handleFileWrite(controller->m_handle, awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
-                if(awaitable->handleComplete(std::move(result))) {
+                if(awaitable->handleComplete()) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -509,8 +494,7 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
         else if (t & SENDFILE) {
             SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
             if (awaitable) {
-                auto result = handleSendFile(controller->m_handle, awaitable->m_file_fd, awaitable->m_offset, awaitable->m_count);
-                if(awaitable->handleComplete(std::move(result))) {
+                if(awaitable->handleComplete()) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -543,8 +527,7 @@ int EpollScheduler::addRecvFrom(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<RecvFromAwaitable>();
     if(awaitable == nullptr) return -1;
-    auto result = handleRecvFrom(controller->m_handle, awaitable->m_buffer, awaitable->m_length);
-    if(awaitable->handleComplete(std::move(result.first), std::move(result.second))) {
+    if(awaitable->handleComplete()) {
         return OK;
     }
     struct epoll_event ev;
@@ -562,8 +545,7 @@ int EpollScheduler::addSendTo(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<SendToAwaitable>();
     if(awaitable == nullptr) return -1;
-    auto result = handleSendTo(controller->m_handle, awaitable->m_buffer, awaitable->m_length, awaitable->m_to);
-    if(awaitable->handleComplete(std::move(result))) {
+    if(awaitable->handleComplete()) {
         return OK;
     }
     struct epoll_event ev;
