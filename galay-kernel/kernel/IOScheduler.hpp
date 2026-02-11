@@ -277,14 +277,6 @@ public:
     virtual int addSendFile(IOController* controller) = 0;
 
     /**
-     * @brief 注册Custom链式IO事件
-     * @param controller IO控制器
-     * @return 1表示立即完成（链为空），0表示已注册等待，<0表示错误
-     */
-    virtual int addCustom(IOController* controller) = 0;
-
-
-    /**
      * @brief 删除fd的所有事件
      * @param controller IO控制器
      */

@@ -46,6 +46,7 @@ struct AwaitableBase {
 #ifdef USE_IOURING
     IOEventType m_sqe_type = IOEventType::INVALID;
 #endif
+    virtual ~AwaitableBase() = default;
 };
 
 struct IOController;
@@ -95,7 +96,7 @@ struct AcceptAwaitable: public AwaitableBase, public TimeoutSupport<AcceptAwaita
      * @param host  连接主机host
      * @return true 唤醒，false继续监听
      */
-    bool handleComplete(std::expected<GHandle, IOError>&& result, Host&& host);
+    virtual bool handleComplete(std::expected<GHandle, IOError>&& result, Host&& host);
 
     /**
      * @brief 检查是否可以立即返回
@@ -168,7 +169,7 @@ struct RecvAwaitable: public AwaitableBase, public TimeoutSupport<RecvAwaitable>
      * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    bool handleComplete(std::expected<Bytes, IOError>&& result) {
+    virtual bool handleComplete(std::expected<Bytes, IOError>&& result) {
         if(!result && IOError::contains(result.error().code(), kNotReady)) {
             return false;
         }
@@ -247,7 +248,7 @@ struct SendAwaitable: public AwaitableBase, public TimeoutSupport<SendAwaitable>
      * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    bool handleComplete(std::expected<size_t, IOError>&& result) {
+    virtual bool handleComplete(std::expected<size_t, IOError>&& result) {
         if(!result && IOError::contains(result.error().code(), kNotReady)) {
             return false;
         }
@@ -326,7 +327,7 @@ struct ReadvAwaitable: public AwaitableBase, public TimeoutSupport<ReadvAwaitabl
      * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    bool handleComplete(std::expected<size_t, IOError>&& result) {
+    virtual bool handleComplete(std::expected<size_t, IOError>&& result) {
         if(!result && IOError::contains(result.error().code(), kNotReady)) {
             return false;
         }
@@ -404,7 +405,7 @@ struct WritevAwaitable: public AwaitableBase, public TimeoutSupport<WritevAwaita
      * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    bool handleComplete(std::expected<size_t, IOError>&& result) {
+    virtual bool handleComplete(std::expected<size_t, IOError>&& result) {
         if(!result && IOError::contains(result.error().code(), kNotReady)) {
             return false;
         }
@@ -481,7 +482,7 @@ struct ConnectAwaitable: public AwaitableBase, public TimeoutSupport<ConnectAwai
      * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    bool handleComplete(std::expected<void, IOError>&& result) {
+    virtual bool handleComplete(std::expected<void, IOError>&& result) {
         if(!result && IOError::contains(result.error().code(), kNotReady)) {
             return false;
         }
@@ -601,7 +602,7 @@ struct RecvFromAwaitable: public AwaitableBase, public TimeoutSupport<RecvFromAw
      * @param from 发送方地址
      * @return true 唤醒，false继续监听
      */
-    bool handleComplete(std::expected<Bytes, IOError>&& result, Host&& from);
+    virtual bool handleComplete(std::expected<Bytes, IOError>&& result, Host&& from);
 
     /**
      * @brief 检查是否可以立即返回
@@ -683,7 +684,7 @@ struct SendToAwaitable: public AwaitableBase, public TimeoutSupport<SendToAwaita
      * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    bool handleComplete(std::expected<size_t, IOError>&& result) {
+    virtual bool handleComplete(std::expected<size_t, IOError>&& result) {
         if(!result && IOError::contains(result.error().code(), kNotReady)) {
             return false;
         }
@@ -775,7 +776,7 @@ struct FileReadAwaitable: public AwaitableBase, public TimeoutSupport<FileReadAw
      * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    bool handleComplete(std::expected<Bytes, IOError>&& result) {
+    virtual bool handleComplete(std::expected<Bytes, IOError>&& result) {
         if(!result && IOError::contains(result.error().code(), kNotReady)) {
             return false;
         }
@@ -853,7 +854,7 @@ struct FileWriteAwaitable: public AwaitableBase, public TimeoutSupport<FileWrite
      * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    bool handleComplete(std::expected<size_t, IOError>&& result) {
+    virtual bool handleComplete(std::expected<size_t, IOError>&& result) {
         if(!result && IOError::contains(result.error().code(), kNotReady)) {
             return false;
         }
@@ -989,7 +990,7 @@ struct FileWatchAwaitable: public AwaitableBase, public TimeoutSupport<FileWatch
      * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    bool handleComplete(std::expected<FileWatchResult, IOError>&& result) {
+    virtual bool handleComplete(std::expected<FileWatchResult, IOError>&& result) {
         m_result = std::move(result);
         return true;
     }
@@ -1198,7 +1199,7 @@ struct SendFileAwaitable: public AwaitableBase, public TimeoutSupport<SendFileAw
      * @param result 异步操作结果
      * @return true 唤醒，false继续监听
      */
-    bool handleComplete(std::expected<size_t, IOError>&& result) {
+    virtual bool handleComplete(std::expected<size_t, IOError>&& result) {
         if(!result && IOError::contains(result.error().code(), kNotReady)) {
             return false;
         }
