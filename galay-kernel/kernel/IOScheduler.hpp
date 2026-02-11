@@ -74,7 +74,6 @@ concept IOControllerAwaitable =
     GHandle m_handle = GHandle::invalid();
     IOEventType m_type = IOEventType::INVALID;  ///< 当前IO事件类型
     void* m_awaitable[IOController::SIZE] = {nullptr, nullptr};
-    uint64_t m_generation[IOController::SIZE] = {0, 0};  ///< 操作代数，每次注册递增
 };
 
 // ========== getAwaitable 模板特化 ==========
@@ -277,7 +276,15 @@ public:
      */
     virtual int addSendFile(IOController* controller) = 0;
 
-     /**
+    /**
+     * @brief 注册Custom链式IO事件
+     * @param controller IO控制器
+     * @return 1表示立即完成（链为空），0表示已注册等待，<0表示错误
+     */
+    virtual int addCustom(IOController* controller) = 0;
+
+
+    /**
      * @brief 删除fd的所有事件
      * @param controller IO控制器
      */
@@ -324,7 +331,6 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
     case IOEventType::FILEWATCH:
     case IOEventType::RECV_NOTIFY:
         m_awaitable[READ] = awaitable;
-        ++m_generation[READ];
         break;
     case IOEventType::SEND:
     case IOEventType::WRITEV:
@@ -334,7 +340,6 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
     case IOEventType::CONNECT:
     case IOEventType::SEND_NOTIFY:
         m_awaitable[WRITE] = awaitable;
-        ++m_generation[WRITE];
         break;
     default:
         return false;
@@ -352,6 +357,7 @@ inline void IOController::removeAwaitable(IOEventType type) {
     case IOEventType::ACCEPT:
     case IOEventType::FILEWATCH:
     case IOEventType::RECV_NOTIFY:
+    case IOEventType::CUSTOM:
         m_awaitable[READ] = nullptr;
         break;
     case IOEventType::SEND:

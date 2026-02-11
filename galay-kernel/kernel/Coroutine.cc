@@ -91,7 +91,9 @@ Coroutine& Coroutine::operator=(const Coroutine& other) noexcept
 void Coroutine::resume()
 {
     if (m_data && m_data->m_handle && m_data->m_scheduler) {
-        m_data->m_scheduler->spawn(*this);
+        if (!m_data->m_queued.exchange(true, std::memory_order_acq_rel)) {
+            m_data->m_scheduler->spawn(*this);
+        }
     }
 }
 

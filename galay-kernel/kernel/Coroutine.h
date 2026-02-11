@@ -283,6 +283,7 @@ struct alignas(64) CoroutineData
     Scheduler* m_scheduler = nullptr;                                     ///< 所属调度器
     std::optional<Coroutine> m_next;                                      ///< 后续协程（用于链式执行）
     std::atomic<bool> m_done{false};                                   ///< 协程是否完成（线程安全）
+    std::atomic<bool> m_queued{false};                                 ///< 是否已在调度队列中（防重复入队）
 };
 
 /**
