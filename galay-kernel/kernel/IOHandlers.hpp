@@ -9,6 +9,7 @@
 #include "galay-kernel/common/Host.hpp"
 #include <sys/socket.h>
 #include <sys/uio.h>
+#include <sys/sendfile.h>
 #include <unistd.h>
 #include <cerrno>
 #include <expected>
@@ -26,9 +27,9 @@ inline std::pair<std::expected<GHandle, IOError>, Host> handleAccept(GHandle lis
     };
     if( handle.fd < 0 ) {
         if( static_cast<uint32_t>(errno) == EAGAIN || static_cast<uint32_t>(errno) == EWOULDBLOCK || static_cast<uint32_t>(errno) == EINTR ) {
-            return {std::unexpected(IOError(kNotReady, 0)), {}};
+            return {std::unexpected(IOError(kNotReady, 0)), Host{}};
         }
-        return {std::unexpected(IOError(kAcceptFailed, static_cast<uint32_t>(errno))), {}};
+        return {std::unexpected(IOError(kAcceptFailed, static_cast<uint32_t>(errno))), Host{}};
     }
     Host host = Host::fromSockAddr(addr);
     return {handle, std::move(host)};
@@ -114,12 +115,12 @@ inline std::pair<std::expected<Bytes, IOError>, Host> handleRecvFrom(GHandle han
         Host host = Host::fromSockAddr(addr);
         return {std::move(bytes), std::move(host)};
     } else if (recvBytes == 0) {
-        return {std::unexpected(IOError(kRecvFailed, 0)), {}};
+        return {std::unexpected(IOError(kRecvFailed, 0)), Host{}};
     } else {
         if (static_cast<uint32_t>(errno) == EAGAIN || static_cast<uint32_t>(errno) == EWOULDBLOCK || static_cast<uint32_t>(errno) == EINTR) {
-            return {std::unexpected(IOError(kNotReady, 0)), {}};
+            return {std::unexpected(IOError(kNotReady, 0)), Host{}};
         }
-        return {std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno))), {}};
+        return {std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(errno))), Host{}};
     }
 }
 
@@ -205,6 +206,10 @@ inline std::expected<size_t, IOError> handleSendFile(GHandle socket_handle, int 
 #include "galay-kernel/common/Bytes.h"
 #include "galay-kernel/common/Host.hpp"
 #include "FileWatchDefs.hpp"
+#include <liburing.h>
+#ifdef BLOCK_SIZE
+#undef BLOCK_SIZE
+#endif
 #include <cerrno>
 #include <expected>
 #include <sys/inotify.h>
@@ -297,12 +302,12 @@ inline std::pair<std::expected<Bytes, IOError>, Host> handleRecvFrom(struct io_u
         Host host = Host::fromSockAddr(addr);
         return {std::move(bytes), std::move(host)};
     } else if (res == 0) {
-        return {std::unexpected(IOError(kRecvFailed, 0)), {}};
+        return {std::unexpected(IOError(kRecvFailed, 0)), Host{}};
     }
     if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
-        return {std::unexpected(IOError(kNotReady, 0)), {}};
+        return {std::unexpected(IOError(kNotReady, 0)), Host{}};
     }
-    return {std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-res))), {}};
+    return {std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-res))), Host{}};
 }
 
 inline std::expected<size_t, IOError> handleSendTo(struct io_uring_cqe* cqe)
