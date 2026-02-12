@@ -1,5 +1,7 @@
 #include "KqueueScheduler.h"
+#include "common/Defn.hpp"
 #include "kernel/Awaitable.h"
+#include "kernel/IOController.hpp"
 
 #ifdef USE_KQUEUE
 
@@ -89,7 +91,7 @@ int KqueueScheduler::addAccept(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<AcceptAwaitable>();
     if(awaitable == nullptr) return -1;
-    if(awaitable->handleComplete()) {
+    if(awaitable->handleComplete(controller->m_handle)) {
         return OK;
     }
     struct kevent ev;
@@ -101,7 +103,7 @@ int KqueueScheduler::addConnect(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<ConnectAwaitable>();
     if(awaitable == nullptr) return -1;
-    if(awaitable->handleComplete()) {
+    if(awaitable->handleComplete(controller->m_handle)) {
         return OK;
     }
     struct kevent ev;
@@ -113,7 +115,7 @@ int KqueueScheduler::addRecv(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<RecvAwaitable>();
     if(awaitable == nullptr) return -1;
-    if(awaitable->handleComplete()) {
+    if(awaitable->handleComplete(controller->m_handle)) {
         return OK;
     }
     struct kevent ev;
@@ -125,7 +127,7 @@ int KqueueScheduler::addSend(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<SendAwaitable>();
     if(awaitable == nullptr) return -1;
-    if(awaitable->handleComplete()) {
+    if(awaitable->handleComplete(controller->m_handle)) {
         return OK;
     }
     struct kevent ev;
@@ -137,7 +139,7 @@ int KqueueScheduler::addReadv(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<ReadvAwaitable>();
     if(awaitable == nullptr) return -1;
-    if(awaitable->handleComplete()) {
+    if(awaitable->handleComplete(controller->m_handle)) {
         return OK;
     }
     struct kevent ev;
@@ -149,7 +151,7 @@ int KqueueScheduler::addWritev(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<WritevAwaitable>();
     if(awaitable == nullptr) return -1;
-    if(awaitable->handleComplete()) {
+    if(awaitable->handleComplete(controller->m_handle)) {
         return OK;
     }
     struct kevent ev;
@@ -172,7 +174,7 @@ int KqueueScheduler::addFileRead(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<FileReadAwaitable>();
     if(awaitable == nullptr) return -1;
-    if(awaitable->handleComplete()) {
+    if(awaitable->handleComplete(controller->m_handle)) {
         return OK;
     }
     struct kevent ev;
@@ -184,7 +186,7 @@ int KqueueScheduler::addFileWrite(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<FileWriteAwaitable>();
     if(awaitable == nullptr) return -1;
-    if(awaitable->handleComplete()) {
+    if(awaitable->handleComplete(controller->m_handle)) {
         return OK;
     }
     struct kevent ev;
@@ -196,12 +198,24 @@ int KqueueScheduler::addSendFile(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<SendFileAwaitable>();
     if(awaitable == nullptr) return -1;
-    if(awaitable->handleComplete()) {
+    if(awaitable->handleComplete(controller->m_handle)) {
         return OK;
     }
     struct kevent ev;
     EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
+}
+
+int KqueueScheduler::addCustom(IOController* controller)
+{
+    auto* custom = controller->getAwaitable<CustomAwaitable>();
+    if(custom == nullptr) return -1;
+    while (auto* task = custom->front()) {
+        bool done = task->context->handleComplete(controller->m_handle);
+        if (done) { custom->popFront(); continue; }
+        return processCustom(task->type, controller);
+    }
+    return OK;  // 队列空，唤醒
 }
 
 int KqueueScheduler::remove(IOController* controller)
@@ -230,7 +244,7 @@ bool KqueueScheduler::spawnImmidiately(Coroutine co)
     auto* scheduler = co.belongScheduler();
     if (scheduler) {
         return false;
-    } 
+    }
     co.belongScheduler(this);
     resume(co);
     return true;
@@ -314,7 +328,7 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         if (t & ACCEPT) {
             AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
             if (awaitable) {
-                if(awaitable->handleComplete()) {
+                if(awaitable->handleComplete(controller->m_handle)) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -322,7 +336,7 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         else if (t & RECV) {
             RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
             if (awaitable) {
-                if(awaitable->handleComplete()) {
+                if(awaitable->handleComplete(controller->m_handle)) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -330,7 +344,7 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         else if (t & READV) {
             ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
             if (awaitable) {
-                if(awaitable->handleComplete()) {
+                if(awaitable->handleComplete(controller->m_handle)) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -338,7 +352,7 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         else if (t & RECVFROM) {
             RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
             if (awaitable) {
-                if(awaitable->handleComplete()) {
+                if(awaitable->handleComplete(controller->m_handle)) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -346,7 +360,7 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         else if (t & FILEREAD) {
             FileReadAwaitable* awaitable = controller->getAwaitable<FileReadAwaitable>();
             if (awaitable) {
-                if(awaitable->handleComplete()) {
+                if(awaitable->handleComplete(controller->m_handle)) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -357,7 +371,7 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         if (t & CONNECT) {
             ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
             if (awaitable) {
-                if(awaitable->handleComplete()) {
+                if(awaitable->handleComplete(controller->m_handle)) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -365,7 +379,7 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         else if (t & SEND) {
             SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
             if (awaitable) {
-                if(awaitable->handleComplete()) {
+                if(awaitable->handleComplete(controller->m_handle)) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -373,7 +387,7 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         else if (t & WRITEV) {
             WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
             if (awaitable) {
-                if(awaitable->handleComplete()) {
+                if(awaitable->handleComplete(controller->m_handle)) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -381,7 +395,7 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         else if (t & SENDTO) {
             SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
             if (awaitable) {
-                if(awaitable->handleComplete()) {
+                if(awaitable->handleComplete(controller->m_handle)) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -389,7 +403,7 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         else if (t & FILEWRITE) {
             FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
             if (awaitable) {
-                if(awaitable->handleComplete()) {
+                if(awaitable->handleComplete(controller->m_handle)) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -397,7 +411,7 @@ void KqueueScheduler::processEvent(struct kevent& ev)
         else if (t & SENDFILE) {
             SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
             if (awaitable) {
-                if(awaitable->handleComplete()) {
+                if(awaitable->handleComplete(controller->m_handle)) {
                     awaitable->m_waker.wakeUp();
                 }
             }
@@ -421,10 +435,54 @@ void KqueueScheduler::processEvent(struct kevent& ev)
                 result.event = static_cast<FileWatchEvent>(mask);
 
                 awaitable->m_result = std::move(result);
-                awaitable->handleComplete();
+                awaitable->handleComplete(controller->m_handle);
                 awaitable->m_waker.wakeUp();
             }
         }
+    }
+    // ===== 自定义事件 =====
+    if (t & CUSTOM) {
+        CustomAwaitable* custom = controller->getAwaitable<CustomAwaitable>();
+        if (custom) {
+            auto* task = custom->front();
+            if (task) {
+                bool done = task->context->handleComplete(controller->m_handle);
+                if (done) {
+                    custom->popFront();
+                    if (custom->empty()) {
+                        custom->m_waker.wakeUp();
+                    } else {
+                        addCustom(controller);
+                    }
+                } else {
+                    processCustom(task->type, controller);
+                }
+            }
+        }
+    }
+}
+
+int KqueueScheduler::processCustom(IOEventType type, IOController* controller)
+{
+    struct kevent ev;
+    switch (type) {
+        case ACCEPT:
+        case RECV:
+        case READV:
+        case RECVFROM:
+        case FILEREAD:
+            EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
+            return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
+        case CONNECT:
+        case SEND:
+        case WRITEV:
+        case SENDTO:
+        case FILEWRITE:
+        case SENDFILE:
+            EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
+            return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
+        default:
+            return -1;
     }
 }
 
@@ -432,7 +490,7 @@ int KqueueScheduler::addRecvFrom(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<RecvFromAwaitable>();
     if(awaitable == nullptr) return -1;
-    if(awaitable->handleComplete()) {
+    if(awaitable->handleComplete(controller->m_handle)) {
         return OK;
     }
     struct kevent ev;
@@ -444,7 +502,7 @@ int KqueueScheduler::addSendTo(IOController* controller)
 {
     auto awaitable = controller->getAwaitable<SendToAwaitable>();
     if(awaitable == nullptr) return -1;
-    if(awaitable->handleComplete()) {
+    if(awaitable->handleComplete(controller->m_handle)) {
         return OK;
     }
     struct kevent ev;

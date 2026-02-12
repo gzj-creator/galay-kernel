@@ -2,16 +2,16 @@
  * @file Awaitable.h
  * @brief 异步IO可等待对象
  * @author galay-kernel
- * @version 1.0.0
+ * @version 2.0.0
  *
- * @details 定义各种异步IO操作的Awaitable类型，包括：
- * - AcceptAwaitable: 接受连接
- * - ConnectAwaitable: 建立连接
- * - RecvAwaitable: 接收数据
- * - SendAwaitable: 发送数据
- * - CloseAwaitable: 关闭连接
+ * @details 三层继承结构：
+ * - AwaitableBase: 基类（m_sqe_type, virtual ~）
+ * - IOContextBase: 中间层（virtual handleComplete 纯虚函数）
+ *   - XxxIOContext: IO参数 + result + handleComplete 实现
+ *     - XxxAwaitable: m_controller + m_waker + await_* + TimeoutSupport
+ * - CloseAwaitable: 直接继承 AwaitableBase（无IO参数，无handleComplete）
+ * - CustomAwaitable: 中间层基类，持有 IOTask 队列，用户继承实现自定义组合IO
  *
- * 这些类型实现了C++20 Awaitable接口，可以在协程中使用co_await。
  * 所有 Awaitable 都支持超时：
  * @code
  * auto result = co_await socket.recv(buffer, size).timeout(5s);
@@ -33,9 +33,9 @@
 #include <coroutine>
 #include <cstddef>
 #include <expected>
+#include <optional>
 #include <vector>
 #include <sys/uio.h>
-#include <list>
 
 #ifdef USE_EPOLL
 #include <libaio.h>
@@ -48,6 +48,8 @@
 namespace galay::kernel
 {
 
+// ==================== 第一层：AwaitableBase ====================
+
 struct AwaitableBase {
 #ifdef USE_IOURING
     IOEventType m_sqe_type = IOEventType::INVALID;
@@ -55,1016 +57,529 @@ struct AwaitableBase {
     virtual ~AwaitableBase() = default;
 };
 
-/**
- * @brief Accept操作的可等待对象
- *
- * @details 用于异步接受新的TCP连接。
- * co_await后返回新连接的句柄或错误。
- *
- * @note 由TcpSocket::accept()创建
- */
-struct AcceptAwaitable: public AwaitableBase, public TimeoutSupport<AcceptAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false，需要异步等待
-     */
-    static bool AcceptActionReady() { return false; }
+// ==================== 第二层：IOContextBase ====================
 
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @param result 结果输出
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool AcceptActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<GHandle, IOError>& result);
-
-    /**
-     * @brief 独立的 resume 操作（仅执行清理）
-     * @param controller IO控制器
-     */
-    static void AcceptActionResume(IOController* controller);
-
-    /**
-     * @brief 构造函数
-     * @param controller IO控制器
-     * @param host 输出参数，接收客户端地址
-     */
-    AcceptAwaitable(IOController* controller, Host* host)
-        :m_host(host), m_controller(controller) {}
-
-    /**
-     * @brief 完成操作回调函数
-     * @return true 唤醒，false继续监听
-     */
+struct IOContextBase: public AwaitableBase {
 #ifdef USE_IOURING
-    virtual bool handleComplete(struct io_uring_cqe* cqe);
+    virtual bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) = 0;
 #else
-    virtual bool handleComplete();
+    virtual bool handleComplete(GHandle handle) = 0;
+#endif
+};
+
+// ==================== 第三层：IOContext + Awaitable ====================
+
+// ---- Accept ----
+
+struct AcceptIOContext: public IOContextBase {
+    AcceptIOContext(Host* host)
+        : m_host(host) {}
+
+#ifdef USE_IOURING
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+#else
+    bool handleComplete(GHandle handle) override;
 #endif
 
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false，需要异步等待
-     */
-    bool await_ready() { return AcceptActionReady(); }
+    Host* m_host;
+    std::expected<GHandle, IOError> m_result;
+};
 
-    /**
-     * @brief 挂起协程并注册IO事件
-     * @param handle 当前协程句柄
-     * @return true表示挂起，false表示立即完成
-     */
+struct AcceptAwaitable: public AcceptIOContext, public TimeoutSupport<AcceptAwaitable> {
+    AcceptAwaitable(IOController* controller, Host* host)
+        : AcceptIOContext(host), m_controller(controller) {}
+
+    bool await_ready() { return false; }
     bool await_suspend(std::coroutine_handle<> handle);
-
-    /**
-     * @brief 恢复时获取结果
-     * @return 成功返回新连接句柄，失败返回IOError
-     */
     std::expected<GHandle, IOError> await_resume();
 
-
-    Host* m_host;                                ///< 客户端地址输出
-    Waker m_waker;                               ///< 协程唤醒器
-    IOController* m_controller;                  ///< IO控制器
-    std::expected<GHandle, IOError> m_result;    ///< 操作结果
+    IOController* m_controller;
+    Waker m_waker;
 };
 
-/**
- * @brief Recv操作的可等待对象
- *
- * @details 用于异步接收TCP数据。
- * co_await后返回接收到的数据或错误。
- *
- * @note 由TcpSocket::recv()创建
- */
-struct RecvAwaitable: public AwaitableBase, public TimeoutSupport<RecvAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false
-     */
-    static bool RecvActionReady() { return false; }
+// ---- Recv ----
 
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @param result 结果输出
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool RecvActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<Bytes, IOError>& result);
+struct RecvIOContext: public IOContextBase {
+    RecvIOContext(char* buffer, size_t length)
+        : m_buffer(buffer), m_length(length) {}
 
-    /**
-     * @brief 独立的 resume 操作
-     * @param controller IO控制器
-     */
-    static void RecvActionResume(IOController* controller);
+#ifdef USE_IOURING
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+#else
+    bool handleComplete(GHandle handle) override;
+#endif
 
-    /**
-     * @brief 构造函数
-     * @param controller IO控制器
-     * @param buffer 接收缓冲区
-     * @param length 缓冲区大小
-     */
+    char* m_buffer;
+    size_t m_length;
+    std::expected<Bytes, IOError> m_result;
+};
+
+struct RecvAwaitable: public RecvIOContext, public TimeoutSupport<RecvAwaitable> {
     RecvAwaitable(IOController* controller, char* buffer, size_t length)
-        : m_controller(controller), m_buffer(buffer), m_length(length) {}
+        : RecvIOContext(buffer, length), m_controller(controller) {}
 
-    /**
-     * @brief 处理完成回调
-     * @return true 唤醒，false继续监听
-     */
-#ifdef USE_IOURING
-    virtual bool handleComplete(struct io_uring_cqe* cqe);
-#else
-    virtual bool handleComplete();
-#endif
-
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false
-     */
-    bool await_ready() { return RecvActionReady(); }
-    bool await_suspend(std::coroutine_handle<> handle);
-
-    /**
-     * @brief 恢复时获取结果
-     * @return 成功返回Bytes数据，失败返回IOError
-     */
-    std::expected<Bytes, IOError> await_resume();
-
-    IOController* m_controller;                ///< IO控制器
-    char* m_buffer;                            ///< 接收缓冲区
-    size_t m_length;                           ///< 缓冲区大小
-    Waker m_waker;                             ///< 协程唤醒器
-    std::expected<Bytes, IOError> m_result;    ///< 操作结果
-};
-
-/**
- * @brief Send操作的可等待对象
- *
- * @details 用于异步发送TCP数据。
- * co_await后返回实际发送的字节数或错误。
- *
- * @note 由TcpSocket::send()创建
- */
-struct SendAwaitable: public AwaitableBase, public TimeoutSupport<SendAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false，需要异步等待
-     */
-    static bool SendActionReady() { return false; }
-
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @param result 结果输出
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool SendActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<size_t, IOError>& result);
-
-    /**
-     * @brief 独立的 resume 操作
-     * @param controller IO控制器
-     */
-    static void SendActionResume(IOController* controller);
-
-    /**
-     * @brief 构造函数
-     * @param controller IO控制器
-     * @param buffer 发送数据
-     * @param length 数据长度
-     */
-    SendAwaitable(IOController* controller, const char* buffer, size_t length)
-        : m_controller(controller), m_buffer(buffer), m_length(length) {}
-
-    /**
-     * @brief 处理完成回调
-     * @return true 唤醒，false继续监听
-     */
-#ifdef USE_IOURING
-    virtual bool handleComplete(struct io_uring_cqe* cqe);
-#else
-    virtual bool handleComplete();
-#endif
-
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false
-     */
-    bool await_ready() { return SendActionReady(); }
-
-    /**
-     * @brief 挂起协程并注册IO事件
-     * @param handle 当前协程句柄
-     * @return true表示挂起，false表示立即完成
-     */
-    bool await_suspend(std::coroutine_handle<> handle);
-
-    /**
-     * @brief 恢复时获取结果
-     * @return 成功返回发送字节数，失败返回IOError
-     */
-    std::expected<size_t, IOError> await_resume();
-
-    IOController* m_controller;                 ///< IO控制器
-    const char* m_buffer;                       ///< 发送数据
-    size_t m_length;                            ///< 数据长度
-    Waker m_waker;                              ///< 协程唤醒器
-    std::expected<size_t, IOError> m_result;    ///< 操作结果
-};
-
-/**
- * @brief Readv操作的可等待对象
- *
- * @details 用于异步接收TCP数据，支持 scatter-gather IO。
- * 使用 readv 系统调用一次读取到多个缓冲区。
- * co_await后返回接收到的总字节数或错误。
- *
- * @note 适用于需要将数据分散读取到多个缓冲区的场景
- */
-struct ReadvAwaitable: public AwaitableBase, public TimeoutSupport<ReadvAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false，需要异步等待
-     */
-    static bool ReadvActionReady() { return false; }
-
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @param result 结果输出
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool ReadvActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<size_t, IOError>& result);
-
-    /**
-     * @brief 独立的 resume 操作
-     * @param controller IO控制器
-     */
-    static void ReadvActionResume(IOController* controller);
-
-    /**
-     * @brief 构造函数
-     * @param controller IO控制器
-     * @param iovecs iovec 向量，描述多个缓冲区
-     */
-    ReadvAwaitable(IOController* controller, std::vector<struct iovec> iovecs)
-        : m_controller(controller), m_iovecs(std::move(iovecs)) {}
-
-    /**
-     * @brief 处理完成回调
-     * @return true 唤醒，false继续监听
-     */
-#ifdef USE_IOURING
-    virtual bool handleComplete(struct io_uring_cqe* cqe);
-#else
-    virtual bool handleComplete();
-#endif
-
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false
-     */
-    bool await_ready() { return ReadvActionReady(); }
-
-    /**
-     * @brief 挂起协程并注册IO事件
-     * @param handle 当前协程句柄
-     * @return true表示挂起，false表示立即完成
-     */
-    bool await_suspend(std::coroutine_handle<> handle);
-
-    /**
-     * @brief 恢复时获取结果
-     * @return 成功返回读取的总字节数，失败返回IOError
-     */
-    std::expected<size_t, IOError> await_resume();
-
-    IOController* m_controller;                 ///< IO控制器
-    std::vector<struct iovec> m_iovecs;         ///< iovec 向量
-    Waker m_waker;                              ///< 协程唤醒器
-    std::expected<size_t, IOError> m_result;    ///< 操作结果
-};
-
-/**
- * @brief Writev操作的可等待对象
- *
- * @details 用于异步发送TCP数据，支持 scatter-gather IO。
- * 使用 writev 系统调用一次发送多个缓冲区的数据。
- * co_await后返回发送的总字节数或错误。
- *
- * @note 适用于需要将多个缓冲区的数据聚合发送的场景
- */
-struct WritevAwaitable: public AwaitableBase, public TimeoutSupport<WritevAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false，需要异步等待
-     */
-    static bool WritevActionReady() { return false; }
-
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @param result 结果输出
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool WritevActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<size_t, IOError>& result);
-
-    /**
-     * @brief 独立的 resume 操作
-     * @param controller IO控制器
-     */
-    static void WritevActionResume(IOController* controller);
-
-    /**
-     * @brief 构造函数
-     * @param controller IO控制器
-     * @param iovecs iovec 向量，描述多个缓冲区
-     */
-    WritevAwaitable(IOController* controller, std::vector<struct iovec> iovecs)
-        : m_controller(controller), m_iovecs(std::move(iovecs)) {}
-
-    /**
-     * @brief 处理完成回调
-     * @return true 唤醒，false继续监听
-     */
-#ifdef USE_IOURING
-    virtual bool handleComplete(struct io_uring_cqe* cqe);
-#else
-    virtual bool handleComplete();
-#endif
-
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false
-     */
-    bool await_ready() { return WritevActionReady(); }
-
-    /**
-     * @brief 挂起协程并注册IO事件
-     * @param handle 当前协程句柄
-     * @return true表示挂起，false表示立即完成
-     */
-    bool await_suspend(std::coroutine_handle<> handle);
-
-    /**
-     * @brief 恢复时获取结果
-     * @return 成功返回发送的总字节数，失败返回IOError
-     */
-    std::expected<size_t, IOError> await_resume();
-
-    IOController* m_controller;                 ///< IO控制器
-    std::vector<struct iovec> m_iovecs;         ///< iovec 向量
-    Waker m_waker;                              ///< 协程唤醒器
-    std::expected<size_t, IOError> m_result;    ///< 操作结果
-};
-
-/**
- * @brief Connect操作的可等待对象
- *
- * @details 用于异步建立TCP连接。
- * co_await后返回连接结果。
- *
- * @note 由TcpSocket::connect()创建
- */
-struct ConnectAwaitable: public AwaitableBase, public TimeoutSupport<ConnectAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false，需要异步等待
-     */
-    static bool ConnectActionReady() { return false; }
-
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @param result 结果输出
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool ConnectActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<void, IOError>& result);
-
-    /**
-     * @brief 独立的 resume 操作
-     * @param controller IO控制器
-     */
-    static void ConnectActionResume(IOController* controller);
-
-    /**
-     * @brief 构造函数
-     * @param controller IO控制器
-     * @param host 目标服务器地址
-     */
-    ConnectAwaitable(IOController* controller, const Host& host)
-        : m_controller(controller), m_host(host) {}
-
-    /**
-     * @brief 处理完成回调
-     * @return true 唤醒，false继续监听
-     */
-#ifdef USE_IOURING
-    virtual bool handleComplete(struct io_uring_cqe* cqe);
-#else
-    virtual bool handleComplete();
-#endif
-
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false
-     */
-    bool await_ready() { return ConnectActionReady(); }
-
-    /**
-     * @brief 挂起协程并注册IO事件
-     * @param handle 当前协程句柄
-     * @return true表示挂起，false表示立即完成
-     */
-    bool await_suspend(std::coroutine_handle<> handle);
-
-    /**
-     * @brief 恢复时获取结果
-     * @return 成功返回void，失败返回IOError
-     */
-    std::expected<void, IOError> await_resume();
-
-    IOController* m_controller;                ///< IO控制器
-    Host m_host;                               ///< 目标地址
-    Waker m_waker;                             ///< 协程唤醒器
-    std::expected<void, IOError> m_result;     ///< 操作结果
-};
-
-/**
- * @brief Close操作的可等待对象
- *
- * @details 用于异步关闭socket。
- * co_await后返回关闭结果。
- *
- * @note 由TcpSocket::close()创建
- */
-struct CloseAwaitable: public AwaitableBase, public TimeoutSupport<CloseAwaitable> {
-
-    static bool CloseActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<void, IOError>& result);
-
-    /**
-     * @brief 构造函数
-     * @param controller IO控制器
-     */
-    CloseAwaitable(IOController* controller)
-        : m_controller(controller) {}
-
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false
-     */
     bool await_ready() { return false; }
-
-    /**
-     * @brief 挂起协程并执行关闭
-     * @param handle 当前协程句柄
-     * @return 始终返回false（立即完成）
-     */
-    bool await_suspend(std::coroutine_handle<> handle);
-
-    /**
-     * @brief 恢复时获取结果
-     * @return 成功返回void，失败返回IOError
-     */
-    std::expected<void, IOError> await_resume();
-
-    IOController* m_controller;                  ///< IO控制器
-    Waker m_waker;                             ///< 协程唤醒器
-    std::expected<void, IOError> m_result;     ///< 操作结果
-};
-
-/**
- * @brief RecvFrom操作的可等待对象
- *
- * @details 用于异步接收UDP数据报。
- * co_await后返回接收到的数据和发送方地址或错误。
- *
- * @note 由UdpSocket::recvfrom()创建
- */
-struct RecvFromAwaitable: public AwaitableBase, public TimeoutSupport<RecvFromAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false，需要异步等待
-     */
-    static bool RecvFromActionReady() { return false; }
-
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @param result 结果输出
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool RecvFromActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<Bytes, IOError>& result);
-
-    /**
-     * @brief 独立的 resume 操作
-     * @param controller IO控制器
-     */
-    static void RecvFromActionResume(IOController* controller);
-
-    /**
-     * @brief 构造函数
-     * @param controller IO控制器
-     * @param buffer 接收缓冲区
-     * @param length 缓冲区大小
-     * @param from 输出参数，接收发送方地址
-     */
-    RecvFromAwaitable(IOController* controller, char* buffer, size_t length, Host* from)
-        : m_controller(controller), m_buffer(buffer), m_length(length), m_from(from) {}
-
-    /**
-     * @brief 处理完成回调
-     * @return true 唤醒，false继续监听
-     */
-#ifdef USE_IOURING
-    virtual bool handleComplete(struct io_uring_cqe* cqe);
-#else
-    virtual bool handleComplete();
-#endif
-
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false
-     */
-    bool await_ready() { return RecvFromActionReady(); }
-
-    /**
-     * @brief 挂起协程并注册IO事件
-     * @param handle 当前协程句柄
-     * @return true表示挂起，false表示立即完成
-     */
-    bool await_suspend(std::coroutine_handle<> handle);
-
-    /**
-     * @brief 恢复时获取结果
-     * @return 成功返回Bytes数据，失败返回IOError
-     */
-    std::expected<Bytes, IOError> await_resume();
-
-    IOController* m_controller;                ///< IO控制器
-    char* m_buffer;                            ///< 接收缓冲区
-    size_t m_length;                           ///< 缓冲区大小
-    Host* m_from;                              ///< 发送方地址输出
-    Waker m_waker;                             ///< 协程唤醒器
-    std::expected<Bytes, IOError> m_result;    ///< 操作结果
-
-#ifdef USE_IOURING
-    // io_uring 需要的持久化结构体
-    struct msghdr m_msg;                       ///< msghdr 结构体（io_uring 使用）
-    struct iovec m_iov;                        ///< iovec 结构体（io_uring 使用）
-    sockaddr_storage m_addr;                   ///< 地址存储（io_uring 使用）
-#endif
-};
-
-/**
- * @brief SendTo操作的可等待对象
- *
- * @details 用于异步发送UDP数据报。
- * co_await后返回实际发送的字节数或错误。
- *
- * @note 由UdpSocket::sendto()创建
- */
-struct SendToAwaitable: public AwaitableBase, public TimeoutSupport<SendToAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false，需要异步等待
-     */
-    static bool SendToActionReady() { return false; }
-
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @param result 结果输出
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool SendToActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<size_t, IOError>& result);
-
-    /**
-     * @brief 独立的 resume 操作
-     * @param controller IO控制器
-     */
-    static void SendToActionResume(IOController* controller);
-
-    /**
-     * @brief 构造函数
-     * @param controller IO控制器
-     * @param buffer 发送数据
-     * @param length 数据长度
-     * @param to 目标地址
-     */
-    SendToAwaitable(IOController* controller, const char* buffer, size_t length, const Host& to)
-        : m_controller(controller), m_buffer(buffer), m_length(length), m_to(to) {}
-
-    /**
-     * @brief 处理完成回调
-     * @return true 唤醒，false继续监听
-     */
-#ifdef USE_IOURING
-    virtual bool handleComplete(struct io_uring_cqe* cqe);
-#else
-    virtual bool handleComplete();
-#endif
-
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false
-     */
-    bool await_ready() { return SendToActionReady(); }
-
-    /**
-     * @brief 挂起协程并注册IO事件
-     * @param handle 当前协程句柄
-     * @return true表示挂起，false表示立即完成
-     */
-    bool await_suspend(std::coroutine_handle<> handle);
-
-    /**
-     * @brief 恢复时获取结果
-     * @return 成功返回发送字节数，失败返回IOError
-     */
-    std::expected<size_t, IOError> await_resume();
-
-    IOController* m_controller;                 ///< IO控制器
-    const char* m_buffer;                       ///< 发送数据
-    size_t m_length;                            ///< 数据长度
-    Host m_to;                                  ///< 目标地址
-    Waker m_waker;                              ///< 协程唤醒器
-    std::expected<size_t, IOError> m_result;    ///< 操作结果
-
-#ifdef USE_IOURING
-    // io_uring 需要的持久化结构体
-    struct msghdr m_msg;                        ///< msghdr 结构体（io_uring 使用）
-    struct iovec m_iov;                         ///< iovec 结构体（io_uring 使用）
-#endif
-};
-
-/**
- * @brief 文件读取操作的可等待对象
- *
- * @details 用于异步读取文件数据。
- * co_await后返回读取到的数据或错误。
- *
- * @note 由AsyncFile::read()创建
- */
-struct FileReadAwaitable: public AwaitableBase, public TimeoutSupport<FileReadAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false，需要异步等待
-     */
-    static bool FileReadActionReady() { return false; }
-
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @param result 结果输出
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool FileReadActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<Bytes, IOError>& result);
-
-    /**
-     * @brief 独立的 resume 操作
-     * @param controller IO控制器
-     */
-    static void FileReadActionResume(IOController* controller);
-
-#ifdef USE_EPOLL
-    // epoll 平台：需要 eventfd 和 libaio context
-    FileReadAwaitable(IOController* controller,
-                      char* buffer, size_t length, off_t offset,
-                      int event_fd, io_context_t aio_ctx, size_t expect_count = 1)
-        : m_controller(controller),
-          m_buffer(buffer), m_length(length), m_offset(offset),
-          m_event_fd(event_fd), m_aio_ctx(aio_ctx), m_expect_count(expect_count) {}
-#else
-    FileReadAwaitable(IOController* controller,
-                      char* buffer, size_t length, off_t offset)
-        : m_controller(controller),
-          m_buffer(buffer), m_length(length), m_offset(offset) {}
-#endif
-
-    /**
-     * @brief 处理完成回调
-     * @return true 唤醒，false继续监听
-     */
-#ifdef USE_IOURING
-    virtual bool handleComplete(struct io_uring_cqe* cqe);
-#else
-    virtual bool handleComplete();
-#endif
-
-    bool await_ready() { return FileReadActionReady(); }
     bool await_suspend(std::coroutine_handle<> handle);
     std::expected<Bytes, IOError> await_resume();
 
     IOController* m_controller;
+    Waker m_waker;
+};
+
+// ---- Send ----
+
+struct SendIOContext: public IOContextBase {
+    SendIOContext(const char* buffer, size_t length)
+        : m_buffer(buffer), m_length(length) {}
+
+#ifdef USE_IOURING
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+#else
+    bool handleComplete(GHandle handle) override;
+#endif
+
+    const char* m_buffer;
+    size_t m_length;
+    std::expected<size_t, IOError> m_result;
+};
+
+struct SendAwaitable: public SendIOContext, public TimeoutSupport<SendAwaitable> {
+    SendAwaitable(IOController* controller, const char* buffer, size_t length)
+        : SendIOContext(buffer, length), m_controller(controller) {}
+
+    bool await_ready() { return false; }
+    bool await_suspend(std::coroutine_handle<> handle);
+    std::expected<size_t, IOError> await_resume();
+
+    IOController* m_controller;
+    Waker m_waker;
+};
+
+// ---- Readv ----
+
+struct ReadvIOContext: public IOContextBase {
+    ReadvIOContext(std::vector<struct iovec> iovecs)
+        : m_iovecs(std::move(iovecs)) {}
+
+#ifdef USE_IOURING
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+#else
+    bool handleComplete(GHandle handle) override;
+#endif
+
+    std::vector<struct iovec> m_iovecs;
+    std::expected<size_t, IOError> m_result;
+};
+
+struct ReadvAwaitable: public ReadvIOContext, public TimeoutSupport<ReadvAwaitable> {
+    ReadvAwaitable(IOController* controller, std::vector<struct iovec> iovecs)
+        : ReadvIOContext(std::move(iovecs)), m_controller(controller) {}
+
+    bool await_ready() { return false; }
+    bool await_suspend(std::coroutine_handle<> handle);
+    std::expected<size_t, IOError> await_resume();
+
+    IOController* m_controller;
+    Waker m_waker;
+};
+
+// ---- Writev ----
+
+struct WritevIOContext: public IOContextBase {
+    WritevIOContext(std::vector<struct iovec> iovecs)
+        : m_iovecs(std::move(iovecs)) {}
+
+#ifdef USE_IOURING
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+#else
+    bool handleComplete(GHandle handle) override;
+#endif
+
+    std::vector<struct iovec> m_iovecs;
+    std::expected<size_t, IOError> m_result;
+};
+
+struct WritevAwaitable: public WritevIOContext, public TimeoutSupport<WritevAwaitable> {
+    WritevAwaitable(IOController* controller, std::vector<struct iovec> iovecs)
+        : WritevIOContext(std::move(iovecs)), m_controller(controller) {}
+
+    bool await_ready() { return false; }
+    bool await_suspend(std::coroutine_handle<> handle);
+    std::expected<size_t, IOError> await_resume();
+
+    IOController* m_controller;
+    Waker m_waker;
+};
+
+// ---- Connect ----
+
+struct ConnectIOContext: public IOContextBase {
+    ConnectIOContext(const Host& host)
+        : m_host(host) {}
+
+#ifdef USE_IOURING
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+#else
+    bool handleComplete(GHandle handle) override;
+#endif
+
+    Host m_host;
+    std::expected<void, IOError> m_result;
+};
+
+struct ConnectAwaitable: public ConnectIOContext, public TimeoutSupport<ConnectAwaitable> {
+    ConnectAwaitable(IOController* controller, const Host& host)
+        : ConnectIOContext(host), m_controller(controller) {}
+
+    bool await_ready() { return false; }
+    bool await_suspend(std::coroutine_handle<> handle);
+    std::expected<void, IOError> await_resume();
+
+    IOController* m_controller;
+    Waker m_waker;
+};
+
+// ---- Close (直接继承 AwaitableBase，无 IOContext) ----
+
+struct CloseAwaitable: public AwaitableBase, public TimeoutSupport<CloseAwaitable> {
+    CloseAwaitable(IOController* controller)
+        : m_controller(controller) {}
+
+    bool await_ready() { return false; }
+    bool await_suspend(std::coroutine_handle<> handle);
+    std::expected<void, IOError> await_resume();
+
+    IOController* m_controller;
+    Waker m_waker;
+    std::expected<void, IOError> m_result;
+};
+
+// ---- RecvFrom ----
+
+struct RecvFromIOContext: public IOContextBase {
+    RecvFromIOContext(char* buffer, size_t length, Host* from)
+        : m_buffer(buffer), m_length(length), m_from(from) {}
+
+#ifdef USE_IOURING
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+#else
+    bool handleComplete(GHandle handle) override;
+#endif
+
+    char* m_buffer;
+    size_t m_length;
+    Host* m_from;
+    std::expected<Bytes, IOError> m_result;
+
+#ifdef USE_IOURING
+    struct msghdr m_msg;
+    struct iovec m_iov;
+    sockaddr_storage m_addr;
+#endif
+};
+
+struct RecvFromAwaitable: public RecvFromIOContext, public TimeoutSupport<RecvFromAwaitable> {
+    RecvFromAwaitable(IOController* controller, char* buffer, size_t length, Host* from)
+        : RecvFromIOContext(buffer, length, from), m_controller(controller) {}
+
+    bool await_ready() { return false; }
+    bool await_suspend(std::coroutine_handle<> handle);
+    std::expected<Bytes, IOError> await_resume();
+
+    IOController* m_controller;
+    Waker m_waker;
+};
+
+// ---- SendTo ----
+
+struct SendToIOContext: public IOContextBase {
+    SendToIOContext(const char* buffer, size_t length, const Host& to)
+        : m_buffer(buffer), m_length(length), m_to(to) {}
+
+#ifdef USE_IOURING
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+#else
+    bool handleComplete(GHandle handle) override;
+#endif
+
+    const char* m_buffer;
+    size_t m_length;
+    Host m_to;
+    std::expected<size_t, IOError> m_result;
+
+#ifdef USE_IOURING
+    struct msghdr m_msg;
+    struct iovec m_iov;
+#endif
+};
+
+struct SendToAwaitable: public SendToIOContext, public TimeoutSupport<SendToAwaitable> {
+    SendToAwaitable(IOController* controller, const char* buffer, size_t length, const Host& to)
+        : SendToIOContext(buffer, length, to), m_controller(controller) {}
+
+    bool await_ready() { return false; }
+    bool await_suspend(std::coroutine_handle<> handle);
+    std::expected<size_t, IOError> await_resume();
+
+    IOController* m_controller;
+    Waker m_waker;
+};
+
+// ---- FileRead ----
+
+struct FileReadIOContext: public IOContextBase {
+#ifdef USE_EPOLL
+    FileReadIOContext(char* buffer, size_t length, off_t offset,
+                      int event_fd, io_context_t aio_ctx, size_t expect_count = 1)
+        : m_buffer(buffer), m_length(length), m_offset(offset),
+          m_event_fd(event_fd), m_aio_ctx(aio_ctx), m_expect_count(expect_count) {}
+#else
+    FileReadIOContext(char* buffer, size_t length, off_t offset)
+        : m_buffer(buffer), m_length(length), m_offset(offset) {}
+#endif
+
+#ifdef USE_IOURING
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+#else
+    bool handleComplete(GHandle handle) override;
+#endif
+
     char* m_buffer;
     size_t m_length;
     off_t m_offset;
-    Waker m_waker;
     std::expected<Bytes, IOError> m_result;
 
 #ifdef USE_EPOLL
     int m_event_fd;
     io_context_t m_aio_ctx;
-    size_t m_expect_count;      ///< 期望完成的事件数量
-    size_t m_finished_count{0}; ///< 已完成的事件数量
+    size_t m_expect_count;
+    size_t m_finished_count{0};
 #endif
 };
 
-/**
- * @brief 文件写入操作的可等待对象
- *
- * @details 用于异步写入文件数据。
- * co_await后返回写入的字节数或错误。
- *
- * @note 由AsyncFile::write()创建
- */
-struct FileWriteAwaitable: public AwaitableBase, public TimeoutSupport<FileWriteAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false，需要异步等待
-     */
-    static bool FileWriteActionReady() { return false; }
-
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @param result 结果输出
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool FileWriteActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<size_t, IOError>& result);
-
-    /**
-     * @brief 独立的 resume 操作
-     * @param controller IO控制器
-     */
-    static void FileWriteActionResume(IOController* controller);
-
+struct FileReadAwaitable: public FileReadIOContext, public TimeoutSupport<FileReadAwaitable> {
 #ifdef USE_EPOLL
-    // epoll 平台：需要 eventfd 和 libaio context
-    FileWriteAwaitable(IOController* controller,
-                       const char* buffer, size_t length, off_t offset,
-                       int event_fd, io_context_t aio_ctx, size_t expect_count = 1)
-        : m_controller(controller),
-          m_buffer(buffer), m_length(length), m_offset(offset),
-          m_event_fd(event_fd), m_aio_ctx(aio_ctx), m_expect_count(expect_count) {}
+    FileReadAwaitable(IOController* controller,
+                      char* buffer, size_t length, off_t offset,
+                      int event_fd, io_context_t aio_ctx, size_t expect_count = 1)
+        : FileReadIOContext(buffer, length, offset, event_fd, aio_ctx, expect_count),
+          m_controller(controller) {}
 #else
-    FileWriteAwaitable(IOController* controller,
-                       const char* buffer, size_t length, off_t offset)
-        : m_controller(controller),
-          m_buffer(buffer), m_length(length), m_offset(offset) {}
+    FileReadAwaitable(IOController* controller,
+                      char* buffer, size_t length, off_t offset)
+        : FileReadIOContext(buffer, length, offset),
+          m_controller(controller) {}
 #endif
 
-    /**
-     * @brief 处理完成回调
-     * @return true 唤醒，false继续监听
-     */
-#ifdef USE_IOURING
-    virtual bool handleComplete(struct io_uring_cqe* cqe);
-#else
-    virtual bool handleComplete();
-#endif
-
-    bool await_ready() { return FileWriteActionReady(); }
+    bool await_ready() { return false; }
     bool await_suspend(std::coroutine_handle<> handle);
-    std::expected<size_t, IOError> await_resume();
+    std::expected<Bytes, IOError> await_resume();
 
     IOController* m_controller;
+    Waker m_waker;
+};
+
+// ---- FileWrite ----
+
+struct FileWriteIOContext: public IOContextBase {
+#ifdef USE_EPOLL
+    FileWriteIOContext(const char* buffer, size_t length, off_t offset,
+                       int event_fd, io_context_t aio_ctx, size_t expect_count = 1)
+        : m_buffer(buffer), m_length(length), m_offset(offset),
+          m_event_fd(event_fd), m_aio_ctx(aio_ctx), m_expect_count(expect_count) {}
+#else
+    FileWriteIOContext(const char* buffer, size_t length, off_t offset)
+        : m_buffer(buffer), m_length(length), m_offset(offset) {}
+#endif
+
+#ifdef USE_IOURING
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+#else
+    bool handleComplete(GHandle handle) override;
+#endif
+
     const char* m_buffer;
     size_t m_length;
     off_t m_offset;
-    Waker m_waker;
     std::expected<size_t, IOError> m_result;
 
 #ifdef USE_EPOLL
     int m_event_fd;
     io_context_t m_aio_ctx;
-    size_t m_expect_count;      ///< 期望完成的事件数量
-    size_t m_finished_count{0}; ///< 已完成的事件数量
+    size_t m_expect_count;
+    size_t m_finished_count{0};
 #endif
 };
 
-// FileWatchEvent and FileWatchResult are defined in FileWatchDefs.hpp
-// (included via IOHandlers.hpp)
+struct FileWriteAwaitable: public FileWriteIOContext, public TimeoutSupport<FileWriteAwaitable> {
+#ifdef USE_EPOLL
+    FileWriteAwaitable(IOController* controller,
+                       const char* buffer, size_t length, off_t offset,
+                       int event_fd, io_context_t aio_ctx, size_t expect_count = 1)
+        : FileWriteIOContext(buffer, length, offset, event_fd, aio_ctx, expect_count),
+          m_controller(controller) {}
+#else
+    FileWriteAwaitable(IOController* controller,
+                       const char* buffer, size_t length, off_t offset)
+        : FileWriteIOContext(buffer, length, offset),
+          m_controller(controller) {}
+#endif
 
-/**
- * @brief 文件监控操作的可等待对象
- *
- * @details 用于异步监控文件或目录变化。
- * co_await后返回触发的事件或错误。
- *
- * @note 由FileWatcher::watch()创建
- */
-struct FileWatchAwaitable: public AwaitableBase, public TimeoutSupport<FileWatchAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false，需要异步等待
-     */
-    static bool FileWatchActionReady() { return false; }
+    bool await_ready() { return false; }
+    bool await_suspend(std::coroutine_handle<> handle);
+    std::expected<size_t, IOError> await_resume();
 
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @param result 结果输出
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool FileWatchActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<FileWatchResult, IOError>& result);
+    IOController* m_controller;
+    Waker m_waker;
+};
 
-    /**
-     * @brief 独立的 resume 操作
-     * @param controller IO控制器
-     */
-    static void FileWatchActionResume(IOController* controller);
+// ---- FileWatch ----
 
+struct FileWatchIOContext: public IOContextBase {
 #ifdef USE_KQUEUE
-    /**
-     * @brief 构造函数 (kqueue)
-     * @param controller IO控制器
-     * @param buffer 事件缓冲区
-     * @param buffer_size 缓冲区大小
-     * @param events 要监控的事件类型
-     */
+    FileWatchIOContext(char* buffer, size_t buffer_size, FileWatchEvent events)
+        : m_buffer(buffer), m_buffer_size(buffer_size), m_events(events) {}
+#else
+    FileWatchIOContext(char* buffer, size_t buffer_size)
+        : m_buffer(buffer), m_buffer_size(buffer_size) {}
+#endif
+
+#ifdef USE_IOURING
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+#else
+    bool handleComplete(GHandle handle) override;
+#endif
+
+    char* m_buffer;
+    size_t m_buffer_size;
+#ifdef USE_KQUEUE
+    FileWatchEvent m_events;
+#endif
+    std::expected<FileWatchResult, IOError> m_result;
+};
+
+struct FileWatchAwaitable: public FileWatchIOContext, public TimeoutSupport<FileWatchAwaitable> {
+#ifdef USE_KQUEUE
     FileWatchAwaitable(IOController* controller,
                        char* buffer, size_t buffer_size,
                        FileWatchEvent events)
-        : m_controller(controller),
-          m_buffer(buffer), m_buffer_size(buffer_size),
-          m_events(events) {}
+        : FileWatchIOContext(buffer, buffer_size, events),
+          m_controller(controller) {}
 #else
-    /**
-     * @brief 构造函数 (Linux)
-     * @param controller IO控制器
-     * @param buffer 事件缓冲区
-     * @param buffer_size 缓冲区大小
-     */
     FileWatchAwaitable(IOController* controller,
                        char* buffer, size_t buffer_size)
-        : m_controller(controller),
-          m_buffer(buffer), m_buffer_size(buffer_size) {}
+        : FileWatchIOContext(buffer, buffer_size),
+          m_controller(controller) {}
 #endif
 
-    /**
-     * @brief 处理完成回调
-     * @return true 唤醒，false继续监听
-     */
-#ifdef USE_IOURING
-    virtual bool handleComplete(struct io_uring_cqe* cqe);
-#else
-    virtual bool handleComplete();
-#endif
-
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false
-     */
-    bool await_ready() { return FileWatchActionReady(); }
-
-    /**
-     * @brief 挂起协程并注册IO事件
-     * @param handle 当前协程句柄
-     * @return true表示挂起，false表示立即完成
-     */
+    bool await_ready() { return false; }
     bool await_suspend(std::coroutine_handle<> handle);
-
-    /**
-     * @brief 恢复时获取结果
-     * @return 成功返回FileWatchResult，失败返回IOError
-     */
     std::expected<FileWatchResult, IOError> await_resume();
 
-    IOController* m_controller;                         ///< IO控制器
-    char* m_buffer;                                     ///< 事件缓冲区
-    size_t m_buffer_size;                               ///< 缓冲区大小
-#ifdef USE_KQUEUE
-    FileWatchEvent m_events;                            ///< 要监控的事件类型
-#endif
-    Waker m_waker;                                      ///< 协程唤醒器
-    std::expected<FileWatchResult, IOError> m_result;   ///< 操作结果
+    IOController* m_controller;
+    Waker m_waker;
 };
 
+// ---- SendFile ----
 
-/**
- * @brief SendFile操作的可等待对象
- *
- * @details 用于异步发送文件数据，使用零拷贝技术。
- * 使用 sendfile 系统调用直接在内核空间传输数据，避免用户空间拷贝。
- * co_await后返回实际发送的字节数或错误。
- *
- * @note
- * - 适用于发送大文件的场景，性能优于普通的 read + send
- * - 不同平台的 sendfile 接口略有差异：
- *   - Linux: sendfile(out_fd, in_fd, offset, count)
- *   - macOS: sendfile(in_fd, out_fd, offset, len, hdtr, flags)
- * - offset 会被更新为发送后的位置
- */
-struct SendFileAwaitable: public AwaitableBase, public TimeoutSupport<SendFileAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false，需要异步等待
-     */
-    static bool SendFileActionReady() { return false; }
+struct SendFileIOContext: public IOContextBase {
+    SendFileIOContext(int file_fd, off_t offset, size_t count)
+        : m_file_fd(file_fd), m_offset(offset), m_count(count) {}
 
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @param result 结果输出
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool SendFileActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<size_t, IOError>& result);
-
-    /**
-     * @brief 独立的 resume 操作
-     * @param controller IO控制器
-     */
-    static void SendFileActionResume(IOController* controller);
-
-    /**
-     * @brief 构造函数
-     * @param controller IO控制器（socket的控制器）
-     * @param file_fd 要发送的文件描述符
-     * @param offset 文件偏移量（发送起始位置）
-     * @param count 要发送的字节数
-     */
-    SendFileAwaitable(IOController* controller, int file_fd, off_t offset, size_t count)
-        : m_controller(controller), m_file_fd(file_fd),
-          m_offset(offset), m_count(count) {}
-
-    /**
-     * @brief 处理完成回调
-     * @return true 唤醒，false继续监听
-     */
 #ifdef USE_IOURING
-    virtual bool handleComplete(struct io_uring_cqe* cqe);
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
 #else
-    virtual bool handleComplete();
+    bool handleComplete(GHandle handle) override;
 #endif
 
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false
-     */
-    bool await_ready() { return SendFileActionReady(); }
+    int m_file_fd;
+    off_t m_offset;
+    size_t m_count;
+    std::expected<size_t, IOError> m_result;
+};
 
-    /**
-     * @brief 挂起协程并注册IO事件
-     * @param handle 当前协程句柄
-     * @return true表示挂起，false表示立即完成
-     */
+struct SendFileAwaitable: public SendFileIOContext, public TimeoutSupport<SendFileAwaitable> {
+    SendFileAwaitable(IOController* controller, int file_fd, off_t offset, size_t count)
+        : SendFileIOContext(file_fd, offset, count), m_controller(controller) {}
+
+    bool await_ready() { return false; }
     bool await_suspend(std::coroutine_handle<> handle);
-
-    /**
-     * @brief 恢复时获取结果
-     * @return 成功返回发送字节数，失败返回IOError
-     */
     std::expected<size_t, IOError> await_resume();
 
-    IOController* m_controller;                 ///< IO控制器
-    int m_file_fd;                              ///< 文件描述符
-    off_t m_offset;                             ///< 文件偏移量
-    size_t m_count;                             ///< 要发送的字节数
-    Waker m_waker;                              ///< 协程唤醒器
-    std::expected<size_t, IOError> m_result;    ///< 操作结果
+    IOController* m_controller;
+    Waker m_waker;
 };
 
-// struct ChainAwaitable: public AwaitableBase, public TimeoutSupport<ChainAwaitable> {
+// ==================== CustomAwaitable（中间层基类） ====================
 
+/**
+ * @brief 自定义组合IO操作的基类
+ *
+ * @details 用户通过继承此类，在构造函数中用 addTask 填充 IO 队列，
+ * 并实现 await_ready / await_resume 来定义返回值类型。
+ *
+ * 三层结构：
+ *   AwaitableBase
+ *     └── CustomAwaitable          // 中间层：IOTask队列 + await_suspend
+ *           └── MyCustomAwaitable  // 用户层：填充队列 + await_resume
+ *
+ * @code
+ * struct SendThenRecv : public CustomAwaitable {
+ *     SendIOContext m_send;
+ *     RecvIOContext m_recv;
+ *
+ *     SendThenRecv(IOController* ctrl, const char* data, size_t len, char* buf, size_t bufLen)
+ *         : CustomAwaitable(ctrl), m_send(data, len), m_recv(buf, bufLen)
+ *     {
+ *         addTask(SEND, &m_send);
+ *         addTask(RECV, &m_recv);
+ *     }
+ *
+ *     bool await_ready() { return false; }
+ *     std::expected<Bytes, IOError> await_resume() {
+ *         onCompleted();
+ *         return std::move(m_recv.m_result);
+ *     }
+ * };
+ * @endcode
+ */
+struct CustomAwaitable: public AwaitableBase {
+    struct IOTask {
+        IOEventType type;
+        IOContextBase* context;  // 非拥有指针，生命周期由子类管理
+    };
 
-//     bool handleComplete() {
-//         //头部事件完成
-//         while(handleHeadEvent(m_lists.front().first, m_lists.front().second)) {
-//             m_lists.pop_front();
-//         }
-//         if (!m_lists.empty()) {
+    CustomAwaitable(IOController* controller)
+        : m_controller(controller) {}
 
-//         }
-//     }
+    /// 添加一个 IO 任务到队列（IOContext 生命周期由子类负责）
+    void addTask(IOEventType type, IOContextBase* ctx) {
+        m_tasks.push_back(IOTask{type, ctx});
+    }
 
-//     virtual bool handleHeadEvent(IOEventType type, AwaitableBase* awaitable) = 0;
-//     std::list<std::pair<IOEventType, AwaitableBase*>> m_pending_lists;
-//     std::list<std::a>
-// };
+    IOTask* front() {
+        if (m_cursor >= m_tasks.size()) return nullptr;
+        return &m_tasks[m_cursor];
+    }
+
+    void popFront() {
+        if (m_cursor < m_tasks.size()) ++m_cursor;
+    }
+
+    bool empty() const { return m_cursor >= m_tasks.size(); }
+
+    /// 子类在 await_resume 中调用，清理调度器注册
+    void onCompleted() {
+        m_controller->removeAwaitable(CUSTOM);
+    }
+
+    bool await_suspend(std::coroutine_handle<> handle);
+
+    IOController* m_controller;
+    Waker m_waker;
+    std::vector<IOTask> m_tasks;
+    size_t m_cursor = 0;
+};
 
 
 } // namespace galay::kernel

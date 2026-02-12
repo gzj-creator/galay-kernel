@@ -65,6 +65,8 @@ public:
     // 零拷贝发送文件
     int addSendFile(IOController* controller) override;
 
+    int addCustom(IOController* controller) override;
+
     int remove(IOController* controller) override;
 
     bool spawn(Coroutine coro) override;
@@ -88,6 +90,8 @@ private:
     void eventLoop();
     void processPendingCoroutines();
     void processCompletion(struct io_uring_cqe* cqe);
+    int processCustom(IOEventType type, IOController* controller);
+    int submitCustomSqe(IOEventType type, IOContextBase* ctx, IOController* controller);
 };
 
 }

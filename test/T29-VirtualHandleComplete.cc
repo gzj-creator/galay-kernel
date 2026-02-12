@@ -1,6 +1,6 @@
 /**
  * @file T29-VirtualHandleComplete.cc
- * @brief 测试 virtual handleComplete：继承 RecvAwaitable，
+ * @brief 测试 virtual handleComplete：继承 RecvIOContext，
  *        重写 handleComplete 返回 false 多次后返回 true，
  *        验证调度器会重复投递事件直到 handleComplete 返回 true。
  */
@@ -43,6 +43,8 @@ std::atomic<int> g_total{0};
  *
  * 前 m_reject_count 次调用返回 false（模拟"还没准备好"），
  * 之后调用基类 handleComplete 正常处理。
+ *
+ * RecvAwaitable 继承自 RecvIOContext，handleComplete 定义在 RecvIOContext 上。
  */
 struct CountingRecvAwaitable : public RecvAwaitable {
     int m_reject_count;          ///< 需要拒绝的次数
@@ -54,24 +56,24 @@ struct CountingRecvAwaitable : public RecvAwaitable {
     {}
 
 #ifdef USE_IOURING
-    bool handleComplete(std::expected<Bytes, IOError>&& result) override {
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
         int n = m_call_count.fetch_add(1, std::memory_order_relaxed);
         if (n < m_reject_count) {
             LogInfo("[CountingRecv] handleComplete called #{}, returning false (reject)", n + 1);
             return false;  // 拒绝，让调度器重新注册
         }
         LogInfo("[CountingRecv] handleComplete called #{}, accepting", n + 1);
-        return RecvAwaitable::handleComplete(std::move(result));
+        return RecvIOContext::handleComplete(cqe, handle);
     }
 #else
-    bool handleComplete() override {
+    bool handleComplete(GHandle handle) override {
         int n = m_call_count.fetch_add(1, std::memory_order_relaxed);
         if (n < m_reject_count) {
             LogInfo("[CountingRecv] handleComplete called #{}, returning false (reject)", n + 1);
             return false;  // 拒绝，让调度器重新注册
         }
         LogInfo("[CountingRecv] handleComplete called #{}, accepting", n + 1);
-        return RecvAwaitable::handleComplete();
+        return RecvIOContext::handleComplete(handle);
     }
 #endif
 };

@@ -72,6 +72,11 @@ inline auto IOController::getAwaitable() -> SendFileAwaitable* {
     return static_cast<SendFileAwaitable*>(m_awaitable[WRITE]);
 }
 
+template<>
+inline auto IOController::getAwaitable() -> CustomAwaitable* {
+    return static_cast<CustomAwaitable*>(m_awaitable[READ]);
+};
+
 /**
  * @brief IO调度器接口
  *
@@ -184,6 +189,8 @@ public:
      */
     virtual int addSendFile(IOController* controller) = 0;
 
+    virtual int addCustom(IOController* controller) = 0;
+
     /**
      * @brief 删除fd的所有事件
      * @param controller IO控制器
@@ -229,6 +236,7 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
     case IOEventType::RECVFROM:
     case IOEventType::ACCEPT:
     case IOEventType::FILEWATCH:
+    case IOEventType::CUSTOM:
         m_awaitable[READ] = awaitable;
         break;
     case IOEventType::SEND:

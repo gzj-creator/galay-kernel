@@ -70,6 +70,8 @@ public:
     // 零拷贝发送文件
     int addSendFile(IOController* controller) override;
 
+    int addCustom(IOController* controller) override;
+
     int remove(IOController* controller) override;
 
     bool spawn(Coroutine coro) override;
@@ -97,6 +99,7 @@ private:
     void processEvent(struct epoll_event& ev);
     void syncEpollEvents(IOController* controller);
     uint32_t buildEpollEvents(IOController* controller);
+    int processCustom(IOEventType type, IOController* controller);
 };
 
 }

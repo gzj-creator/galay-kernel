@@ -325,6 +325,113 @@ int IOUringScheduler::addFileWatch(IOController* controller)
     return 0;
 }
 
+int IOUringScheduler::addCustom(IOController* controller)
+{
+    auto* custom = controller->getAwaitable<CustomAwaitable>();
+    if (custom == nullptr) return -1;
+    while (auto* task = custom->front()) {
+        bool done = task->context->handleComplete(nullptr, controller->m_handle);
+        if (done) { custom->popFront(); continue; }
+        return submitCustomSqe(task->type, task->context, controller);
+    }
+    return OK;  // 队列空，唤醒
+}
+
+int IOUringScheduler::submitCustomSqe(IOEventType type, IOContextBase* ctx, IOController* controller)
+{
+    auto* sqe = io_uring_get_sqe(&m_ring);
+    if (!sqe) return -EAGAIN;
+
+    switch (type) {
+    case RECV: {
+        auto* c = static_cast<RecvIOContext*>(ctx);
+        io_uring_prep_recv(sqe, controller->m_handle.fd, c->m_buffer, c->m_length, 0);
+        break;
+    }
+    case SEND: {
+        auto* c = static_cast<SendIOContext*>(ctx);
+        io_uring_prep_send(sqe, controller->m_handle.fd, c->m_buffer, c->m_length, 0);
+        break;
+    }
+    case ACCEPT: {
+        auto* c = static_cast<AcceptIOContext*>(ctx);
+        io_uring_prep_accept(sqe, controller->m_handle.fd,
+                             c->m_host->sockAddr(), c->m_host->addrLen(), 0);
+        break;
+    }
+    case CONNECT: {
+        auto* c = static_cast<ConnectIOContext*>(ctx);
+        io_uring_prep_connect(sqe, controller->m_handle.fd,
+                              c->m_host.sockAddr(), *c->m_host.addrLen());
+        break;
+    }
+    case READV: {
+        auto* c = static_cast<ReadvIOContext*>(ctx);
+        io_uring_prep_readv(sqe, controller->m_handle.fd,
+                            c->m_iovecs.data(), static_cast<unsigned>(c->m_iovecs.size()), 0);
+        break;
+    }
+    case WRITEV: {
+        auto* c = static_cast<WritevIOContext*>(ctx);
+        io_uring_prep_writev(sqe, controller->m_handle.fd,
+                             c->m_iovecs.data(), static_cast<unsigned>(c->m_iovecs.size()), 0);
+        break;
+    }
+    case FILEREAD: {
+        auto* c = static_cast<FileReadIOContext*>(ctx);
+        io_uring_prep_read(sqe, controller->m_handle.fd, c->m_buffer, c->m_length, c->m_offset);
+        break;
+    }
+    case FILEWRITE: {
+        auto* c = static_cast<FileWriteIOContext*>(ctx);
+        io_uring_prep_write(sqe, controller->m_handle.fd, c->m_buffer, c->m_length, c->m_offset);
+        break;
+    }
+    case RECVFROM: {
+        auto* c = static_cast<RecvFromIOContext*>(ctx);
+        std::memset(&c->m_msg, 0, sizeof(c->m_msg));
+        std::memset(&c->m_addr, 0, sizeof(c->m_addr));
+        c->m_iov.iov_base = c->m_buffer;
+        c->m_iov.iov_len = c->m_length;
+        c->m_msg.msg_iov = &c->m_iov;
+        c->m_msg.msg_iovlen = 1;
+        c->m_msg.msg_name = &c->m_addr;
+        c->m_msg.msg_namelen = sizeof(c->m_addr);
+        io_uring_prep_recvmsg(sqe, controller->m_handle.fd, &c->m_msg, 0);
+        break;
+    }
+    case SENDTO: {
+        auto* c = static_cast<SendToIOContext*>(ctx);
+        std::memset(&c->m_msg, 0, sizeof(c->m_msg));
+        c->m_iov.iov_base = const_cast<char*>(c->m_buffer);
+        c->m_iov.iov_len = c->m_length;
+        c->m_msg.msg_iov = &c->m_iov;
+        c->m_msg.msg_iovlen = 1;
+        c->m_msg.msg_name = const_cast<sockaddr*>(c->m_to.sockAddr());
+        c->m_msg.msg_namelen = *c->m_to.addrLen();
+        io_uring_prep_sendmsg(sqe, controller->m_handle.fd, &c->m_msg, 0);
+        break;
+    }
+    case SENDFILE: {
+        io_uring_prep_poll_add(sqe, controller->m_handle.fd, POLLOUT);
+        break;
+    }
+    case FILEWATCH: {
+        auto* c = static_cast<FileWatchIOContext*>(ctx);
+        io_uring_prep_read(sqe, controller->m_handle.fd, c->m_buffer, c->m_buffer_size, 0);
+        break;
+    }
+    default:
+        return -1;
+    }
+
+    // Set sqe_type on the CustomAwaitable so processCompletion routes correctly
+    auto* custom = controller->getAwaitable<CustomAwaitable>();
+    custom->m_sqe_type = CUSTOM;
+    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(custom));
+    return 0;
+}
+
 int IOUringScheduler::remove(IOController* controller)
 {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
@@ -448,7 +555,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case ACCEPT:
     {
         auto* awaitable = static_cast<AcceptAwaitable*>(base);
-        if (awaitable->handleComplete(cqe)) {
+        if (awaitable->handleComplete(cqe, awaitable->m_controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
             addAccept(awaitable->m_controller);
@@ -458,7 +565,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case CONNECT:
     {
         auto* awaitable = static_cast<ConnectAwaitable*>(base);
-        if (awaitable->handleComplete(cqe)) {
+        if (awaitable->handleComplete(cqe, awaitable->m_controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
             addConnect(awaitable->m_controller);
@@ -468,7 +575,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case RECV:
     {
         auto* awaitable = static_cast<RecvAwaitable*>(base);
-        if (awaitable->handleComplete(cqe)) {
+        if (awaitable->handleComplete(cqe, awaitable->m_controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
             addRecv(awaitable->m_controller);
@@ -478,7 +585,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case SEND:
     {
         auto* awaitable = static_cast<SendAwaitable*>(base);
-        if (awaitable->handleComplete(cqe)) {
+        if (awaitable->handleComplete(cqe, awaitable->m_controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
             addSend(awaitable->m_controller);
@@ -488,7 +595,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case READV:
     {
         auto* awaitable = static_cast<ReadvAwaitable*>(base);
-        if (awaitable->handleComplete(cqe)) {
+        if (awaitable->handleComplete(cqe, awaitable->m_controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
             addReadv(awaitable->m_controller);
@@ -498,7 +605,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case WRITEV:
     {
         auto* awaitable = static_cast<WritevAwaitable*>(base);
-        if (awaitable->handleComplete(cqe)) {
+        if (awaitable->handleComplete(cqe, awaitable->m_controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
             addWritev(awaitable->m_controller);
@@ -508,7 +615,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case FILEREAD:
     {
         auto* awaitable = static_cast<FileReadAwaitable*>(base);
-        if (awaitable->handleComplete(cqe)) {
+        if (awaitable->handleComplete(cqe, awaitable->m_controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
             addFileRead(awaitable->m_controller);
@@ -518,7 +625,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case FILEWRITE:
     {
         auto* awaitable = static_cast<FileWriteAwaitable*>(base);
-        if (awaitable->handleComplete(cqe)) {
+        if (awaitable->handleComplete(cqe, awaitable->m_controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
             addFileWrite(awaitable->m_controller);
@@ -528,7 +635,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case RECVFROM:
     {
         auto* awaitable = static_cast<RecvFromAwaitable*>(base);
-        if (awaitable->handleComplete(cqe)) {
+        if (awaitable->handleComplete(cqe, awaitable->m_controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
             addRecvFrom(awaitable->m_controller);
@@ -538,7 +645,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case SENDTO:
     {
         auto* awaitable = static_cast<SendToAwaitable*>(base);
-        if (awaitable->handleComplete(cqe)) {
+        if (awaitable->handleComplete(cqe, awaitable->m_controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
             addSendTo(awaitable->m_controller);
@@ -548,7 +655,7 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case FILEWATCH:
     {
         auto* awaitable = static_cast<FileWatchAwaitable*>(base);
-        if (awaitable->handleComplete(cqe)) {
+        if (awaitable->handleComplete(cqe, awaitable->m_controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
             addFileWatch(awaitable->m_controller);
@@ -558,10 +665,29 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
     case SENDFILE:
     {
         auto* awaitable = static_cast<SendFileAwaitable*>(base);
-        if (awaitable->handleComplete(cqe)) {
+        if (awaitable->handleComplete(cqe, awaitable->m_controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
             addSendFile(awaitable->m_controller);
+        }
+        break;
+    }
+    case CUSTOM:
+    {
+        auto* custom = static_cast<CustomAwaitable*>(base);
+        auto* task = custom->front();
+        if (task) {
+            bool done = task->context->handleComplete(cqe, custom->m_controller->m_handle);
+            if (done) {
+                custom->popFront();
+                if (custom->empty()) {
+                    custom->m_waker.wakeUp();
+                } else {
+                    addCustom(custom->m_controller);
+                }
+            } else {
+                addCustom(custom->m_controller);
+            }
         }
         break;
     }
