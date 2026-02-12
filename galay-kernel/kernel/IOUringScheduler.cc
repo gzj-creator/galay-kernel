@@ -325,42 +325,6 @@ int IOUringScheduler::addFileWatch(IOController* controller)
     return 0;
 }
 
-int IOUringScheduler::addRecvNotify(IOController* controller)
-{
-    // 仅注册读事件，不执行IO操作
-    // 用于SSL等需要自定义IO处理的场景
-    // io_uring 使用 poll 来监听可读事件
-    auto awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    io_uring_prep_poll_add(sqe, controller->m_handle.fd, POLLIN);
-    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-    return 0;
-}
-
-int IOUringScheduler::addSendNotify(IOController* controller)
-{
-    // 仅注册写事件，不执行IO操作
-    // 用于SSL等需要自定义IO处理的场景
-    // io_uring 使用 poll 来监听可写事件
-    auto awaitable = controller->getAwaitable<SendNotifyAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    io_uring_prep_poll_add(sqe, controller->m_handle.fd, POLLOUT);
-    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-    return 0;
-}
-
 int IOUringScheduler::remove(IOController* controller)
 {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
@@ -479,483 +443,125 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         return;
     }
 
-    int res = cqe->res;
-
     switch (base->m_sqe_type)
     {
     case ACCEPT:
     {
         auto* awaitable = static_cast<AcceptAwaitable*>(base);
-        if (res >= 0) {
-            GHandle handle { .fd = res };
-            // io_uring 已经直接填充了 awaitable->m_host，传入它作为参数
-            Host host = *awaitable->m_host;
-            if (awaitable->handleComplete(std::move(handle), std::move(host))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 accept
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_accept(sqe, awaitable->m_controller->m_handle.fd,
-                                         awaitable->m_host->sockAddr(),
-                                         awaitable->m_host->addrLen(), 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+        if (awaitable->handleComplete(cqe)) {
+            awaitable->m_waker.wakeUp();
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kAcceptFailed, static_cast<uint32_t>(-res))), Host())) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 accept
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_accept(sqe, awaitable->m_controller->m_handle.fd,
-                                         awaitable->m_host->sockAddr(),
-                                         awaitable->m_host->addrLen(), 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+            addAccept(awaitable->m_controller);
         }
         break;
     }
     case CONNECT:
     {
         auto* awaitable = static_cast<ConnectAwaitable*>(base);
-        if (res == 0) {
-            if (awaitable->handleComplete({})) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 connect
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_connect(sqe, awaitable->m_controller->m_handle.fd,
-                                          awaitable->m_host.sockAddr(),
-                                          *awaitable->m_host.addrLen());
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+        if (awaitable->handleComplete(cqe)) {
+            awaitable->m_waker.wakeUp();
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kConnectFailed, static_cast<uint32_t>(-res))))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 connect
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_connect(sqe, awaitable->m_controller->m_handle.fd,
-                                          awaitable->m_host.sockAddr(),
-                                          *awaitable->m_host.addrLen());
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+            addConnect(awaitable->m_controller);
         }
         break;
     }
     case RECV:
     {
         auto* awaitable = static_cast<RecvAwaitable*>(base);
-        if (res > 0) {
-            Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
-            if (awaitable->handleComplete(std::move(bytes))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 recv
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_recv(sqe, awaitable->m_controller->m_handle.fd,
-                                       awaitable->m_buffer, awaitable->m_length, 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
-        } else if (res == 0) {
-            if (awaitable->handleComplete(std::unexpected(IOError(kDisconnectError, 0)))) {
-                awaitable->m_waker.wakeUp();
-            }
+        if (awaitable->handleComplete(cqe)) {
+            awaitable->m_waker.wakeUp();
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-res))))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 recv
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_recv(sqe, awaitable->m_controller->m_handle.fd,
-                                       awaitable->m_buffer, awaitable->m_length, 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+            addRecv(awaitable->m_controller);
         }
         break;
     }
     case SEND:
     {
         auto* awaitable = static_cast<SendAwaitable*>(base);
-        if (res >= 0) {
-            if (awaitable->handleComplete(static_cast<size_t>(res))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 send
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_send(sqe, awaitable->m_controller->m_handle.fd,
-                                       awaitable->m_buffer, awaitable->m_length, 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+        if (awaitable->handleComplete(cqe)) {
+            awaitable->m_waker.wakeUp();
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res))))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 send
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_send(sqe, awaitable->m_controller->m_handle.fd,
-                                       awaitable->m_buffer, awaitable->m_length, 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+            addSend(awaitable->m_controller);
         }
         break;
     }
     case READV:
     {
         auto* awaitable = static_cast<ReadvAwaitable*>(base);
-        if (res > 0) {
-            if (awaitable->handleComplete(static_cast<size_t>(res))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 readv
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_readv(sqe, awaitable->m_controller->m_handle.fd,
-                                        awaitable->m_iovecs.data(),
-                                        static_cast<unsigned>(awaitable->m_iovecs.size()), 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
-        } else if (res == 0) {
-            if (awaitable->handleComplete(std::unexpected(IOError(kDisconnectError, 0)))) {
-                awaitable->m_waker.wakeUp();
-            }
+        if (awaitable->handleComplete(cqe)) {
+            awaitable->m_waker.wakeUp();
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-res))))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 readv
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_readv(sqe, awaitable->m_controller->m_handle.fd,
-                                        awaitable->m_iovecs.data(),
-                                        static_cast<unsigned>(awaitable->m_iovecs.size()), 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+            addReadv(awaitable->m_controller);
         }
         break;
     }
     case WRITEV:
     {
         auto* awaitable = static_cast<WritevAwaitable*>(base);
-        if (res >= 0) {
-            if (awaitable->handleComplete(static_cast<size_t>(res))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 writev
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_writev(sqe, awaitable->m_controller->m_handle.fd,
-                                         awaitable->m_iovecs.data(),
-                                         static_cast<unsigned>(awaitable->m_iovecs.size()), 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+        if (awaitable->handleComplete(cqe)) {
+            awaitable->m_waker.wakeUp();
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res))))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 writev
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_writev(sqe, awaitable->m_controller->m_handle.fd,
-                                         awaitable->m_iovecs.data(),
-                                         static_cast<unsigned>(awaitable->m_iovecs.size()), 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+            addWritev(awaitable->m_controller);
         }
         break;
     }
     case FILEREAD:
     {
         auto* awaitable = static_cast<FileReadAwaitable*>(base);
-        if (res > 0) {
-            Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
-            if (awaitable->handleComplete(std::move(bytes))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 read
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_read(sqe, awaitable->m_controller->m_handle.fd,
-                                       awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
-        } else if (res == 0) {
-            if (awaitable->handleComplete(Bytes())) {
-                awaitable->m_waker.wakeUp();
-            }
+        if (awaitable->handleComplete(cqe)) {
+            awaitable->m_waker.wakeUp();
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(-res))))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 read
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_read(sqe, awaitable->m_controller->m_handle.fd,
-                                       awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+            addFileRead(awaitable->m_controller);
         }
         break;
     }
     case FILEWRITE:
     {
         auto* awaitable = static_cast<FileWriteAwaitable*>(base);
-        if (res >= 0) {
-            if (awaitable->handleComplete(static_cast<size_t>(res))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 write
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_write(sqe, awaitable->m_controller->m_handle.fd,
-                                        awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+        if (awaitable->handleComplete(cqe)) {
+            awaitable->m_waker.wakeUp();
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(-res))))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 write
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_write(sqe, awaitable->m_controller->m_handle.fd,
-                                        awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+            addFileWrite(awaitable->m_controller);
         }
         break;
     }
     case RECVFROM:
     {
         auto* awaitable = static_cast<RecvFromAwaitable*>(base);
-        if (res > 0) {
-            Bytes bytes = Bytes::fromCString(awaitable->m_buffer, res, res);
-            // io_uring 已经直接填充了 awaitable->m_addr，传入它作为参数
-            Host host = Host::fromSockAddr(awaitable->m_addr);
-            if (awaitable->handleComplete(std::move(bytes), std::move(host))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 recvfrom
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    std::memset(&awaitable->m_msg, 0, sizeof(awaitable->m_msg));
-                    std::memset(&awaitable->m_addr, 0, sizeof(awaitable->m_addr));
-                    awaitable->m_iov.iov_base = awaitable->m_buffer;
-                    awaitable->m_iov.iov_len = awaitable->m_length;
-                    awaitable->m_msg.msg_iov = &awaitable->m_iov;
-                    awaitable->m_msg.msg_iovlen = 1;
-                    awaitable->m_msg.msg_name = &awaitable->m_addr;
-                    awaitable->m_msg.msg_namelen = sizeof(awaitable->m_addr);
-                    io_uring_prep_recvmsg(sqe, awaitable->m_controller->m_handle.fd, &awaitable->m_msg, 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
-        } else if (res == 0) {
-            if (awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, 0)), Host())) {
-                awaitable->m_waker.wakeUp();
-            }
+        if (awaitable->handleComplete(cqe)) {
+            awaitable->m_waker.wakeUp();
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-res))), Host())) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 recvfrom
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    std::memset(&awaitable->m_msg, 0, sizeof(awaitable->m_msg));
-                    std::memset(&awaitable->m_addr, 0, sizeof(awaitable->m_addr));
-                    awaitable->m_iov.iov_base = awaitable->m_buffer;
-                    awaitable->m_iov.iov_len = awaitable->m_length;
-                    awaitable->m_msg.msg_iov = &awaitable->m_iov;
-                    awaitable->m_msg.msg_iovlen = 1;
-                    awaitable->m_msg.msg_name = &awaitable->m_addr;
-                    awaitable->m_msg.msg_namelen = sizeof(awaitable->m_addr);
-                    io_uring_prep_recvmsg(sqe, awaitable->m_controller->m_handle.fd, &awaitable->m_msg, 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+            addRecvFrom(awaitable->m_controller);
         }
         break;
     }
     case SENDTO:
     {
         auto* awaitable = static_cast<SendToAwaitable*>(base);
-        if (res >= 0) {
-            if (awaitable->handleComplete(static_cast<size_t>(res))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 sendto
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    std::memset(&awaitable->m_msg, 0, sizeof(awaitable->m_msg));
-                    awaitable->m_iov.iov_base = const_cast<char*>(awaitable->m_buffer);
-                    awaitable->m_iov.iov_len = awaitable->m_length;
-                    awaitable->m_msg.msg_iov = &awaitable->m_iov;
-                    awaitable->m_msg.msg_iovlen = 1;
-                    awaitable->m_msg.msg_name = const_cast<sockaddr*>(awaitable->m_to.sockAddr());
-                    awaitable->m_msg.msg_namelen = *awaitable->m_to.addrLen();
-                    io_uring_prep_sendmsg(sqe, awaitable->m_controller->m_handle.fd, &awaitable->m_msg, 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+        if (awaitable->handleComplete(cqe)) {
+            awaitable->m_waker.wakeUp();
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res))))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 sendto
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    std::memset(&awaitable->m_msg, 0, sizeof(awaitable->m_msg));
-                    awaitable->m_iov.iov_base = const_cast<char*>(awaitable->m_buffer);
-                    awaitable->m_iov.iov_len = awaitable->m_length;
-                    awaitable->m_msg.msg_iov = &awaitable->m_iov;
-                    awaitable->m_msg.msg_iovlen = 1;
-                    awaitable->m_msg.msg_name = const_cast<sockaddr*>(awaitable->m_to.sockAddr());
-                    awaitable->m_msg.msg_namelen = *awaitable->m_to.addrLen();
-                    io_uring_prep_sendmsg(sqe, awaitable->m_controller->m_handle.fd, &awaitable->m_msg, 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+            addSendTo(awaitable->m_controller);
         }
         break;
     }
     case FILEWATCH:
     {
         auto* awaitable = static_cast<FileWatchAwaitable*>(base);
-        if (res > 0) {
-            struct inotify_event* event = reinterpret_cast<struct inotify_event*>(awaitable->m_buffer);
-            FileWatchResult result;
-            result.isDir = (event->mask & IN_ISDIR) != 0;
-            if (event->len > 0) {
-                result.name = std::string(event->name);
-            }
-            uint32_t mask = 0;
-            if (event->mask & IN_ACCESS)      mask |= static_cast<uint32_t>(FileWatchEvent::Access);
-            if (event->mask & IN_MODIFY)      mask |= static_cast<uint32_t>(FileWatchEvent::Modify);
-            if (event->mask & IN_ATTRIB)      mask |= static_cast<uint32_t>(FileWatchEvent::Attrib);
-            if (event->mask & IN_CLOSE_WRITE) mask |= static_cast<uint32_t>(FileWatchEvent::CloseWrite);
-            if (event->mask & IN_CLOSE_NOWRITE) mask |= static_cast<uint32_t>(FileWatchEvent::CloseNoWrite);
-            if (event->mask & IN_OPEN)        mask |= static_cast<uint32_t>(FileWatchEvent::Open);
-            if (event->mask & IN_MOVED_FROM)  mask |= static_cast<uint32_t>(FileWatchEvent::MovedFrom);
-            if (event->mask & IN_MOVED_TO)    mask |= static_cast<uint32_t>(FileWatchEvent::MovedTo);
-            if (event->mask & IN_CREATE)      mask |= static_cast<uint32_t>(FileWatchEvent::Create);
-            if (event->mask & IN_DELETE)      mask |= static_cast<uint32_t>(FileWatchEvent::Delete);
-            if (event->mask & IN_DELETE_SELF) mask |= static_cast<uint32_t>(FileWatchEvent::DeleteSelf);
-            if (event->mask & IN_MOVE_SELF)   mask |= static_cast<uint32_t>(FileWatchEvent::MoveSelf);
-            result.event = static_cast<FileWatchEvent>(mask);
-            if (awaitable->handleComplete(std::move(result))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 read
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_read(sqe, awaitable->m_controller->m_handle.fd,
-                                       awaitable->m_buffer, awaitable->m_buffer_size, 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
-        } else if (res == 0) {
-            if (awaitable->handleComplete(std::unexpected(IOError(kReadFailed, 0)))) {
-                awaitable->m_waker.wakeUp();
-            }
+        if (awaitable->handleComplete(cqe)) {
+            awaitable->m_waker.wakeUp();
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(-res))))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 read
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_read(sqe, awaitable->m_controller->m_handle.fd,
-                                       awaitable->m_buffer, awaitable->m_buffer_size, 0);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+            addFileWatch(awaitable->m_controller);
         }
-        break;
-    }
-    case RECV_NOTIFY:
-    {
-        // poll 完成，仅唤醒协程，不执行IO操作
-        auto* awaitable = static_cast<RecvNotifyAwaitable*>(base);
-        awaitable->m_waker.wakeUp();
-        break;
-    }
-    case SEND_NOTIFY:
-    {
-        // poll 完成，仅唤醒协程，不执行IO操作
-        auto* awaitable = static_cast<SendNotifyAwaitable*>(base);
-        awaitable->m_waker.wakeUp();
         break;
     }
     case SENDFILE:
     {
         auto* awaitable = static_cast<SendFileAwaitable*>(base);
-
-        // poll 完成后，调用 sendfile 系统调用
-        if (res >= 0) {
-            off_t offset = awaitable->m_offset;
-            ssize_t sentBytes = ::sendfile(awaitable->m_controller->m_handle.fd, awaitable->m_file_fd,
-                                           &offset, awaitable->m_count);
-            if (sentBytes > 0) {
-                if (awaitable->handleComplete(static_cast<size_t>(sentBytes))) {
-                    awaitable->m_waker.wakeUp();
-                } else {
-                    // handleComplete 返回 false，需要重新提交 poll
-                    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                    if (sqe) {
-                        io_uring_prep_poll_add(sqe, awaitable->m_controller->m_handle.fd, POLLOUT);
-                        io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                    }
-                }
-            } else if (sentBytes == 0) {
-                if (awaitable->handleComplete(static_cast<size_t>(0))) {
-                    awaitable->m_waker.wakeUp();
-                }
-            } else {
-                if (awaitable->handleComplete(std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno))))) {
-                    awaitable->m_waker.wakeUp();
-                } else {
-                    // handleComplete 返回 false，需要重新提交 poll
-                    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                    if (sqe) {
-                        io_uring_prep_poll_add(sqe, awaitable->m_controller->m_handle.fd, POLLOUT);
-                        io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                    }
-                }
-            }
+        if (awaitable->handleComplete(cqe)) {
+            awaitable->m_waker.wakeUp();
         } else {
-            if (awaitable->handleComplete(std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res))))) {
-                awaitable->m_waker.wakeUp();
-            } else {
-                // handleComplete 返回 false，需要重新提交 poll
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-                if (sqe) {
-                    io_uring_prep_poll_add(sqe, awaitable->m_controller->m_handle.fd, POLLOUT);
-                    io_uring_sqe_set_data(sqe, static_cast<AwaitableBase*>(awaitable));
-                }
-            }
+            addSendFile(awaitable->m_controller);
         }
         break;
     }

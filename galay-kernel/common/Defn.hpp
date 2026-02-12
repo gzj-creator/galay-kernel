@@ -88,9 +88,7 @@
         FILEWATCH   = 1u << 9,
         RECVFROM    = 1u << 10,
         SENDTO      = 1u << 11,
-        RECV_NOTIFY = 1u << 12,  ///< 仅通知可读，不执行IO操作（用于SSL等自定义IO）
-        SEND_NOTIFY = 1u << 13,  ///< 仅通知可写，不执行IO操作（用于SSL等自定义IO）
-        CUSTOM      = 1u << 14,  ///< 用户自定义
+        CUSTOM      = 1u << 12,  ///< 用户自定义
     };
 
     inline IOEventType operator|(IOEventType a, IOEventType b) {

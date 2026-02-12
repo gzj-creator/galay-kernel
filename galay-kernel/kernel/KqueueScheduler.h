@@ -62,8 +62,6 @@ public:
     int addRecvFrom(IOController* controller) override;
     int addSendTo(IOController* controller) override;
     int addFileWatch(IOController* controller) override;
-    int addRecvNotify(IOController* controller) override;
-    int addSendNotify(IOController* controller) override;
     int addSendFile(IOController* controller) override;
 
     int remove(IOController* controller) override;

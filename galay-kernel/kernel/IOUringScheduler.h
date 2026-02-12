@@ -62,10 +62,6 @@ public:
     int addSendTo(IOController* controller) override;
     int addFileWatch(IOController* controller) override;
 
-    // 通知事件（用于SSL等自定义IO处理）
-    int addRecvNotify(IOController* controller) override;
-    int addSendNotify(IOController* controller) override;
-
     // 零拷贝发送文件
     int addSendFile(IOController* controller) override;
 

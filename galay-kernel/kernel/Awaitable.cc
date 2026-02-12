@@ -246,46 +246,6 @@ void FileWatchAwaitable::FileWatchActionResume(IOController* controller) {
     controller->removeAwaitable(FILEWATCH);
 }
 
-bool RecvNotifyAwaitable::RecvNotifyActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker) {
-#ifdef USE_IOURING
-    awaitable->m_sqe_type = RECV_NOTIFY;
-#endif
-    controller->fillAwaitable(RECV_NOTIFY, awaitable);
-    auto scheduler = waker.getScheduler();
-    if(scheduler->type() != kIOScheduler) {
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if(io_scheduler->addRecvNotify(controller) < 0) {
-        return false;
-    }
-    return true;
-}
-
-void RecvNotifyAwaitable::RecvNotifyActionResume(IOController* controller) {
-    controller->removeAwaitable(RECV_NOTIFY);
-}
-
-bool SendNotifyAwaitable::SendNotifyActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker) {
-#ifdef USE_IOURING
-    awaitable->m_sqe_type = SEND_NOTIFY;
-#endif
-    controller->fillAwaitable(SEND_NOTIFY, awaitable);
-    auto scheduler = waker.getScheduler();
-    if(scheduler->type() != kIOScheduler) {
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if(io_scheduler->addSendNotify(controller) < 0) {
-        return false;
-    }
-    return true;
-}
-
-void SendNotifyAwaitable::SendNotifyActionResume(IOController* controller) {
-    controller->removeAwaitable(SEND_NOTIFY);
-}
-
 bool SendFileAwaitable::SendFileActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker, std::expected<size_t, IOError>& result) {
 #ifdef USE_IOURING
     awaitable->m_sqe_type = SENDFILE;

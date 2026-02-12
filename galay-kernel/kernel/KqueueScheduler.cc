@@ -351,10 +351,6 @@ void KqueueScheduler::processEvent(struct kevent& ev)
                 }
             }
         }
-        else if (t & RECV_NOTIFY) {
-            RecvNotifyAwaitable* awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
-        }
     }
     // ===== 写方向事件 =====
     else if (ev.filter == EVFILT_WRITE) {
@@ -405,10 +401,6 @@ void KqueueScheduler::processEvent(struct kevent& ev)
                     awaitable->m_waker.wakeUp();
                 }
             }
-        }
-        else if (t & SEND_NOTIFY) {
-            SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
         }
     }
     // ===== 文件监控事件 =====
@@ -478,24 +470,6 @@ int KqueueScheduler::addFileWatch(IOController* controller)
     // kqueue 使用 EVFILT_VNODE 监控文件变化
     struct kevent ev;
     EV_SET(&ev, controller->m_handle.fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, fflags, 0, controller);
-    return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
-}
-
-int KqueueScheduler::addRecvNotify(IOController* controller)
-{
-    // 仅注册读事件，不执行IO操作
-    // 用于SSL等需要自定义IO处理的场景
-    struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, controller);
-    return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
-}
-
-int KqueueScheduler::addSendNotify(IOController* controller)
-{
-    // 仅注册写事件，不执行IO操作
-    // 用于SSL等需要自定义IO处理的场景
-    struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 

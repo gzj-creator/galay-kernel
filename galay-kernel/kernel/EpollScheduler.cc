@@ -94,9 +94,9 @@ uint32_t EpollScheduler::buildEpollEvents(IOController* controller)
 {
     uint32_t events = EPOLLET;
     uint32_t t = static_cast<uint32_t>(controller->m_type);
-    if (t & (ACCEPT | RECV | READV | RECVFROM | FILEREAD | FILEWATCH | RECV_NOTIFY))
+    if (t & (ACCEPT | RECV | READV | RECVFROM | FILEREAD | FILEWATCH))
         events |= EPOLLIN;
-    if (t & (CONNECT | SEND | WRITEV | SENDTO | SENDFILE | FILEWRITE | SEND_NOTIFY))
+    if (t & (CONNECT | SEND | WRITEV | SENDTO | SENDFILE | FILEWRITE))
         events |= EPOLLOUT;
     return events;
 }
@@ -443,10 +443,6 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
                 awaitable->m_waker.wakeUp();
             }
         }
-        else if (t & RECV_NOTIFY) {
-            RecvNotifyAwaitable* awaitable = controller->getAwaitable<RecvNotifyAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
-        }
     }
 
     // ===== 写方向事件 =====
@@ -498,10 +494,6 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
                     awaitable->m_waker.wakeUp();
                 }
             }
-        }
-        else if (t & SEND_NOTIFY) {
-            SendNotifyAwaitable* awaitable = controller->getAwaitable<SendNotifyAwaitable>();
-            if (awaitable) awaitable->m_waker.wakeUp();
         }
     }
 
@@ -571,36 +563,6 @@ int EpollScheduler::addFileWatch(IOController* controller)
     int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, controller->m_handle.fd, &ev);
     if (ret == -1 && errno == EEXIST) {
         ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
-    }
-    return ret;
-}
-
-int EpollScheduler::addRecvNotify(IOController* controller)
-{
-    // 仅注册读事件，不执行IO操作
-    // 用于SSL等需要自定义IO处理的场景
-    struct epoll_event ev;
-    ev.events = buildEpollEvents(controller);
-    ev.data.ptr = controller;
-
-    int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
-    if (ret == -1 && errno == ENOENT) {
-        ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, controller->m_handle.fd, &ev);
-    }
-    return ret;
-}
-
-int EpollScheduler::addSendNotify(IOController* controller)
-{
-    // 仅注册写事件，不执行IO操作
-    // 用于SSL等需要自定义IO处理的场景
-    struct epoll_event ev;
-    ev.events = buildEpollEvents(controller);
-    ev.data.ptr = controller;
-
-    int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
-    if (ret == -1 && errno == ENOENT) {
-        ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, controller->m_handle.fd, &ev);
     }
     return ret;
 }

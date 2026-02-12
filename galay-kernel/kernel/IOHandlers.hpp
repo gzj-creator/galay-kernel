@@ -197,6 +197,210 @@ inline std::expected<size_t, IOError> handleSendFile(GHandle socket_handle, int 
 
 } // namespace galay::kernel::io
 
-#endif // defined(USE_KQUEUE) || defined(USE_EPOLL)
+
+#elif defined(USE_IOURING)
+
+#include "galay-kernel/common/Defn.hpp"
+#include "galay-kernel/common/Error.h"
+#include "galay-kernel/common/Bytes.h"
+#include "galay-kernel/common/Host.hpp"
+#include "FileWatchDefs.hpp"
+#include <cerrno>
+#include <expected>
+#include <sys/inotify.h>
+#include <sys/sendfile.h>
+
+namespace galay::kernel::io
+{
+
+inline std::expected<GHandle, IOError> handleAccept(struct io_uring_cqe* cqe)
+{
+    int res = cqe->res;
+    if (res >= 0) {
+        return GHandle{.fd = res};
+    }
+    if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
+        return std::unexpected(IOError(kNotReady, 0));
+    }
+    return std::unexpected(IOError(kAcceptFailed, static_cast<uint32_t>(-res)));
+}
+
+inline std::expected<Bytes, IOError> handleRecv(struct io_uring_cqe* cqe, char* buffer)
+{
+    int res = cqe->res;
+    if (res > 0) {
+        return Bytes::fromCString(buffer, res, res);
+    } else if (res == 0) {
+        return std::unexpected(IOError(kDisconnectError, 0));
+    }
+    if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
+        return std::unexpected(IOError(kNotReady, 0));
+    }
+    return std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-res)));
+}
+
+inline std::expected<size_t, IOError> handleSend(struct io_uring_cqe* cqe)
+{
+    int res = cqe->res;
+    if (res >= 0) {
+        return static_cast<size_t>(res);
+    }
+    if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
+        return std::unexpected(IOError(kNotReady, 0));
+    }
+    return std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res)));
+}
+
+inline std::expected<size_t, IOError> handleReadv(struct io_uring_cqe* cqe)
+{
+    int res = cqe->res;
+    if (res > 0) {
+        return static_cast<size_t>(res);
+    } else if (res == 0) {
+        return std::unexpected(IOError(kDisconnectError, 0));
+    }
+    if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
+        return std::unexpected(IOError(kNotReady, 0));
+    }
+    return std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-res)));
+}
+
+inline std::expected<size_t, IOError> handleWritev(struct io_uring_cqe* cqe)
+{
+    int res = cqe->res;
+    if (res >= 0) {
+        return static_cast<size_t>(res);
+    }
+    if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
+        return std::unexpected(IOError(kNotReady, 0));
+    }
+    return std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res)));
+}
+
+inline std::expected<void, IOError> handleConnect(struct io_uring_cqe* cqe)
+{
+    int res = cqe->res;
+    if (res == 0) {
+        return {};
+    }
+    if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
+        return std::unexpected(IOError(kNotReady, 0));
+    }
+    return std::unexpected(IOError(kConnectFailed, static_cast<uint32_t>(-res)));
+}
+
+inline std::pair<std::expected<Bytes, IOError>, Host> handleRecvFrom(struct io_uring_cqe* cqe, char* buffer, const sockaddr_storage& addr)
+{
+    int res = cqe->res;
+    if (res > 0) {
+        Bytes bytes = Bytes::fromCString(buffer, res, res);
+        Host host = Host::fromSockAddr(addr);
+        return {std::move(bytes), std::move(host)};
+    } else if (res == 0) {
+        return {std::unexpected(IOError(kRecvFailed, 0)), {}};
+    }
+    if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
+        return {std::unexpected(IOError(kNotReady, 0)), {}};
+    }
+    return {std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-res))), {}};
+}
+
+inline std::expected<size_t, IOError> handleSendTo(struct io_uring_cqe* cqe)
+{
+    int res = cqe->res;
+    if (res >= 0) {
+        return static_cast<size_t>(res);
+    }
+    if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
+        return std::unexpected(IOError(kNotReady, 0));
+    }
+    return std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res)));
+}
+
+inline std::expected<Bytes, IOError> handleFileRead(struct io_uring_cqe* cqe, char* buffer)
+{
+    int res = cqe->res;
+    if (res > 0) {
+        return Bytes::fromCString(buffer, res, res);
+    } else if (res == 0) {
+        return Bytes();
+    }
+    if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
+        return std::unexpected(IOError(kNotReady, 0));
+    }
+    return std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(-res)));
+}
+
+inline std::expected<size_t, IOError> handleFileWrite(struct io_uring_cqe* cqe)
+{
+    int res = cqe->res;
+    if (res >= 0) {
+        return static_cast<size_t>(res);
+    }
+    if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
+        return std::unexpected(IOError(kNotReady, 0));
+    }
+    return std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(-res)));
+}
+
+inline std::expected<FileWatchResult, IOError> handleFileWatch(struct io_uring_cqe* cqe, char* buffer)
+{
+    int res = cqe->res;
+    if (res > 0) {
+        struct inotify_event* event = reinterpret_cast<struct inotify_event*>(buffer);
+        FileWatchResult result;
+        result.isDir = (event->mask & IN_ISDIR) != 0;
+        if (event->len > 0) {
+            result.name = std::string(event->name);
+        }
+        uint32_t mask = 0;
+        if (event->mask & IN_ACCESS)       mask |= static_cast<uint32_t>(FileWatchEvent::Access);
+        if (event->mask & IN_MODIFY)       mask |= static_cast<uint32_t>(FileWatchEvent::Modify);
+        if (event->mask & IN_ATTRIB)       mask |= static_cast<uint32_t>(FileWatchEvent::Attrib);
+        if (event->mask & IN_CLOSE_WRITE)  mask |= static_cast<uint32_t>(FileWatchEvent::CloseWrite);
+        if (event->mask & IN_CLOSE_NOWRITE) mask |= static_cast<uint32_t>(FileWatchEvent::CloseNoWrite);
+        if (event->mask & IN_OPEN)         mask |= static_cast<uint32_t>(FileWatchEvent::Open);
+        if (event->mask & IN_MOVED_FROM)   mask |= static_cast<uint32_t>(FileWatchEvent::MovedFrom);
+        if (event->mask & IN_MOVED_TO)     mask |= static_cast<uint32_t>(FileWatchEvent::MovedTo);
+        if (event->mask & IN_CREATE)       mask |= static_cast<uint32_t>(FileWatchEvent::Create);
+        if (event->mask & IN_DELETE)       mask |= static_cast<uint32_t>(FileWatchEvent::Delete);
+        if (event->mask & IN_DELETE_SELF)  mask |= static_cast<uint32_t>(FileWatchEvent::DeleteSelf);
+        if (event->mask & IN_MOVE_SELF)    mask |= static_cast<uint32_t>(FileWatchEvent::MoveSelf);
+        result.event = static_cast<FileWatchEvent>(mask);
+        return result;
+    } else if (res == 0) {
+        return std::unexpected(IOError(kReadFailed, 0));
+    }
+    if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
+        return std::unexpected(IOError(kNotReady, 0));
+    }
+    return std::unexpected(IOError(kReadFailed, static_cast<uint32_t>(-res)));
+}
+
+inline std::expected<size_t, IOError> handleSendFile(struct io_uring_cqe* cqe, GHandle socket_handle, int file_fd, off_t offset, size_t count)
+{
+    int res = cqe->res;
+    if (res < 0) {
+        if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
+            return std::unexpected(IOError(kNotReady, 0));
+        }
+        return std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res)));
+    }
+    // poll 完成后，调用 sendfile 系统调用
+    ssize_t sentBytes = ::sendfile(socket_handle.fd, file_fd, &offset, count);
+    if (sentBytes > 0) {
+        return static_cast<size_t>(sentBytes);
+    } else if (sentBytes == 0) {
+        return static_cast<size_t>(0);
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+        return std::unexpected(IOError(kNotReady, 0));
+    }
+    return std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(errno)));
+}
+
+} // namespace galay::kernel::io
+
+#endif // defined(USE_IOURING)
 
 #endif // GALAY_KERNEL_IOHANDLERS_HPP

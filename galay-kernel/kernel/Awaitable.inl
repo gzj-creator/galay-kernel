@@ -125,24 +125,6 @@ inline std::expected<FileWatchResult, IOError> FileWatchAwaitable::await_resume(
     return std::move(m_result);
 }
 
-inline bool RecvNotifyAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-    return RecvNotifyActionSuspend(this, m_controller, m_waker);
-}
-
-inline void RecvNotifyAwaitable::await_resume() {
-    RecvNotifyActionResume(m_controller);
-}
-
-inline bool SendNotifyAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-    return SendNotifyActionSuspend(this, m_controller, m_waker);
-}
-
-inline void SendNotifyAwaitable::await_resume() {
-    SendNotifyActionResume(m_controller);
-}
-
 inline bool SendFileAwaitable::await_suspend(std::coroutine_handle<> handle) {
     m_waker = Waker(handle);
     return SendFileActionSuspend(this, m_controller, m_waker, m_result);
@@ -158,74 +140,86 @@ inline std::expected<size_t, IOError> SendFileAwaitable::await_resume() {
 
 #ifdef USE_IOURING
 
-inline bool AcceptAwaitable::handleComplete(std::expected<GHandle, IOError>&& result, Host&& host) {
-    if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
-    m_result = std::move(result);
-    *m_host = std::move(host);
-    return true;
-}
-
-inline bool RecvAwaitable::handleComplete(std::expected<Bytes, IOError>&& result) {
+inline bool AcceptAwaitable::handleComplete(struct io_uring_cqe* cqe) {
+    auto result = io::handleAccept(cqe);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool SendAwaitable::handleComplete(std::expected<size_t, IOError>&& result) {
+inline bool RecvAwaitable::handleComplete(struct io_uring_cqe* cqe) {
+    auto result = io::handleRecv(cqe, m_buffer);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool ReadvAwaitable::handleComplete(std::expected<size_t, IOError>&& result) {
+inline bool SendAwaitable::handleComplete(struct io_uring_cqe* cqe) {
+    auto result = io::handleSend(cqe);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool WritevAwaitable::handleComplete(std::expected<size_t, IOError>&& result) {
+inline bool ReadvAwaitable::handleComplete(struct io_uring_cqe* cqe) {
+    auto result = io::handleReadv(cqe);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool ConnectAwaitable::handleComplete(std::expected<void, IOError>&& result) {
+inline bool WritevAwaitable::handleComplete(struct io_uring_cqe* cqe) {
+    auto result = io::handleWritev(cqe);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool RecvFromAwaitable::handleComplete(std::expected<Bytes, IOError>&& result, Host&& from) {
+inline bool ConnectAwaitable::handleComplete(struct io_uring_cqe* cqe) {
+    auto result = io::handleConnect(cqe);
+    if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
+    m_result = std::move(result);
+    return true;
+}
+
+inline bool RecvFromAwaitable::handleComplete(struct io_uring_cqe* cqe) {
+    auto [result, from] = io::handleRecvFrom(cqe, m_buffer, m_addr);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     if(m_from) { *m_from = std::move(from); }
     return true;
 }
 
-inline bool SendToAwaitable::handleComplete(std::expected<size_t, IOError>&& result) {
+inline bool SendToAwaitable::handleComplete(struct io_uring_cqe* cqe) {
+    auto result = io::handleSendTo(cqe);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool FileReadAwaitable::handleComplete(std::expected<Bytes, IOError>&& result) {
+inline bool FileReadAwaitable::handleComplete(struct io_uring_cqe* cqe) {
+    auto result = io::handleFileRead(cqe, m_buffer);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool FileWriteAwaitable::handleComplete(std::expected<size_t, IOError>&& result) {
+inline bool FileWriteAwaitable::handleComplete(struct io_uring_cqe* cqe) {
+    auto result = io::handleFileWrite(cqe);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool FileWatchAwaitable::handleComplete(std::expected<FileWatchResult, IOError>&& result) {
+inline bool FileWatchAwaitable::handleComplete(struct io_uring_cqe* cqe) {
+    auto result = io::handleFileWatch(cqe, m_buffer);
+    if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool SendFileAwaitable::handleComplete(std::expected<size_t, IOError>&& result) {
+inline bool SendFileAwaitable::handleComplete(struct io_uring_cqe* cqe) {
+    auto result = io::handleSendFile(cqe, m_controller->m_handle, m_file_fd, m_offset, m_count);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;

@@ -28,20 +28,20 @@
 #include "galay-kernel/common/Bytes.h"
 #include "galay-kernel/common/Host.hpp"
 #include "Timeout.hpp"
+#include "FileWatchDefs.hpp"
 #include "Waker.h"
 #include <coroutine>
 #include <cstddef>
 #include <expected>
 #include <vector>
 #include <sys/uio.h>
+#include <list>
 
 #ifdef USE_EPOLL
 #include <libaio.h>
 #endif
 
-#if !defined(USE_IOURING)
 #include "IOHandlers.hpp"
-#endif
 
 #include "IOController.hpp"
 
@@ -99,7 +99,7 @@ struct AcceptAwaitable: public AwaitableBase, public TimeoutSupport<AcceptAwaita
      * @return true 唤醒，false继续监听
      */
 #ifdef USE_IOURING
-    virtual bool handleComplete(std::expected<GHandle, IOError>&& result, Host&& host);
+    virtual bool handleComplete(struct io_uring_cqe* cqe);
 #else
     virtual bool handleComplete();
 #endif
@@ -175,7 +175,7 @@ struct RecvAwaitable: public AwaitableBase, public TimeoutSupport<RecvAwaitable>
      * @return true 唤醒，false继续监听
      */
 #ifdef USE_IOURING
-    virtual bool handleComplete(std::expected<Bytes, IOError>&& result);
+    virtual bool handleComplete(struct io_uring_cqe* cqe);
 #else
     virtual bool handleComplete();
 #endif
@@ -245,7 +245,7 @@ struct SendAwaitable: public AwaitableBase, public TimeoutSupport<SendAwaitable>
      * @return true 唤醒，false继续监听
      */
 #ifdef USE_IOURING
-    virtual bool handleComplete(std::expected<size_t, IOError>&& result);
+    virtual bool handleComplete(struct io_uring_cqe* cqe);
 #else
     virtual bool handleComplete();
 #endif
@@ -321,7 +321,7 @@ struct ReadvAwaitable: public AwaitableBase, public TimeoutSupport<ReadvAwaitabl
      * @return true 唤醒，false继续监听
      */
 #ifdef USE_IOURING
-    virtual bool handleComplete(std::expected<size_t, IOError>&& result);
+    virtual bool handleComplete(struct io_uring_cqe* cqe);
 #else
     virtual bool handleComplete();
 #endif
@@ -396,7 +396,7 @@ struct WritevAwaitable: public AwaitableBase, public TimeoutSupport<WritevAwaita
      * @return true 唤醒，false继续监听
      */
 #ifdef USE_IOURING
-    virtual bool handleComplete(std::expected<size_t, IOError>&& result);
+    virtual bool handleComplete(struct io_uring_cqe* cqe);
 #else
     virtual bool handleComplete();
 #endif
@@ -470,7 +470,7 @@ struct ConnectAwaitable: public AwaitableBase, public TimeoutSupport<ConnectAwai
      * @return true 唤醒，false继续监听
      */
 #ifdef USE_IOURING
-    virtual bool handleComplete(std::expected<void, IOError>&& result);
+    virtual bool handleComplete(struct io_uring_cqe* cqe);
 #else
     virtual bool handleComplete();
 #endif
@@ -589,7 +589,7 @@ struct RecvFromAwaitable: public AwaitableBase, public TimeoutSupport<RecvFromAw
      * @return true 唤醒，false继续监听
      */
 #ifdef USE_IOURING
-    virtual bool handleComplete(std::expected<Bytes, IOError>&& result, Host&& from);
+    virtual bool handleComplete(struct io_uring_cqe* cqe);
 #else
     virtual bool handleComplete();
 #endif
@@ -674,7 +674,7 @@ struct SendToAwaitable: public AwaitableBase, public TimeoutSupport<SendToAwaita
      * @return true 唤醒，false继续监听
      */
 #ifdef USE_IOURING
-    virtual bool handleComplete(std::expected<size_t, IOError>&& result);
+    virtual bool handleComplete(struct io_uring_cqe* cqe);
 #else
     virtual bool handleComplete();
 #endif
@@ -763,7 +763,7 @@ struct FileReadAwaitable: public AwaitableBase, public TimeoutSupport<FileReadAw
      * @return true 唤醒，false继续监听
      */
 #ifdef USE_IOURING
-    virtual bool handleComplete(std::expected<Bytes, IOError>&& result);
+    virtual bool handleComplete(struct io_uring_cqe* cqe);
 #else
     virtual bool handleComplete();
 #endif
@@ -838,7 +838,7 @@ struct FileWriteAwaitable: public AwaitableBase, public TimeoutSupport<FileWrite
      * @return true 唤醒，false继续监听
      */
 #ifdef USE_IOURING
-    virtual bool handleComplete(std::expected<size_t, IOError>&& result);
+    virtual bool handleComplete(struct io_uring_cqe* cqe);
 #else
     virtual bool handleComplete();
 #endif
@@ -862,51 +862,8 @@ struct FileWriteAwaitable: public AwaitableBase, public TimeoutSupport<FileWrite
 #endif
 };
 
-/**
- * @brief 文件监控事件类型
- */
-enum class FileWatchEvent : uint32_t {
-    None        = 0,
-    Access      = 0x00000001,  ///< 文件被访问
-    Modify      = 0x00000002,  ///< 文件被修改
-    Attrib      = 0x00000004,  ///< 文件属性变化
-    CloseWrite  = 0x00000008,  ///< 可写文件关闭
-    CloseNoWrite= 0x00000010,  ///< 不可写文件关闭
-    Open        = 0x00000020,  ///< 文件被打开
-    MovedFrom   = 0x00000040,  ///< 文件被移出
-    MovedTo     = 0x00000080,  ///< 文件被移入
-    Create      = 0x00000100,  ///< 文件被创建
-    Delete      = 0x00000200,  ///< 文件被删除
-    DeleteSelf  = 0x00000400,  ///< 监控目标被删除
-    MoveSelf    = 0x00000800,  ///< 监控目标被移动
-    All         = 0x00000FFF,  ///< 所有事件
-};
-
-inline FileWatchEvent operator|(FileWatchEvent a, FileWatchEvent b) {
-    return static_cast<FileWatchEvent>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
-}
-
-inline FileWatchEvent operator&(FileWatchEvent a, FileWatchEvent b) {
-    return static_cast<FileWatchEvent>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
-}
-
-/**
- * @brief 文件监控结果
- */
-struct FileWatchResult {
-    FileWatchEvent event;       ///< 触发的事件类型
-    std::string name;           ///< 相关文件名（目录监控时有效）
-    bool isDir;                 ///< 是否是目录
-
-    /**
-     * @brief 检查是否包含指定事件
-     * @param check 要检查的事件类型
-     * @return 是否包含该事件
-     */
-    bool has(FileWatchEvent check) const {
-        return (static_cast<uint32_t>(event) & static_cast<uint32_t>(check)) != 0;
-    }
-};
+// FileWatchEvent and FileWatchResult are defined in FileWatchDefs.hpp
+// (included via IOHandlers.hpp)
 
 /**
  * @brief 文件监控操作的可等待对象
@@ -971,7 +928,7 @@ struct FileWatchAwaitable: public AwaitableBase, public TimeoutSupport<FileWatch
      * @return true 唤醒，false继续监听
      */
 #ifdef USE_IOURING
-    virtual bool handleComplete(std::expected<FileWatchResult, IOError>&& result);
+    virtual bool handleComplete(struct io_uring_cqe* cqe);
 #else
     virtual bool handleComplete();
 #endif
@@ -1005,127 +962,6 @@ struct FileWatchAwaitable: public AwaitableBase, public TimeoutSupport<FileWatch
     std::expected<FileWatchResult, IOError> m_result;   ///< 操作结果
 };
 
-/**
- * @brief Recv通知操作的可等待对象
- *
- * @details 仅等待fd可读，不执行实际IO操作。
- * 用于SSL等需要自定义IO处理的场景。
- * co_await后协程被唤醒，由调用者自己执行IO操作。
- *
- * @note 事件就绪时只唤醒协程，不会调用recv()
- */
-struct RecvNotifyAwaitable: public AwaitableBase, public TimeoutSupport<RecvNotifyAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false，需要异步等待
-     */
-    static bool RecvNotifyActionReady() { return false; }
-
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool RecvNotifyActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker);
-
-    /**
-     * @brief 独立的 resume 操作
-     * @param controller IO控制器
-     */
-    static void RecvNotifyActionResume(IOController* controller);
-
-    /**
-     * @brief 构造函数
-     * @param controller IO控制器
-     */
-    RecvNotifyAwaitable(IOController* controller)
-        : m_controller(controller) {}
-
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false
-     */
-    bool await_ready() { return RecvNotifyActionReady(); }
-
-    /**
-     * @brief 挂起协程并注册IO事件
-     * @param handle 当前协程句柄
-     * @return true表示挂起，false表示立即完成
-     */
-    bool await_suspend(std::coroutine_handle<> handle);
-
-    /**
-     * @brief 恢复时返回
-     * @return void（调用者需要自己执行IO操作）
-     */
-    void await_resume();
-
-    IOController* m_controller;                ///< IO控制器
-    Waker m_waker;                             ///< 协程唤醒器
-};
-
-/**
- * @brief Send通知操作的可等待对象
- *
- * @details 仅等待fd可写，不执行实际IO操作。
- * 用于SSL等需要自定义IO处理的场景。
- * co_await后协程被唤醒，由调用者自己执行IO操作。
- *
- * @note 事件就绪时只唤醒协程，不会调用send()
- */
-struct SendNotifyAwaitable: public AwaitableBase, public TimeoutSupport<SendNotifyAwaitable> {
-    /**
-     * @brief 独立的 ready 操作
-     * @return 始终返回false，需要异步等待
-     */
-    static bool SendNotifyActionReady() { return false; }
-
-    /**
-     * @brief 独立的 suspend 操作
-     * @param awaitable Awaitable对象指针
-     * @param controller IO控制器
-     * @param waker 协程唤醒器
-     * @return true表示挂起，false表示立即完成
-     */
-    static bool SendNotifyActionSuspend(AwaitableBase* awaitable, IOController* controller, Waker& waker);
-
-    /**
-     * @brief 独立的 resume 操作
-     * @param controller IO控制器
-     */
-    static void SendNotifyActionResume(IOController* controller);
-
-    /**
-     * @brief 构造函数
-     * @param controller IO控制器
-     */
-    SendNotifyAwaitable(IOController* controller)
-        : m_controller(controller) {}
-
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false
-     */
-    bool await_ready() { return SendNotifyActionReady(); }
-
-    /**
-     * @brief 挂起协程并注册IO事件
-     * @param handle 当前协程句柄
-     * @return true表示挂起，false表示立即完成
-     */
-    bool await_suspend(std::coroutine_handle<> handle);
-
-    /**
-     * @brief 恢复时返回
-     * @return void（调用者需要自己执行IO操作）
-     */
-    void await_resume();
-
-    IOController* m_controller;                ///< IO控制器
-    Waker m_waker;                             ///< 协程唤醒器
-};
 
 /**
  * @brief SendFile操作的可等待对象
@@ -1180,7 +1016,7 @@ struct SendFileAwaitable: public AwaitableBase, public TimeoutSupport<SendFileAw
      * @return true 唤醒，false继续监听
      */
 #ifdef USE_IOURING
-    virtual bool handleComplete(std::expected<size_t, IOError>&& result);
+    virtual bool handleComplete(struct io_uring_cqe* cqe);
 #else
     virtual bool handleComplete();
 #endif
@@ -1211,6 +1047,25 @@ struct SendFileAwaitable: public AwaitableBase, public TimeoutSupport<SendFileAw
     Waker m_waker;                              ///< 协程唤醒器
     std::expected<size_t, IOError> m_result;    ///< 操作结果
 };
+
+// struct ChainAwaitable: public AwaitableBase, public TimeoutSupport<ChainAwaitable> {
+
+
+//     bool handleComplete() {
+//         //头部事件完成
+//         while(handleHeadEvent(m_lists.front().first, m_lists.front().second)) {
+//             m_lists.pop_front();
+//         }
+//         if (!m_lists.empty()) {
+
+//         }
+//     }
+
+//     virtual bool handleHeadEvent(IOEventType type, AwaitableBase* awaitable) = 0;
+//     std::list<std::pair<IOEventType, AwaitableBase*>> m_pending_lists;
+//     std::list<std::a>
+// };
+
 
 } // namespace galay::kernel
 
