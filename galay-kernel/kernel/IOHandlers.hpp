@@ -9,7 +9,9 @@
 #include "galay-kernel/common/Host.hpp"
 #include <sys/socket.h>
 #include <sys/uio.h>
+#ifdef USE_EPOLL
 #include <sys/sendfile.h>
+#endif
 #include <unistd.h>
 #include <cerrno>
 #include <expected>
