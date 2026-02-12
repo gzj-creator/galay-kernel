@@ -18,6 +18,19 @@ namespace galay::kernel
  * - 支持同时 RECV 和 SEND
  * - !!! 不允许跨调度器执行(非线程安全)
  */
+struct IOController;
+
+#ifdef USE_IOURING
+/**
+ * @brief SQE 标签，生命周期与 IOController 绑定
+ * @details 用作 io_uring sqe 的 user_data，避免超时销毁 awaitable 后 CQE 解引用野指针
+ */
+struct SqeTag {
+    IOController* owner;
+    uint8_t slot;  // IOController::READ=0, IOController::WRITE=1
+};
+#endif
+
 struct IOController {
     /**
      * @brief IO操作索引（用于数组访问）
@@ -32,7 +45,11 @@ struct IOController {
      * @brief 构造函数
      */
     IOController(GHandle handle)
-        : m_handle(handle) {}
+        : m_handle(handle)
+#ifdef USE_IOURING
+        , m_sqe_tag{{this, READ}, {this, WRITE}}
+#endif
+    {}
 
     /**
      * @brief 填充Awaitable信息（支持 RECVWITHSEND 状态机）
@@ -50,6 +67,9 @@ struct IOController {
     GHandle m_handle = GHandle::invalid();
     IOEventType m_type = IOEventType::INVALID;  ///< 当前IO事件类型
     void* m_awaitable[IOController::SIZE] = {nullptr, nullptr};
+#ifdef USE_IOURING
+    SqeTag m_sqe_tag[SIZE];
+#endif
 
     template<typename T>
     T* getAwaitable() { return nullptr; }
