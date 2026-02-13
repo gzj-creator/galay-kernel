@@ -215,7 +215,7 @@ int KqueueScheduler::addCustom(IOController* controller)
         if (done) { custom->popFront(); continue; }
         return processCustom(task->type, controller);
     }
-    return OK;  // 队列空，唤醒
+    return OK;  // 队列空，由调用方决定是否唤醒
 }
 
 int KqueueScheduler::remove(IOController* controller)
@@ -452,7 +452,9 @@ void KqueueScheduler::processEvent(struct kevent& ev)
                     if (custom->empty()) {
                         custom->m_waker.wakeUp();
                     } else {
-                        addCustom(controller);
+                        if (addCustom(controller) == OK) {
+                            custom->m_waker.wakeUp();
+                        }
                     }
                 } else {
                     processCustom(task->type, controller);

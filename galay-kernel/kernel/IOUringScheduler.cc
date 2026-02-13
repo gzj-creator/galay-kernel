@@ -334,7 +334,7 @@ int IOUringScheduler::addCustom(IOController* controller)
         if (done) { custom->popFront(); continue; }
         return submitCustomSqe(task->type, task->context, controller);
     }
-    return OK;  // 队列空，唤醒
+    return OK;  // 队列空，由调用方决定是否唤醒
 }
 
 int IOUringScheduler::submitCustomSqe(IOEventType type, IOContextBase* ctx, IOController* controller)
@@ -686,7 +686,9 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
                 if (custom->empty()) {
                     custom->m_waker.wakeUp();
                 } else {
-                    addCustom(controller);
+                    if (addCustom(controller) == OK) {
+                        custom->m_waker.wakeUp();
+                    }
                 }
             } else {
                 addCustom(controller);

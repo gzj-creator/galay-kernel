@@ -509,7 +509,9 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
                     if (custom->empty()) {
                         custom->m_waker.wakeUp();
                     } else {
-                        addCustom(controller);
+                        if (addCustom(controller) == OK) {
+                            custom->m_waker.wakeUp();
+                        }
                     }
                 } else {
                     processCustom(task->type, controller);
@@ -597,7 +599,7 @@ int EpollScheduler::addCustom(IOController* controller)
         if (done) { custom->popFront(); continue; }
         return processCustom(task->type, controller);
     }
-    return OK;  // 队列空，唤醒
+    return OK;  // 队列空，由调用方决定是否唤醒
 }
 
 int EpollScheduler::processCustom(IOEventType type, IOController* controller)
