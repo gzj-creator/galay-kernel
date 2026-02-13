@@ -5,8 +5,18 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX /usr/local CACHE PATH "Install path prefix" FORCE)
 endif()
 
-# 库类型选项
+# 构建目标选项
+option(BUILD_TESTS "Build test executables" ON)
+option(BUILD_BENCHMARKS "Build benchmark executables" ON)
+option(BUILD_EXAMPLES "Build example executables" ON)
+
+# 库类型选项（CMake 标准变量）
 option(BUILD_SHARED_LIBS "Build shared library instead of static" OFF)
+
+# 日志选项
+option(ENABLE_LOG "Enable logging with spdlog" ON)
+# Keep this project header-only for spdlog to avoid linking against system libspdlog.a (often non-PIC).
+set(SPDLOG_USE_HEADER_ONLY ON CACHE BOOL "Use spdlog header-only target (avoid linking libspdlog)" FORCE)
 
 # IO后端选项
 option(DISABLE_IOURING "Disable io_uring and use epoll on Linux" ON)

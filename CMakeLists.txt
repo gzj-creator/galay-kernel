@@ -7,12 +7,8 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# 构建选项
-option(BUILD_TESTS "Build test executables" ON)
-option(BUILD_BENCHMARKS "Build benchmark executables" ON)
-option(BUILD_EXAMPLES "Build example executables" ON)
-option(BUILD_SHARED_LIBS "Build shared library" OFF)
-option(ENABLE_LOG "Enable logging with spdlog" ON)
+# 构建选项 / 平台选项
+include(cmake/option.cmake)
 
 # 设置构建类型
 if(NOT CMAKE_BUILD_TYPE)
@@ -33,9 +29,6 @@ file(COPY ${CMAKE_SOURCE_DIR}/scripts
      DESTINATION ${CMAKE_BINARY_DIR}
      FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 
-# 包含选项配置
-include(cmake/option.cmake)
-
 # 查找spdlog
 if(ENABLE_LOG)
     find_package(spdlog QUIET)
@@ -48,6 +41,50 @@ if(ENABLE_LOG)
         )
         FetchContent_MakeAvailable(spdlog)
     endif()
+
+    # Prefer header-only to avoid linking against a non-PIC libspdlog.a when building shared libs.
+    if(SPDLOG_USE_HEADER_ONLY)
+        if(TARGET spdlog::spdlog_header_only)
+            set(GALAY_SPDLOG_TARGET spdlog::spdlog_header_only)
+        elseif(TARGET spdlog::spdlog)
+            # Some spdlog package installs don't export spdlog::spdlog_header_only. Create a shim
+            # that reuses spdlog::spdlog's usage requirements but forces header-only mode.
+            add_library(galay_spdlog_header_only INTERFACE)
+
+            get_target_property(_galay_spdlog_incs spdlog::spdlog INTERFACE_INCLUDE_DIRECTORIES)
+            if(_galay_spdlog_incs)
+                target_include_directories(galay_spdlog_header_only INTERFACE ${_galay_spdlog_incs})
+            endif()
+
+            get_target_property(_galay_spdlog_links spdlog::spdlog INTERFACE_LINK_LIBRARIES)
+            if(_galay_spdlog_links)
+                # Don't accidentally re-introduce the compiled spdlog library via usage requirements.
+                list(REMOVE_ITEM _galay_spdlog_links spdlog::spdlog)
+                target_link_libraries(galay_spdlog_header_only INTERFACE ${_galay_spdlog_links})
+            endif()
+
+            get_target_property(_galay_spdlog_defs spdlog::spdlog INTERFACE_COMPILE_DEFINITIONS)
+            if(_galay_spdlog_defs)
+                list(REMOVE_ITEM _galay_spdlog_defs SPDLOG_COMPILED_LIB SPDLOG_SHARED_LIB SPDLOG_EXPORTS)
+                target_compile_definitions(galay_spdlog_header_only INTERFACE ${_galay_spdlog_defs})
+            endif()
+            target_compile_definitions(galay_spdlog_header_only INTERFACE SPDLOG_HEADER_ONLY)
+
+            add_library(spdlog::spdlog_header_only ALIAS galay_spdlog_header_only)
+            set(GALAY_SPDLOG_TARGET spdlog::spdlog_header_only)
+        else()
+            message(FATAL_ERROR "ENABLE_LOG=ON but spdlog targets were not created by find_package()/FetchContent.")
+        endif()
+    else()
+        if(TARGET spdlog::spdlog)
+            set(GALAY_SPDLOG_TARGET spdlog::spdlog)
+        elseif(TARGET spdlog::spdlog_header_only)
+            set(GALAY_SPDLOG_TARGET spdlog::spdlog_header_only)
+        else()
+            message(FATAL_ERROR "ENABLE_LOG=ON but spdlog targets were not created by find_package()/FetchContent.")
+        endif()
+    endif()
+
     add_compile_definitions(USE_LOG)
 endif()
 
