@@ -1,4 +1,4 @@
-# UDP Socket 测试与压测报告
+# 04. UDP 性能测试
 
 **测试日期**: 2026-01-01
 **测试平台**: Linux (Epoll)
@@ -11,7 +11,7 @@
 
 ### 1.1 测试配置
 
-- **测试程序**: `test_udp_socket`
+- **测试程序**: `T6-UdpServer` + `T7-UdpClient`
 - **调度器**: EpollScheduler (Linux epoll)
 - **测试场景**: UDP Echo 服务器/客户端
 - **消息数量**: 3条消息
@@ -172,12 +172,10 @@ Average Throughput:
 ### 4.2 编译配置
 
 ```cmake
-# CMakeLists.txt 配置
-add_executable(test_udp_socket test_udp_socket.cc)
-target_link_libraries(test_udp_socket PRIVATE galay-kernel)
-
-add_executable(benchmark_udp_socket benchmark_udp_socket.cc)
-target_link_libraries(benchmark_udp_socket PRIVATE galay-kernel)
+# 相关目标（仓库已配置）
+add_executable(T6-UdpServer test/T6-UdpServer.cc)
+add_executable(T7-UdpClient test/T7-UdpClient.cc)
+add_executable(B6-Udp benchmark/B6-Udp.cc)
 ```
 
 ---
@@ -318,27 +316,28 @@ constexpr size_t MAX_UDP_SIZE = 65507; // IPv4最大UDP负载
 # 编译
 cd build
 cmake ..
-make test_udp_socket benchmark_udp_socket
+cmake --build . --target T6-UdpServer T7-UdpClient B6-Udp
 
 # 运行基础测试
-./bin/test_udp_socket
+./bin/T6-UdpServer
+./bin/T7-UdpClient
 
 # 运行性能压测
-./bin/benchmark_udp_socket
+./bin/B6-Udp
 ```
 
 ### 9.2 参考文档
 
-- [API文档](../docs/api.md#udpsocket)
+- [网络 IO 文档](07-网络IO.md#udpsocket)
 - [TcpSocket实现](../galay-kernel/async/TcpSocket.h)
-- [调度器文档](../docs/api.md#调度器)
+- [调度器文档](05-调度器.md)
 
 ### 9.3 相关文件
 
 - 实现: `galay-kernel/async/UdpSocket.{h,cc}`
-- 测试: `test/test_udp_socket.cc`
-- 压测: `test/benchmark_udp_socket.cc`
-- 文档: `docs/api.md`
+- 功能测试: `test/T6-UdpServer.cc`、`test/T7-UdpClient.cc`
+- 压测: `benchmark/B6-Udp.cc`
+- 文档: `docs/07-网络IO.md`
 
 ---
 
