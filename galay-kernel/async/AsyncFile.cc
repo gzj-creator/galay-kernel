@@ -27,6 +27,9 @@ AsyncFile::AsyncFile(AsyncFile&& other) noexcept
 AsyncFile& AsyncFile::operator=(AsyncFile&& other) noexcept
 {
     if (this != &other) {
+        if (m_controller.m_handle != GHandle::invalid()) {
+            ::close(m_controller.m_handle.fd);
+        }
         m_controller = std::move(other.m_controller);
     }
     return *this;

@@ -78,6 +78,13 @@ cmake .. -DENABLE_CPP23_MODULES=ON
 cmake --build . -j
 ```
 
+模块能力生效规则（参考 `galay-rpc`）：
+
+- CMake 版本需 `>= 3.28`
+- Generator 需支持模块依赖扫描（推荐 `Ninja` / `Visual Studio`）
+- 当前项目不支持 `AppleClang` 的模块构建路径
+- 仅当以上条件满足时，`ENABLE_CPP23_MODULES=ON` 才会实际生效（`GALAY_KERNEL_CPP23_MODULES_EFFECTIVE=ON`）
+
 示例：
 
 ```cpp
@@ -89,9 +96,49 @@ int main() {
 }
 ```
 
+模块示例目标（启用 `ENABLE_CPP23_MODULES` 后可构建）：
+
+- `E1-SendfileExampleImport`
+- `E2-TcpEchoServerImport`
+- `E3-TcpClientImport`
+- `E4-CoroutineBasicImport`
+- `E5-UdpEchoImport`
+- `E6-MpscChannelImport`
+- `E7-UnsafeChannelImport`
+- `E8-AsyncSyncImport`
+- `E9-TimerSleepImport`
+
+示例目录结构（参考 `galay-mysql`）：
+
+```text
+example/
+├── common/   # 示例共享配置
+├── include/  # 传统头文件版本
+└── import/   # C++23 模块 import 版本
+```
+
+include 示例目标（默认可构建）：
+
+- `E1-SendfileExample` -> `example/include/E1-SendfileExample.cc`
+- `E2-TcpEchoServer` -> `example/include/E2-TcpEchoServer.cc`
+- `E3-TcpClient` -> `example/include/E3-TcpClient.cc`
+- `E4-CoroutineBasic` -> `example/include/E4-CoroutineBasic.cc`
+- `E5-UdpEcho` -> `example/include/E5-UdpEcho.cc`
+
+示例构建命令：
+
+```bash
+# include 示例（默认）
+cmake --build . --target E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-CoroutineBasic E5-UdpEcho -j
+
+# import 示例（需先 cmake .. -DENABLE_CPP23_MODULES=ON）
+cmake --build . --target E1-SendfileExampleImport E2-TcpEchoServerImport E3-TcpClientImport E4-CoroutineBasicImport E5-UdpEchoImport E6-MpscChannelImport E7-UnsafeChannelImport E8-AsyncSyncImport E9-TimerSleepImport -j
+```
+
 限制：
 
 - 需要 CMake 3.28+（`FILE_SET CXX_MODULES`）
+- 推荐使用 Ninja/Visual Studio 生成器构建模块
 - 当前项目暂不支持 AppleClang 的模块构建路径
 
 ## 快速示例

@@ -51,6 +51,66 @@ struct IOController {
 #endif
     {}
 
+    IOController(const IOController& other) noexcept
+        : m_handle(other.m_handle)
+        , m_type(other.m_type)
+        , m_awaitable{other.m_awaitable[READ], other.m_awaitable[WRITE]}
+#ifdef USE_IOURING
+        , m_sqe_tag{{this, READ}, {this, WRITE}}
+#endif
+    {}
+
+    IOController& operator=(const IOController& other) noexcept {
+        if (this != &other) {
+            m_handle = other.m_handle;
+            m_type = other.m_type;
+            m_awaitable[READ] = other.m_awaitable[READ];
+            m_awaitable[WRITE] = other.m_awaitable[WRITE];
+#ifdef USE_IOURING
+            m_sqe_tag[READ] = {this, READ};
+            m_sqe_tag[WRITE] = {this, WRITE};
+#endif
+        }
+        return *this;
+    }
+
+    IOController(IOController&& other) noexcept
+        : m_handle(other.m_handle)
+        , m_type(other.m_type)
+        , m_awaitable{other.m_awaitable[READ], other.m_awaitable[WRITE]}
+#ifdef USE_IOURING
+        , m_sqe_tag{{this, READ}, {this, WRITE}}
+#endif
+    {
+        other.resetMovedFrom();
+    }
+
+    IOController& operator=(IOController&& other) noexcept {
+        if (this != &other) {
+            m_handle = other.m_handle;
+            m_type = other.m_type;
+            m_awaitable[READ] = other.m_awaitable[READ];
+            m_awaitable[WRITE] = other.m_awaitable[WRITE];
+#ifdef USE_IOURING
+            m_sqe_tag[READ] = {this, READ};
+            m_sqe_tag[WRITE] = {this, WRITE};
+#endif
+            other.resetMovedFrom();
+        }
+        return *this;
+    }
+
+    void resetMovedFrom() noexcept {
+        m_handle = GHandle::invalid();
+        m_type = IOEventType::INVALID;
+        m_awaitable[READ] = nullptr;
+        m_awaitable[WRITE] = nullptr;
+#ifdef USE_IOURING
+        m_sqe_tag[READ] = {this, READ};
+        m_sqe_tag[WRITE] = {this, WRITE};
+#endif
+    }
+
     /**
      * @brief 填充Awaitable信息（支持 RECVWITHSEND 状态机）
      * @param type IO事件类型

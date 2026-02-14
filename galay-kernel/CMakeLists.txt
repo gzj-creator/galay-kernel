@@ -49,15 +49,7 @@ set_target_properties(galay-kernel PROPERTIES
 )
 
 # 实验性 C++23 模块门面（import galay.kernel）
-if(ENABLE_CPP23_MODULES)
-    if(CMAKE_VERSION VERSION_LESS 3.28)
-        message(FATAL_ERROR "ENABLE_CPP23_MODULES requires CMake 3.28+ (for FILE_SET CXX_MODULES)")
-    endif()
-
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-        message(FATAL_ERROR "ENABLE_CPP23_MODULES is not supported on AppleClang in this project yet.")
-    endif()
-
+if(GALAY_KERNEL_CPP23_MODULES_EFFECTIVE)
     add_library(galay-kernel-modules STATIC)
     target_link_libraries(galay-kernel-modules PUBLIC galay-kernel)
 
@@ -72,8 +64,9 @@ if(ENABLE_CPP23_MODULES)
         PUBLIC
             FILE_SET CXX_MODULES
             BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/module
-            FILES ${CMAKE_CURRENT_SOURCE_DIR}/module/galay_kernel.ixx
+            FILES ${CMAKE_CURRENT_SOURCE_DIR}/module/galay.kernel.cppm
     )
+    set_target_properties(galay-kernel-modules PROPERTIES CXX_SCAN_FOR_MODULES ON)
 
     set_target_properties(galay-kernel-modules PROPERTIES
         VERSION ${PROJECT_VERSION}
@@ -91,7 +84,7 @@ install(TARGETS galay-kernel
     INCLUDES DESTINATION include
 )
 
-if(ENABLE_CPP23_MODULES)
+if(GALAY_KERNEL_CPP23_MODULES_EFFECTIVE)
     install(TARGETS galay-kernel-modules
         EXPORT galay-kernel-targets
         LIBRARY DESTINATION lib
@@ -109,7 +102,7 @@ install(DIRECTORY async common kernel concurrency protocol
     PATTERN "*.h"
     PATTERN "*.hpp"
     PATTERN "*.inl"
-    PATTERN "*.ixx"
+    PATTERN "*.cppm"
 )
 
 # 安装配置文件

@@ -79,7 +79,6 @@ FileWatcher::FileWatcher(FileWatcher&& other) noexcept
     , m_current_events(other.m_current_events)
 #endif
 {
-    other.m_controller.m_handle.fd = -1;
 }
 
 FileWatcher& FileWatcher::operator=(FileWatcher&& other) noexcept
@@ -100,14 +99,11 @@ FileWatcher& FileWatcher::operator=(FileWatcher&& other) noexcept
 #endif
 
         // 移动资源
-        m_controller.m_handle.fd = other.m_controller.m_handle.fd;
         m_controller = std::move(other.m_controller);
         m_watches = std::move(other.m_watches);
 #ifdef USE_KQUEUE
         m_current_events = other.m_current_events;
 #endif
-
-        other.m_controller.m_handle.fd = -1;
     }
     return *this;
 }

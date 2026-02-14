@@ -31,6 +31,9 @@ TcpSocket::TcpSocket(TcpSocket&& other) noexcept
 TcpSocket& TcpSocket::operator=(TcpSocket&& other) noexcept
 {
     if (this != &other) {
+        if (m_controller.m_handle != GHandle::invalid()) {
+            ::close(m_controller.m_handle.fd);
+        }
         m_controller = std::move(other.m_controller);
     }
     return *this;

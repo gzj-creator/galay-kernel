@@ -146,6 +146,7 @@ namespace galay::kernel
     Buffer &Buffer::operator=(Buffer &&other)
     {
         if(this != &other) {
+            freeString(m_data);
             m_data = std::move(other.m_data);
         }
         return *this;

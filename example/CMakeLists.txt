@@ -1,0 +1,32 @@
+function(add_kernel_include_example target_name source_file)
+    add_executable(${target_name} ${source_file})
+    target_link_libraries(${target_name} PRIVATE galay-kernel)
+    target_include_directories(${target_name} PRIVATE ${CMAKE_SOURCE_DIR})
+endfunction()
+
+function(add_kernel_import_example target_name source_file)
+    add_executable(${target_name} ${source_file})
+    target_link_libraries(${target_name} PRIVATE galay-kernel-modules)
+    target_include_directories(${target_name} PRIVATE ${CMAKE_SOURCE_DIR})
+    set_target_properties(${target_name} PROPERTIES CXX_SCAN_FOR_MODULES ON)
+endfunction()
+
+# include 版本（传统头文件）
+add_kernel_include_example(E1-SendfileExample include/E1-SendfileExample.cc)
+add_kernel_include_example(E2-TcpEchoServer include/E2-TcpEchoServer.cc)
+add_kernel_include_example(E3-TcpClient include/E3-TcpClient.cc)
+add_kernel_include_example(E4-CoroutineBasic include/E4-CoroutineBasic.cc)
+add_kernel_include_example(E5-UdpEcho include/E5-UdpEcho.cc)
+
+# import 版本（模块门面 galay.kernel）
+if(GALAY_KERNEL_CPP23_MODULES_EFFECTIVE AND TARGET galay-kernel-modules)
+    add_kernel_import_example(E1-SendfileExampleImport import/E1-SendfileExample.cc)
+    add_kernel_import_example(E2-TcpEchoServerImport import/E2-TcpEchoServer.cc)
+    add_kernel_import_example(E3-TcpClientImport import/E3-TcpClient.cc)
+    add_kernel_import_example(E4-CoroutineBasicImport import/E4-CoroutineBasic.cc)
+    add_kernel_import_example(E5-UdpEchoImport import/E5-UdpEcho.cc)
+    add_kernel_import_example(E6-MpscChannelImport import/E6-MpscChannel.cc)
+    add_kernel_import_example(E7-UnsafeChannelImport import/E7-UnsafeChannel.cc)
+    add_kernel_import_example(E8-AsyncSyncImport import/E8-AsyncSync.cc)
+    add_kernel_import_example(E9-TimerSleepImport import/E9-TimerSleep.cc)
+endif()
