@@ -24,3 +24,10 @@ target_include_directories(E4-CoroutineBasic PRIVATE ${CMAKE_SOURCE_DIR})
 add_executable(E5-UdpEcho E5-UdpEcho.cc)
 target_link_libraries(E5-UdpEcho PRIVATE galay-kernel)
 target_include_directories(E5-UdpEcho PRIVATE ${CMAKE_SOURCE_DIR})
+
+# E6 - C++23 模块示例（需开启 ENABLE_CPP23_MODULES）
+if(ENABLE_CPP23_MODULES AND TARGET galay-kernel-modules)
+    add_executable(E6-ModuleBasic E6-ModuleBasic.cc)
+    target_link_libraries(E6-ModuleBasic PRIVATE galay-kernel-modules)
+    target_include_directories(E6-ModuleBasic PRIVATE ${CMAKE_SOURCE_DIR})
+endif()

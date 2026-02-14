@@ -48,6 +48,40 @@ set_target_properties(galay-kernel PROPERTIES
     OUTPUT_NAME galay-kernel
 )
 
+# 实验性 C++23 模块门面（import galay.kernel）
+if(ENABLE_CPP23_MODULES)
+    if(CMAKE_VERSION VERSION_LESS 3.28)
+        message(FATAL_ERROR "ENABLE_CPP23_MODULES requires CMake 3.28+ (for FILE_SET CXX_MODULES)")
+    endif()
+
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        message(FATAL_ERROR "ENABLE_CPP23_MODULES is not supported on AppleClang in this project yet.")
+    endif()
+
+    add_library(galay-kernel-modules STATIC)
+    target_link_libraries(galay-kernel-modules PUBLIC galay-kernel)
+
+    target_include_directories(galay-kernel-modules
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+            $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
+            $<INSTALL_INTERFACE:include/galay-kernel>
+    )
+
+    target_sources(galay-kernel-modules
+        PUBLIC
+            FILE_SET CXX_MODULES
+            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/module
+            FILES ${CMAKE_CURRENT_SOURCE_DIR}/module/galay_kernel.ixx
+    )
+
+    set_target_properties(galay-kernel-modules PROPERTIES
+        VERSION ${PROJECT_VERSION}
+        SOVERSION ${PROJECT_VERSION_MAJOR}
+        OUTPUT_NAME galay-kernel-modules
+    )
+endif()
+
 # 安装库文件
 install(TARGETS galay-kernel
     EXPORT galay-kernel-targets
@@ -57,6 +91,17 @@ install(TARGETS galay-kernel
     INCLUDES DESTINATION include
 )
 
+if(ENABLE_CPP23_MODULES)
+    install(TARGETS galay-kernel-modules
+        EXPORT galay-kernel-targets
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        RUNTIME DESTINATION bin
+        FILE_SET CXX_MODULES DESTINATION include/galay-kernel/module
+        INCLUDES DESTINATION include
+    )
+endif()
+
 # 安装头文件（保留目录结构）
 install(DIRECTORY async common kernel concurrency protocol
     DESTINATION include/galay-kernel
@@ -64,6 +109,7 @@ install(DIRECTORY async common kernel concurrency protocol
     PATTERN "*.h"
     PATTERN "*.hpp"
     PATTERN "*.inl"
+    PATTERN "*.ixx"
 )
 
 # 安装配置文件

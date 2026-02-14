@@ -110,6 +110,7 @@ option(BUILD_BENCHMARKS "Build benchmark executables" ON)
 option(BUILD_EXAMPLES "Build example executables" ON)
 option(ENABLE_LOG "Enable logging with spdlog" ON)
 option(DISABLE_IOURING "Disable io_uring and use epoll on Linux" ON)
+option(ENABLE_CPP23_MODULES "Enable experimental C++23 named modules support" OFF)
 ```
 
 ## 平台后端
@@ -117,3 +118,26 @@ option(DISABLE_IOURING "Disable io_uring and use epoll on Linux" ON)
 - macOS: `USE_KQUEUE`
 - Linux + `DISABLE_IOURING=ON`（默认）: `USE_EPOLL`
 - Linux + `DISABLE_IOURING=OFF` 且系统有 `liburing`: `USE_IOURING`
+
+## C++23 模块语法（实验性）
+
+已提供模块门面 `galay.kernel`，支持 `import` / `export`。
+
+```bash
+cmake .. -DENABLE_CPP23_MODULES=ON
+cmake --build . -j
+```
+
+```cpp
+import galay.kernel;
+
+int main() {
+    galay::kernel::Runtime runtime;
+    return 0;
+}
+```
+
+说明：
+
+- 需要 CMake 3.28+
+- 当前不支持 AppleClang 模块构建路径

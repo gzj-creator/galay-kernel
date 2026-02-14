@@ -9,6 +9,7 @@ endif()
 option(BUILD_TESTS "Build test executables" ON)
 option(BUILD_BENCHMARKS "Build benchmark executables" ON)
 option(BUILD_EXAMPLES "Build example executables" ON)
+option(ENABLE_CPP23_MODULES "Enable experimental C++23 named modules support" OFF)
 
 # 库类型选项（CMake 标准变量）
 option(BUILD_SHARED_LIBS "Build shared library instead of static" OFF)

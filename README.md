@@ -58,6 +58,7 @@ option(BUILD_BENCHMARKS "Build benchmark executables" ON)
 option(BUILD_EXAMPLES "Build example executables" ON)
 option(ENABLE_LOG "Enable logging with spdlog" ON)
 option(DISABLE_IOURING "Disable io_uring and use epoll on Linux" ON)
+option(ENABLE_CPP23_MODULES "Enable experimental C++23 named modules support" OFF)
 ```
 
 Linux 下默认 `DISABLE_IOURING=ON`，即优先走 `epoll`。如需 io_uring：
@@ -65,6 +66,33 @@ Linux 下默认 `DISABLE_IOURING=ON`，即优先走 `epoll`。如需 io_uring：
 ```bash
 cmake .. -DDISABLE_IOURING=OFF
 ```
+
+## C++23 模块（实验性）
+
+项目新增模块门面 `galay.kernel`，支持 `import`/`export` 语法（实验性）。
+
+启用方式：
+
+```bash
+cmake .. -DENABLE_CPP23_MODULES=ON
+cmake --build . -j
+```
+
+示例：
+
+```cpp
+import galay.kernel;
+
+int main() {
+    galay::kernel::Runtime runtime;
+    return 0;
+}
+```
+
+限制：
+
+- 需要 CMake 3.28+（`FILE_SET CXX_MODULES`）
+- 当前项目暂不支持 AppleClang 的模块构建路径
 
 ## 快速示例
 
@@ -131,4 +159,3 @@ int main() {
 ./build/bin/B2-TcpServer 8080
 ./build/bin/B3-TcpClient -h 127.0.0.1 -p 8080 -c 100 -s 256 -d 10
 ```
-
