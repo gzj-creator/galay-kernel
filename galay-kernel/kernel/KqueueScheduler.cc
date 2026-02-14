@@ -466,26 +466,22 @@ void KqueueScheduler::processEvent(struct kevent& ev)
 
 int KqueueScheduler::processCustom(IOEventType type, IOController* controller)
 {
-    struct kevent ev;
-    switch (type) {
-        case ACCEPT:
-        case RECV:
-        case READV:
-        case RECVFROM:
-        case FILEREAD:
-            EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
-            return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
-        case CONNECT:
-        case SEND:
-        case WRITEV:
-        case SENDTO:
-        case FILEWRITE:
-        case SENDFILE:
-            EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
-            return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
-        default:
-            return -1;
+    struct kevent evs[2];
+    int ev_count = 0;
+    uint32_t t = static_cast<uint32_t>(type);
+
+    if (t & (ACCEPT | RECV | READV | RECVFROM | FILEREAD | FILEWATCH)) {
+        EV_SET(&evs[ev_count++], controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
     }
+    if (t & (CONNECT | SEND | WRITEV | SENDTO | FILEWRITE | SENDFILE)) {
+        EV_SET(&evs[ev_count++], controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
+    }
+
+    if (ev_count == 0) {
+        return -1;
+    }
+
+    return kevent(m_kqueue_fd, evs, ev_count, nullptr, 0, nullptr);
 }
 
 int KqueueScheduler::addRecvFrom(IOController* controller)
