@@ -8,6 +8,7 @@ namespace galay::kernel
 const char* error_string[] = {
     "Connection disconnected",
     "Event notified but source not ready",
+    "Parameter invalid",
     "Failed to receive data",
     "Failed to send data",
     "Failed to accept connection",
