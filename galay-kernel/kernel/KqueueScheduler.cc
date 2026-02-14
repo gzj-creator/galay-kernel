@@ -161,12 +161,25 @@ int KqueueScheduler::addWritev(IOController* controller)
 
 int KqueueScheduler::addClose(IOController* contoller)
 {
-    if (contoller->m_handle == GHandle::invalid()) {
+    if (contoller == nullptr || contoller->m_handle == GHandle::invalid()) {
         return 0;
     }
-    close(contoller->m_handle.fd);
+
+    const int fd = contoller->m_handle.fd;
+
+    // Remove kqueue registrations before closing fd.
+    // Otherwise EV_DELETE would run on -1 and stale udata can remain queued.
+    struct kevent evs[2];
+    EV_SET(&evs[0], fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
+    EV_SET(&evs[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
+    (void)kevent(m_kqueue_fd, evs, 2, nullptr, 0, nullptr);
+
+    contoller->m_type = IOEventType::INVALID;
+    contoller->m_awaitable[IOController::READ] = nullptr;
+    contoller->m_awaitable[IOController::WRITE] = nullptr;
+
+    close(fd);
     contoller->m_handle = GHandle::invalid();
-    remove(contoller);
     return 0;
 }
 
@@ -220,6 +233,9 @@ int KqueueScheduler::addCustom(IOController* controller)
 
 int KqueueScheduler::remove(IOController* controller)
 {
+    if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
+        return 0;
+    }
     struct kevent evs[2];
     EV_SET(&evs[0], controller->m_handle.fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
     EV_SET(&evs[1], controller->m_handle.fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);

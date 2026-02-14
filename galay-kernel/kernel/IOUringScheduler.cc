@@ -208,20 +208,31 @@ int IOUringScheduler::addSendFile(IOController* controller)
 
 int IOUringScheduler::addClose(IOController* controller)
 {
-    if (controller->m_handle == GHandle::invalid()) {
+    if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
         return 0;
     }
 
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        close(controller->m_handle.fd);
-        controller->m_handle = GHandle::invalid();
-        return 0;
+    const int fd = controller->m_handle.fd;
+
+    // Best-effort cancel outstanding requests for this fd before close.
+    struct io_uring_sqe* cancel_sqe = io_uring_get_sqe(&m_ring);
+    if (cancel_sqe) {
+        io_uring_prep_cancel_fd(cancel_sqe, fd, 0);
+        io_uring_sqe_set_data(cancel_sqe, nullptr);
     }
 
-    io_uring_prep_close(sqe, controller->m_handle.fd);
+    struct io_uring_sqe* close_sqe = io_uring_get_sqe(&m_ring);
+    if (!close_sqe) {
+        close(fd);
+    } else {
+        io_uring_prep_close(close_sqe, fd);
+        io_uring_sqe_set_data(close_sqe, nullptr);
+    }
+
+    controller->m_type = IOEventType::INVALID;
+    controller->m_awaitable[IOController::READ] = nullptr;
+    controller->m_awaitable[IOController::WRITE] = nullptr;
     controller->m_handle = GHandle::invalid();
-    io_uring_sqe_set_data(sqe, nullptr);
     return 0;
 }
 
@@ -434,6 +445,10 @@ int IOUringScheduler::submitCustomSqe(IOEventType type, IOContextBase* ctx, IOCo
 
 int IOUringScheduler::remove(IOController* controller)
 {
+    if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
+        return 0;
+    }
+
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         return -EAGAIN;

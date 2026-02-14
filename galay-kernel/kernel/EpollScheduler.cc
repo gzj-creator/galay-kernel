@@ -219,12 +219,21 @@ int EpollScheduler::addSendFile(IOController* controller)
 
 int EpollScheduler::addClose(IOController* controller)
 {
-    if (controller->m_handle == GHandle::invalid()) {
+    if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
         return 0;
     }
-    close(controller->m_handle.fd);
+
+    const int fd = controller->m_handle.fd;
+
+    // Best-effort remove from epoll before closing.
+    (void)epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+
+    controller->m_type = IOEventType::INVALID;
+    controller->m_awaitable[IOController::READ] = nullptr;
+    controller->m_awaitable[IOController::WRITE] = nullptr;
+
+    close(fd);
     controller->m_handle = GHandle::invalid();
-    remove(controller);
     return 0;
 }
 
@@ -248,6 +257,9 @@ int EpollScheduler::addFileWrite(IOController* controller)
 
 int EpollScheduler::remove(IOController* controller)
 {
+    if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
+        return 0;
+    }
     return epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, controller->m_handle.fd, nullptr);
 }
 
