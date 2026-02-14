@@ -213,7 +213,7 @@ int KqueueScheduler::addCustom(IOController* controller)
     while (auto* task = custom->front()) {
         bool done = task->context->handleComplete(controller->m_handle);
         if (done) { custom->popFront(); continue; }
-        return processCustom(task->type, controller);
+        return processCustom(custom->resolveTaskEventType(*task), controller);
     }
     return OK;  // 队列空，由调用方决定是否唤醒
 }
@@ -457,7 +457,7 @@ void KqueueScheduler::processEvent(struct kevent& ev)
                         }
                     }
                 } else {
-                    processCustom(task->type, controller);
+                    processCustom(custom->resolveTaskEventType(*task), controller);
                 }
             }
         }

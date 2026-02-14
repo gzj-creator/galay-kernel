@@ -33,7 +33,6 @@
 #include <coroutine>
 #include <cstddef>
 #include <expected>
-#include <optional>
 #include <vector>
 #include <sys/uio.h>
 
@@ -65,6 +64,10 @@ struct IOContextBase: public AwaitableBase {
 #else
     virtual bool handleComplete(GHandle handle) = 0;
 #endif
+
+    // CustomAwaitable 调度时可由上下文动态指定下一次等待方向；
+    // 返回 INVALID 表示沿用静态 task.type。
+    virtual IOEventType type() const { return IOEventType::INVALID; }
 };
 
 // ==================== 第三层：IOContext + Awaitable ====================
@@ -567,6 +570,14 @@ struct CustomAwaitable: public AwaitableBase {
     }
 
     bool empty() const { return m_cursor >= m_tasks.size(); }
+
+    IOEventType resolveTaskEventType(const IOTask& task) const {
+        if (task.context == nullptr) {
+            return task.type;
+        }
+        IOEventType desired = task.context->type();
+        return desired == IOEventType::INVALID ? task.type : desired;
+    }
 
     /// 子类在 await_resume 中调用，清理调度器注册
     void onCompleted() {

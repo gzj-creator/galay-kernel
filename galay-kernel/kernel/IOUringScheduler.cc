@@ -332,7 +332,7 @@ int IOUringScheduler::addCustom(IOController* controller)
     while (auto* task = custom->front()) {
         bool done = task->context->handleComplete(nullptr, controller->m_handle);
         if (done) { custom->popFront(); continue; }
-        return submitCustomSqe(task->type, task->context, controller);
+        return submitCustomSqe(custom->resolveTaskEventType(*task), task->context, controller);
     }
     return OK;  // 队列空，由调用方决定是否唤醒
 }
