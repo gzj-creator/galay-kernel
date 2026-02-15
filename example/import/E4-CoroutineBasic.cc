@@ -1,5 +1,6 @@
 import galay.kernel;
 
+#include <coroutine>
 #include <atomic>
 #include <chrono>
 #include <iostream>
