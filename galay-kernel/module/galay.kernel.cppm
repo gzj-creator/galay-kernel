@@ -45,7 +45,8 @@ using ::galay::kernel::TimerScheduler;
 
 using ::galay::kernel::IOError;
 using ::galay::kernel::IOErrorCode;
-using ::galay::kernel::GHandle;
+using ::GHandle;
+using ::IOEventType;
 using ::galay::kernel::IPType;
 using ::galay::kernel::Host;
 using ::galay::kernel::HandleOption;
