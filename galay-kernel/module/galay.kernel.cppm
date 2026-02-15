@@ -1,5 +1,10 @@
 module;
 
+#include "galay-kernel/module/ModulePrelude.hpp"
+
+export module galay.kernel;
+
+export {
 #include "galay-kernel/common/Defn.hpp"
 #include "galay-kernel/common/Error.h"
 #include "galay-kernel/common/Host.hpp"
@@ -31,48 +36,4 @@ module;
 #ifdef USE_EPOLL
 #include "galay-kernel/async/AioFile.h"
 #endif
-
-export module galay.kernel;
-
-export namespace galay::kernel {
-using ::galay::kernel::Coroutine;
-using ::galay::kernel::spawn;
-using ::galay::kernel::Scheduler;
-using ::galay::kernel::IOScheduler;
-using ::galay::kernel::ComputeScheduler;
-using ::galay::kernel::Runtime;
-using ::galay::kernel::TimerScheduler;
-
-using ::galay::kernel::IOError;
-using ::galay::kernel::IOErrorCode;
-using ::GHandle;
-using ::IOEventType;
-using ::galay::kernel::IPType;
-using ::galay::kernel::Host;
-using ::galay::kernel::HandleOption;
-using ::galay::kernel::Bytes;
-using ::galay::kernel::Buffer;
-using ::galay::kernel::RingBuffer;
-using ::galay::kernel::sleep;
-
-using ::galay::kernel::MpscChannel;
-using ::galay::kernel::UnsafeChannel;
-using ::galay::kernel::AsyncMutex;
-using ::galay::kernel::AsyncWaiter;
-}  // namespace galay::kernel
-
-export namespace galay::async {
-using ::galay::async::TcpSocket;
-using ::galay::async::UdpSocket;
-using ::galay::async::FileWatcher;
-
-#if defined(USE_KQUEUE) || defined(USE_IOURING)
-using ::galay::async::AsyncFile;
-using ::galay::async::FileOpenMode;
-#endif
-
-#ifdef USE_EPOLL
-using ::galay::async::AioFile;
-using ::galay::async::AioOpenMode;
-#endif
-}  // namespace galay::async
+}

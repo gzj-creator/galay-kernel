@@ -141,6 +141,29 @@ cmake --build . --target E1-SendfileExampleImport E2-TcpEchoServerImport E3-TcpC
 - 推荐使用 Ninja/Visual Studio 生成器构建模块
 - 当前项目暂不支持 AppleClang 的模块构建路径
 
+### 模块支持更新（2026-02）
+
+本次模块接口已统一为：
+
+- `module;`
+- `#include "galay-kernel/module/ModulePrelude.hpp"`
+- `export module galay.kernel;`
+- `export { #include ... }`
+
+对应文件：
+
+- `galay-kernel/module/galay.kernel.cppm`
+- `galay-kernel/module/ModulePrelude.hpp`
+
+推荐构建（Clang 20 + Ninja）：
+
+```bash
+cmake -S . -B build-mod -G Ninja \
+  -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm@20/bin/clang++ \
+  -DENABLE_CPP23_MODULES=ON
+cmake --build build-mod --target galay-kernel-modules -j
+```
+
 ## 快速示例
 
 ```cpp

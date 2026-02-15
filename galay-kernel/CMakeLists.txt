@@ -96,14 +96,24 @@ if(GALAY_KERNEL_CPP23_MODULES_EFFECTIVE)
 endif()
 
 # 安装头文件（保留目录结构）
-install(DIRECTORY async common kernel concurrency protocol
-    DESTINATION include/galay-kernel
-    FILES_MATCHING
-    PATTERN "*.h"
-    PATTERN "*.hpp"
-    PATTERN "*.inl"
-    PATTERN "*.cppm"
-)
+if(GALAY_KERNEL_CPP23_MODULES_EFFECTIVE)
+    install(DIRECTORY async common kernel concurrency protocol module
+        DESTINATION include/galay-kernel
+        FILES_MATCHING
+        PATTERN "*.h"
+        PATTERN "*.hpp"
+        PATTERN "*.inl"
+    )
+else()
+    install(DIRECTORY async common kernel concurrency protocol module
+        DESTINATION include/galay-kernel
+        FILES_MATCHING
+        PATTERN "*.h"
+        PATTERN "*.hpp"
+        PATTERN "*.inl"
+        PATTERN "*.cppm"
+    )
+endif()
 
 # 安装配置文件
 include(CMakePackageConfigHelpers)
