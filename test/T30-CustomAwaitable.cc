@@ -73,7 +73,7 @@ struct SendThenRecvAwaitable : public CustomAwaitable {
 
 // ==================== 测试协程 ====================
 
-Coroutine serverCoroutine(IOScheduler* scheduler, int listen_fd)
+Coroutine serverCoroutine([[maybe_unused]] IOScheduler* scheduler, int listen_fd)
 {
     g_total++;
 
@@ -136,7 +136,7 @@ Coroutine serverCoroutine(IOScheduler* scheduler, int listen_fd)
     co_return;
 }
 
-Coroutine clientCoroutine(IOScheduler* scheduler, const char* ip, int port)
+Coroutine clientCoroutine([[maybe_unused]] IOScheduler* scheduler, const char* ip, int port)
 {
     g_total++;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));

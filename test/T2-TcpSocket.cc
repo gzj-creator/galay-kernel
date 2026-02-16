@@ -21,7 +21,7 @@ using namespace galay::async;
 using namespace galay::kernel;
 
 // Echo服务器协程
-Coroutine echoServer(IOScheduler* scheduler) {
+Coroutine echoServer([[maybe_unused]] IOScheduler* scheduler) {
     LogInfo("Server starting...");
     TcpSocket listener;
     // 设置选项
@@ -103,7 +103,7 @@ Coroutine echoServer(IOScheduler* scheduler) {
 }
 
 // 客户端协程
-Coroutine echoClient(IOScheduler* scheduler) {
+Coroutine echoClient([[maybe_unused]] IOScheduler* scheduler) {
     LogInfo("Client starting...");
     TcpSocket client;
     LogDebug("Client socket created, fd={}", client.handle().fd);

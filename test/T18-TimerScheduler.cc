@@ -68,7 +68,7 @@ void testConcurrentAdd() {
     std::vector<std::thread> threads;
 
     for (int t = 0; t < numThreads; t++) {
-        threads.emplace_back([&, t]() {
+        threads.emplace_back([&]() {
             for (int i = 0; i < timersPerThread; i++) {
                 auto delay = std::chrono::milliseconds(50 + (i % 100));
                 auto timer = std::make_shared<CBTimer>(delay, [&totalFired]() {

@@ -33,7 +33,7 @@ std::atomic<int> g_event_count{0};
 
 // 测试1: 监控所有事件
 std::atomic<int> g_test1_events{0};
-Coroutine watchAllEventsCoroutine(IOScheduler* scheduler, const std::string& path)
+Coroutine watchAllEventsCoroutine([[maybe_unused]] IOScheduler* scheduler, const std::string& path)
 {
     FileWatcher watcher;
 
@@ -61,7 +61,7 @@ Coroutine watchAllEventsCoroutine(IOScheduler* scheduler, const std::string& pat
 // 测试2: 只监控 Modify 事件
 std::atomic<int> g_test2_modify_events{0};
 std::atomic<int> g_test2_attrib_events{0};
-Coroutine watchModifyOnlyCoroutine(IOScheduler* scheduler, const std::string& path)
+Coroutine watchModifyOnlyCoroutine([[maybe_unused]] IOScheduler* scheduler, const std::string& path)
 {
     FileWatcher watcher;
 
@@ -94,7 +94,7 @@ Coroutine watchModifyOnlyCoroutine(IOScheduler* scheduler, const std::string& pa
 // 测试3: 只监控 Attrib 事件
 std::atomic<int> g_test3_modify_events{0};
 std::atomic<int> g_test3_attrib_events{0};
-Coroutine watchAttribOnlyCoroutine(IOScheduler* scheduler, const std::string& path)
+Coroutine watchAttribOnlyCoroutine([[maybe_unused]] IOScheduler* scheduler, const std::string& path)
 {
     FileWatcher watcher;
 

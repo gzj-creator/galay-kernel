@@ -400,7 +400,7 @@ void benchComparison(int64_t message_count) {
             speedup > 1 ? "faster" : "slower");
 }
 
-int main(int argc, char* argv[]) {
+int main() {
     LogInfo("=== UnsafeChannel Benchmark ===");
     LogInfo("");
 

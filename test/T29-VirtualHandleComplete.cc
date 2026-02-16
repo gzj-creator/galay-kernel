@@ -79,7 +79,7 @@ struct CountingRecvAwaitable : public RecvAwaitable {
 };
 
 // 服务端：用 CountingRecvAwaitable 接收数据
-Coroutine testServer(IOScheduler* scheduler, int listen_fd, int reject_count)
+Coroutine testServer([[maybe_unused]] IOScheduler* scheduler, int listen_fd, int reject_count)
 {
     g_total++;
 
@@ -127,7 +127,7 @@ Coroutine testServer(IOScheduler* scheduler, int listen_fd, int reject_count)
 }
 
 // 客户端：多次发送数据，触发服务端多次事件
-Coroutine testClient(IOScheduler* scheduler, const char* ip, int port, int send_count)
+Coroutine testClient([[maybe_unused]] IOScheduler* scheduler, const char* ip, int port, int send_count)
 {
     g_total++;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));

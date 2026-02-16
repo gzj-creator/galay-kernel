@@ -134,7 +134,7 @@ Coroutine testRecursiveSpawn()
 }
 
 // 大量spawn测试
-Coroutine massChild(int id)
+Coroutine massChild([[maybe_unused]] int id)
 {
     child_count++;
     co_return;

@@ -96,7 +96,7 @@ Coroutine udpServerWorker(int worker_id) {
 }
 
 // 统计打印协程
-Coroutine statsReporter(IOScheduler* scheduler) {
+Coroutine statsReporter([[maybe_unused]] IOScheduler* scheduler) {
     auto last_time = std::chrono::steady_clock::now();
     uint64_t last_received = 0;
     uint64_t last_sent = 0;

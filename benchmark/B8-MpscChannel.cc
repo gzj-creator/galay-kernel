@@ -26,7 +26,7 @@ using namespace galay::kernel;
 using namespace std::chrono_literals;
 
 // ============== 压测参数 ==============
-constexpr int WARMUP_COUNT = 10000;
+[[maybe_unused]] constexpr int WARMUP_COUNT = 10000;
 constexpr int THROUGHPUT_MESSAGES = 1000000;
 constexpr int LATENCY_MESSAGES = 100000;
 constexpr int CORRECTNESS_MESSAGES = 100000;
@@ -515,7 +515,7 @@ void benchSustained(int duration_sec) {
             g_sent.load(), g_received.load(), avg_throughput);
 }
 
-int main(int argc, char* argv[]) {
+int main() {
     LogInfo("=== MpscChannel Benchmark ===");
     LogInfo("");
 

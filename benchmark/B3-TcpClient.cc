@@ -34,7 +34,7 @@ struct BenchConfig {
 };
 
 // 单个客户端连接的压测协程
-Coroutine benchClient(const BenchConfig& config, int clientId) {
+Coroutine benchClient(const BenchConfig& config, [[maybe_unused]] int clientId) {
     TcpSocket client;
     client.option().handleNonBlock();
 

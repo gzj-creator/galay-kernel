@@ -57,7 +57,7 @@ class Scheduler;
  */
 class Coroutine
 {
-    friend class WaitResult;
+    friend struct WaitResult;
 public:
     using promise_type = PromiseType;  ///< Promise类型别名，C++20协程要求
 

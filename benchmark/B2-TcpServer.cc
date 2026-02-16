@@ -23,7 +23,7 @@ std::atomic<uint64_t> g_total_bytes{0};
 std::atomic<uint64_t> g_total_requests{0};
 std::atomic<bool> g_running{true};
 
-void signalHandler(int signum) {
+void signalHandler([[maybe_unused]] int signum) {
     g_running.store(false, std::memory_order_release);
 }
 

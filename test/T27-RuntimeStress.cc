@@ -64,7 +64,7 @@ void test_concurrent_get_scheduler() {
     // 创建多个线程并发获取调度器
     std::vector<std::thread> threads;
     for (int t = 0; t < THREAD_COUNT; ++t) {
-        threads.emplace_back([&runtime, &io_counts, &compute_counts, SCHEDULER_COUNT]() {
+        threads.emplace_back([&runtime, &io_counts, &compute_counts]() {
             for (int i = 0; i < ITERATIONS; ++i) {
                 auto* io = runtime.getNextIOScheduler();
                 auto* compute = runtime.getNextComputeScheduler();

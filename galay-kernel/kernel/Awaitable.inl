@@ -168,7 +168,7 @@ inline bool FileWriteIOContext::handleComplete(GHandle handle) {
     return true;
 }
 
-inline bool FileWatchIOContext::handleComplete(GHandle handle) {
+inline bool FileWatchIOContext::handleComplete([[maybe_unused]] GHandle handle) {
     return true;
 }
 

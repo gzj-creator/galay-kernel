@@ -1,4 +1,3 @@
-#include <iostream>
 #include <cstring>
 #include <atomic>
 #include "galay-kernel/async/TcpSocket.h"
@@ -24,12 +23,21 @@ std::atomic<bool> g_server_ready{false};
 std::atomic<bool> g_test_passed{false};
 
 // 服务器协程 - 使用 readv 接收数据
-Coroutine readvServer(IOScheduler* scheduler) {
+Coroutine readvServer([[maybe_unused]] IOScheduler* scheduler) {
     LogInfo("[Server] Starting...");
     TcpSocket listener;
 
-    listener.option().handleReuseAddr();
-    listener.option().handleNonBlock();
+    auto optResult = listener.option().handleReuseAddr();
+    if (!optResult) {
+        LogError("[Server] Failed to set reuse addr: {}", optResult.error().message());
+        co_return;
+    }
+
+    optResult = listener.option().handleNonBlock();
+    if (!optResult) {
+        LogError("[Server] Failed to set non-block: {}", optResult.error().message());
+        co_return;
+    }
 
     Host bindHost(IPType::IPV4, "127.0.0.1", 9090);
     auto bindResult = listener.bind(bindHost);
@@ -57,7 +65,13 @@ Coroutine readvServer(IOScheduler* scheduler) {
     LogInfo("[Server] Client connected from {}:{}", clientHost.ip(), clientHost.port());
 
     TcpSocket client(acceptResult.value());
-    client.option().handleNonBlock();
+    optResult = client.option().handleNonBlock();
+    if (!optResult) {
+        LogError("[Server] Failed to set client non-block: {}", optResult.error().message());
+        co_await client.close();
+        co_await listener.close();
+        co_return;
+    }
 
     // 使用 readv 接收数据到多个缓冲区
     char header[16];
@@ -125,7 +139,7 @@ Coroutine readvServer(IOScheduler* scheduler) {
 }
 
 // 客户端协程 - 使用 writev 发送数据
-Coroutine writevClient(IOScheduler* scheduler) {
+Coroutine writevClient([[maybe_unused]] IOScheduler* scheduler) {
     // 等待服务器就绪
     while (!g_server_ready) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -133,7 +147,12 @@ Coroutine writevClient(IOScheduler* scheduler) {
 
     LogInfo("[Client] Starting...");
     TcpSocket client;
-    client.option().handleNonBlock();
+    auto optResult = client.option().handleNonBlock();
+    if (!optResult) {
+        LogError("[Client] Failed to set non-block: {}", optResult.error().message());
+        co_await client.close();
+        co_return;
+    }
 
     Host serverHost(IPType::IPV4, "127.0.0.1", 9090);
     auto connectResult = co_await client.connect(serverHost);

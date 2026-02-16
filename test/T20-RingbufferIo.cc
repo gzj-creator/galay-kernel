@@ -194,7 +194,7 @@ void testMoveSemantics() {
 // ============ 集成测试（网络 IO）============
 
 // 服务器协程 - 使用 RingBuffer + readv 接收数据
-Coroutine ringBufferServer(IOScheduler* scheduler) {
+Coroutine ringBufferServer([[maybe_unused]] IOScheduler* scheduler) {
     LogInfo("[Server] Starting...");
     TcpSocket listener;
 
@@ -289,7 +289,7 @@ Coroutine ringBufferServer(IOScheduler* scheduler) {
 }
 
 // 客户端协程 - 使用 RingBuffer + writev 发送数据
-Coroutine ringBufferClient(IOScheduler* scheduler) {
+Coroutine ringBufferClient([[maybe_unused]] IOScheduler* scheduler) {
     // 等待服务器就绪
     while (!g_server_ready) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));

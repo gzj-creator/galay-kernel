@@ -235,7 +235,7 @@ Coroutine ioWaitAfterNotify(ComputeScheduler* computeScheduler) {
 // ============== 测试9: 协程 belongScheduler 正确性 ==============
 std::atomic<bool> g_test9_scheduler_correct{false};
 
-Coroutine computeCheckScheduler(AsyncWaiter<void>* waiter, Scheduler* expectedScheduler) {
+Coroutine computeCheckScheduler(AsyncWaiter<void>* waiter, [[maybe_unused]] Scheduler* expectedScheduler) {
     // 计算任务完成后，检查协程是否被正确 spawn 回原调度器
     waiter->notify();
     co_return;
@@ -265,7 +265,7 @@ Coroutine computeTaskForTest10(AsyncWaiter<int>* waiter, int schedulerId) {
     co_return;
 }
 
-Coroutine ioWithMultipleComputeSchedulers(ComputeScheduler* cs1, ComputeScheduler* cs2, int id) {
+Coroutine ioWithMultipleComputeSchedulers(ComputeScheduler* cs1, ComputeScheduler* cs2, [[maybe_unused]] int id) {
     AsyncWaiter<int> waiter1;
     AsyncWaiter<int> waiter2;
 
