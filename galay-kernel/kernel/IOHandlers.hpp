@@ -43,7 +43,8 @@ inline std::expected<Bytes, IOError> handleRecv(GHandle handle, char* buffer, si
     if (recvBytes > 0) {
         return Bytes::fromCString(buffer, recvBytes, recvBytes);
     } else if (recvBytes == 0) {
-        return std::unexpected(IOError(kDisconnectError, static_cast<uint32_t>(errno)));
+        // recv == 0 means orderly peer shutdown. Do not carry stale errno.
+        return std::unexpected(IOError(kDisconnectError, 0));
     } else {
         if(static_cast<uint32_t>(errno) == EAGAIN || static_cast<uint32_t>(errno) == EWOULDBLOCK || static_cast<uint32_t>(errno) == EINTR) {
             return std::unexpected(IOError(kNotReady, 0));
