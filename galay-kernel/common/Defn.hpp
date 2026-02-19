@@ -6,19 +6,16 @@
 #include <cstdint>
 
 #if defined(__linux__)
-    #include <linux/version.h>
     #include <sys/socket.h>
     #include <netinet/in.h>
     #include <arpa/inet.h>
 
-    // Choose I/O multiplexing mechanism based on kernel version
-    // 如果 CMake 已经定义了 USE_EPOLL 或 USE_IOURING，则不再自动检测
+    // Linux 后端必须由构建系统显式指定，避免库与下游编译单元出现宏不一致。
+    #if defined(USE_EPOLL) && defined(USE_IOURING)
+        #error "Both USE_EPOLL and USE_IOURING are defined. Select exactly one backend."
+    #endif
     #if !defined(USE_EPOLL) && !defined(USE_IOURING)
-        #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,5,0)
-            #define USE_IOURING
-        #else
-            #define USE_EPOLL
-        #endif
+        #error "No Linux backend macro defined. Build/link via galay-kernel CMake target, or pass -DUSE_EPOLL/-DUSE_IOURING explicitly."
     #endif
 
     // Linux-specific handle structure

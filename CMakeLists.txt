@@ -127,6 +127,19 @@ endif()
 # 配置IO后端
 configure_io_backend()
 
+if(NOT GALAY_KERNEL_BACKEND)
+    message(FATAL_ERROR "Failed to determine galay-kernel backend")
+endif()
+
+if(NOT GALAY_KERNEL_BACKEND STREQUAL "epoll"
+   AND NOT GALAY_KERNEL_BACKEND STREQUAL "io_uring"
+   AND NOT GALAY_KERNEL_BACKEND STREQUAL "kqueue"
+   AND NOT GALAY_KERNEL_BACKEND STREQUAL "iocp")
+    message(FATAL_ERROR "Unsupported galay-kernel backend: ${GALAY_KERNEL_BACKEND}")
+endif()
+
+message(STATUS "galay-kernel backend selected: ${GALAY_KERNEL_BACKEND}")
+
 # 包含子目录
 add_subdirectory(galay-kernel)
 

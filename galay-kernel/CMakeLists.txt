@@ -12,6 +12,19 @@ file(GLOB_RECURSE HEADERS
 # 创建库目标
 add_library(galay-kernel ${SOURCES} ${HEADERS})
 
+# 导出统一后端宏给所有下游，避免头文件按平台自动推导造成 ABI 不一致。
+if(GALAY_KERNEL_BACKEND STREQUAL "epoll")
+    target_compile_definitions(galay-kernel PUBLIC USE_EPOLL)
+elseif(GALAY_KERNEL_BACKEND STREQUAL "io_uring")
+    target_compile_definitions(galay-kernel PUBLIC USE_IOURING)
+elseif(GALAY_KERNEL_BACKEND STREQUAL "kqueue")
+    target_compile_definitions(galay-kernel PUBLIC USE_KQUEUE)
+elseif(GALAY_KERNEL_BACKEND STREQUAL "iocp")
+    target_compile_definitions(galay-kernel PUBLIC USE_IOCP)
+else()
+    message(FATAL_ERROR "GALAY_KERNEL_BACKEND is not set correctly: ${GALAY_KERNEL_BACKEND}")
+endif()
+
 # 设置包含目录
 target_include_directories(galay-kernel
     PUBLIC
