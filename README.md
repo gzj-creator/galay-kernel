@@ -35,9 +35,30 @@
 
 - CMake 3.16+
 - C++23 编译器（GCC 11+ / Clang 14+）
+- `spdlog`（默认 `ENABLE_LOG=ON` 时需要）
 - Linux:
   - `libaio`（epoll 文件 IO）
   - `liburing`（可选，启用 io_uring 时）
+
+## 依赖安装（macOS / Homebrew）
+
+```bash
+brew install cmake spdlog
+```
+
+## 依赖安装（Ubuntu / Debian）
+
+```bash
+sudo apt-get update
+sudo apt-get install -y cmake g++ libspdlog-dev libaio-dev liburing-dev
+```
+
+## 拉取源码
+
+```bash
+git clone https://github.com/gzj-creator/galay-kernel.git
+cd galay-kernel
+```
 
 ## 构建
 
@@ -45,7 +66,7 @@
 mkdir -p build
 cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . -j
+cmake --build . --parallel
 ```
 
 可执行文件默认输出到 `build/bin/`。
@@ -75,7 +96,7 @@ cmake .. -DDISABLE_IOURING=OFF
 
 ```bash
 cmake .. -DENABLE_CPP23_MODULES=ON
-cmake --build . -j
+cmake --build . --parallel
 ```
 
 模块能力生效规则（参考 `galay-rpc`）：
@@ -129,10 +150,10 @@ include 示例目标（默认可构建）：
 
 ```bash
 # include 示例（默认）
-cmake --build . --target E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-CoroutineBasic E5-UdpEcho -j
+cmake --build . --target E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-CoroutineBasic E5-UdpEcho --parallel
 
 # import 示例（需先 cmake .. -DENABLE_CPP23_MODULES=ON）
-cmake --build . --target E1-SendfileExampleImport E2-TcpEchoServerImport E3-TcpClientImport E4-CoroutineBasicImport E5-UdpEchoImport E6-MpscChannelImport E7-UnsafeChannelImport E8-AsyncSyncImport E9-TimerSleepImport -j
+cmake --build . --target E1-SendfileExampleImport E2-TcpEchoServerImport E3-TcpClientImport E4-CoroutineBasicImport E5-UdpEchoImport E6-MpscChannelImport E7-UnsafeChannelImport E8-AsyncSyncImport E9-TimerSleepImport --parallel
 ```
 
 限制：
@@ -161,7 +182,7 @@ cmake --build . --target E1-SendfileExampleImport E2-TcpEchoServerImport E3-TcpC
 cmake -S . -B build-mod -G Ninja \
   -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm@20/bin/clang++ \
   -DENABLE_CPP23_MODULES=ON
-cmake --build build-mod --target galay-kernel-modules -j
+cmake --build build-mod --target galay-kernel-modules --parallel
 ```
 
 ## 快速示例

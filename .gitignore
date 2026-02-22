@@ -3,3 +3,4 @@ install
 .cache
 test_results
 .vscode
+.claude/

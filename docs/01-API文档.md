@@ -14,7 +14,8 @@
 
 | 模块 | 说明 | 文档 |
 |---|---|---|
-| Scheduler / IOScheduler | 平台 IO 事件调度 | [05-调度器.md](05-调度器.md) |
+| Scheduler | 调度器抽象基类 | [05-调度器.md](05-调度器.md) |
+| IOScheduler | 平台 IO 事件调度 | [05-调度器.md](05-调度器.md) |
 | ComputeScheduler | CPU 任务调度 | [03-计算调度器.md](03-计算调度器.md) |
 | Runtime | 多 IO/Compute 调度器管理 | [13-运行时Runtime.md](13-运行时Runtime.md) |
 | Coroutine / Timeout / Sleep | 协程生命周期与超时 | [06-协程.md](06-协程.md) |
@@ -35,7 +36,7 @@
 mkdir -p build
 cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . -j
+cmake --build . --parallel
 ```
 
 ### 最小 Echo 服务（Runtime + TcpSocket）
@@ -125,7 +126,7 @@ option(ENABLE_CPP23_MODULES "Enable experimental C++23 named modules support" OF
 
 ```bash
 cmake .. -DENABLE_CPP23_MODULES=ON
-cmake --build . -j
+cmake --build . --parallel
 ```
 
 模块能力生效规则（参考 `galay-rpc`）：
@@ -177,10 +178,10 @@ include 示例目标（默认可构建）：
 
 ```bash
 # include 示例（默认）
-cmake --build . --target E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-CoroutineBasic E5-UdpEcho -j
+cmake --build . --target E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-CoroutineBasic E5-UdpEcho --parallel
 
 # import 示例（需先 cmake .. -DENABLE_CPP23_MODULES=ON）
-cmake --build . --target E1-SendfileExampleImport E2-TcpEchoServerImport E3-TcpClientImport E4-CoroutineBasicImport E5-UdpEchoImport E6-MpscChannelImport E7-UnsafeChannelImport E8-AsyncSyncImport E9-TimerSleepImport -j
+cmake --build . --target E1-SendfileExampleImport E2-TcpEchoServerImport E3-TcpClientImport E4-CoroutineBasicImport E5-UdpEchoImport E6-MpscChannelImport E7-UnsafeChannelImport E8-AsyncSyncImport E9-TimerSleepImport --parallel
 ```
 
 说明：

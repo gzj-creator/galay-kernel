@@ -23,7 +23,7 @@
 
 #### 测试日志摘要
 
-```
+```text
 [2026-01-01 15:49:18.879] UDP Server listening on 127.0.0.1:8080
 [2026-01-01 15:49:18.979] Client: Sent message 1: Hello, UDP Server!
 [2026-01-01 15:49:18.979] Received from 127.0.0.1:44105: Hello, UDP Server!
@@ -78,7 +78,7 @@
 
 #### 核心指标
 
-```
+```text
 ========== UDP Benchmark Results ==========
 Test Duration: 10.70 seconds
 Concurrent Clients: 100
