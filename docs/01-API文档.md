@@ -1,14 +1,42 @@
-# 01. 文档导航
+# 01-API文档
 
 `galay-kernel` 是一个基于 **C++23 协程** 的异步内核库，提供网络 IO、文件 IO、调度器、定时器和协程并发原语。
 
-## 推荐阅读顺序（参考 galay-redis）
+## 推荐阅读顺序
 
-1. [快速开始（本页）](01-API文档.md)
-2. [使用示例：网络 IO](07-网络IO.md)、[文件 IO](08-文件IO.md)、[并发](09-并发.md)
-3. [模块介绍：调度器](05-调度器.md)、[计算调度器](03-计算调度器.md)、[Runtime](13-运行时Runtime.md)
-4. [运行原理：协程与超时](06-协程.md)、[全局定时器](10-定时器调度器.md)、[RingBuffer](11-环形缓冲区.md)
-5. [性能与专项](02-性能测试.md)、[UDP压测](04-UDP性能测试.md)、[sendfile专项](12-零拷贝发送文件.md)
+### 新手入门
+
+1. [快速开始](00-快速开始.md) - 依赖安装、编译、运行第一个示例
+2. [示例代码](17-示例代码.md) - 常见使用场景的完整示例
+3. [网络 IO](07-网络IO.md) - TCP/UDP 网络编程
+4. [协程与超时](06-协程.md) - 协程基础与超时机制
+
+### 核心概念
+
+5. [架构设计](16-架构设计.md) - 整体架构与设计原理
+6. [Runtime](13-运行时Runtime.md) - 多调度器统一管理
+7. [调度器](05-调度器.md) - IOScheduler 与 Scheduler 基类
+8. [计算调度器](03-计算调度器.md) - CPU 任务调度
+
+### 进阶使用
+
+9. [文件 IO](08-文件IO.md) - 异步文件读写
+10. [并发与通道](09-并发.md) - MpscChannel、UnsafeChannel
+11. [异步同步原语](15-异步同步原语.md) - AsyncMutex、AsyncWaiter
+12. [定时器调度器](10-定时器调度器.md) - 全局定时器与 sleep
+
+### 性能优化
+
+13. [高级主题](19-高级主题.md) - 性能优化、最佳实践、高级用法
+14. [性能测试](02-性能测试.md) - TCP/UDP 性能测试结果
+15. [零拷贝 sendfile](12-零拷贝发送文件.md) - sendfile 专项
+16. [RingBuffer](11-环形缓冲区.md) - 环形缓冲区实现
+
+### 故障排查
+
+17. [常见问题](18-常见问题.md) - FAQ 与故障排查
+18. [UDP 性能测试](04-UDP性能测试.md) - UDP 专项测试
+19. [文件监控](14-文件监控.md) - FileWatcher (inotify/kqueue)
 
 ## 模块覆盖清单
 
@@ -59,7 +87,9 @@ Coroutine handleClient(GHandle handle) {
             break;
         }
         auto& bytes = recvResult.value();
-        co_await client.send(bytes.c_str(), bytes.size());
+        if (auto __await_result = co_await client.send(bytes.c_str(), bytes.size()); !__await_result) {
+            // 错误处理：记录日志、重试或提前返回
+        }
     }
 
     co_await client.close();
@@ -160,7 +190,7 @@ int main() {
 示例目录结构（参考 `galay-mysql`）：
 
 ```text
-example/
+examples/
 ├── common/   # 示例共享配置
 ├── include/  # 传统头文件版本
 └── import/   # C++23 模块 import 版本
@@ -168,11 +198,11 @@ example/
 
 include 示例目标（默认可构建）：
 
-- `E1-SendfileExample` -> `example/include/E1-SendfileExample.cc`
-- `E2-TcpEchoServer` -> `example/include/E2-TcpEchoServer.cc`
-- `E3-TcpClient` -> `example/include/E3-TcpClient.cc`
-- `E4-CoroutineBasic` -> `example/include/E4-CoroutineBasic.cc`
-- `E5-UdpEcho` -> `example/include/E5-UdpEcho.cc`
+- `E1-SendfileExample` -> `examples/include/E1-SendfileExample.cc`
+- `E2-TcpEchoServer` -> `examples/include/E2-TcpEchoServer.cc`
+- `E3-TcpClient` -> `examples/include/E3-TcpClient.cc`
+- `E4-CoroutineBasic` -> `examples/include/E4-CoroutineBasic.cc`
+- `E5-UdpEcho` -> `examples/include/E5-UdpEcho.cc`
 
 示例构建命令：
 

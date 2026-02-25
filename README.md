@@ -13,23 +13,40 @@
 
 ## 文档导航
 
-建议从 `docs/01-API文档.md` 开始：
+### 入门文档
 
-1. [文档导航](docs/01-API文档.md)
-2. [性能测试汇总](docs/02-性能测试.md)
-3. [计算调度器](docs/03-计算调度器.md)
-4. [UDP 性能测试](docs/04-UDP性能测试.md)
-5. [调度器 API](docs/05-调度器.md)
-6. [协程与超时](docs/06-协程.md)
-7. [网络 IO](docs/07-网络IO.md)
-8. [文件 IO](docs/08-文件IO.md)
-9. [并发与通道](docs/09-并发.md)
-10. [定时器调度器](docs/10-定时器调度器.md)
-11. [RingBuffer](docs/11-环形缓冲区.md)
-12. [零拷贝 sendfile](docs/12-零拷贝发送文件.md)
-13. [Runtime](docs/13-运行时Runtime.md)
-14. [文件监控](docs/14-文件监控.md)
-15. [异步同步原语](docs/15-异步同步原语.md)
+0. [快速开始](docs/00-快速开始.md) - 依赖安装、编译、运行示例
+1. [API 文档导航](docs/01-API文档.md) - 模块清单与推荐阅读顺序
+2. [架构设计](docs/16-架构设计.md) - 整体架构与设计原理
+3. [示例代码](docs/17-示例代码.md) - 常见使用场景示例
+
+### 核心模块文档
+
+4. [调度器 API](docs/05-调度器.md) - IOScheduler 与 Scheduler 基类
+5. [计算调度器](docs/03-计算调度器.md) - ComputeScheduler CPU 任务调度
+6. [Runtime](docs/13-运行时Runtime.md) - 多调度器统一管理
+7. [协程与超时](docs/06-协程.md) - Coroutine、spawn、wait、timeout
+8. [定时器调度器](docs/10-定时器调度器.md) - TimerScheduler 与 sleep
+
+### 网络与文件 IO
+
+9. [网络 IO](docs/07-网络IO.md) - TcpSocket、UdpSocket、Host
+10. [文件 IO](docs/08-文件IO.md) - AsyncFile、AioFile
+11. [文件监控](docs/14-文件监控.md) - FileWatcher (inotify/kqueue)
+12. [零拷贝 sendfile](docs/12-零拷贝发送文件.md) - sendfile 系统调用
+
+### 并发与同步
+
+13. [并发与通道](docs/09-并发.md) - MpscChannel、UnsafeChannel、Bytes
+14. [异步同步原语](docs/15-异步同步原语.md) - AsyncMutex、AsyncWaiter
+15. [RingBuffer](docs/11-环形缓冲区.md) - 环形缓冲区实现
+
+### 性能与进阶
+
+16. [性能测试汇总](docs/02-性能测试.md) - TCP/UDP 性能测试结果
+17. [UDP 性能测试](docs/04-UDP性能测试.md) - UDP 专项测试
+18. [高级主题](docs/19-高级主题.md) - 性能优化、最佳实践、高级用法
+19. [常见问题](docs/18-常见问题.md) - FAQ 与故障排查
 
 ## 构建要求
 
@@ -132,7 +149,7 @@ int main() {
 示例目录结构（参考 `galay-mysql`）：
 
 ```text
-example/
+examples/
 ├── common/   # 示例共享配置
 ├── include/  # 传统头文件版本
 └── import/   # C++23 模块 import 版本
@@ -140,11 +157,11 @@ example/
 
 include 示例目标（默认可构建）：
 
-- `E1-SendfileExample` -> `example/include/E1-SendfileExample.cc`
-- `E2-TcpEchoServer` -> `example/include/E2-TcpEchoServer.cc`
-- `E3-TcpClient` -> `example/include/E3-TcpClient.cc`
-- `E4-CoroutineBasic` -> `example/include/E4-CoroutineBasic.cc`
-- `E5-UdpEcho` -> `example/include/E5-UdpEcho.cc`
+- `E1-SendfileExample` -> `examples/include/E1-SendfileExample.cc`
+- `E2-TcpEchoServer` -> `examples/include/E2-TcpEchoServer.cc`
+- `E3-TcpClient` -> `examples/include/E3-TcpClient.cc`
+- `E4-CoroutineBasic` -> `examples/include/E4-CoroutineBasic.cc`
+- `E5-UdpEcho` -> `examples/include/E5-UdpEcho.cc`
 
 示例构建命令：
 
@@ -205,7 +222,9 @@ Coroutine echoSession(GHandle h) {
             break;
         }
         auto& bytes = r.value();
-        co_await client.send(bytes.c_str(), bytes.size());
+        if (auto __await_result = co_await client.send(bytes.c_str(), bytes.size()); !__await_result) {
+            // 错误处理：记录日志、重试或提前返回
+        }
     }
 
     co_await client.close();
