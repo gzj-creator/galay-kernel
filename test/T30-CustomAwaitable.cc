@@ -9,7 +9,7 @@
 #include "galay-kernel/kernel/IOScheduler.hpp"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/common/Host.hpp"
-#include "galay-kernel/common/Log.h"
+#include "test/StdoutLog.h"
 #include "test_result_writer.h"
 
 #ifdef USE_IOURING

@@ -10,6 +10,7 @@
 #include <vector>
 #include <atomic>
 #include <thread>
+#include <cstdint>
 #include <concurrentqueue/moodycamel/concurrentqueue.h>
 
 // Scheduler configuration macros
@@ -66,6 +67,7 @@ public:
     int addCustom(IOController* controller) override;
 
     int remove(IOController* controller) override;
+    std::optional<IOError> lastError() const override;
     // Coroutine scheduling
     bool spawn(Coroutine coro) override;
 
@@ -82,6 +84,7 @@ protected:
 
     // Pipe for notification (kqueue uses pipe)
     int m_notify_pipe[2];
+    std::atomic<uint64_t> m_last_error_code{0};
     // Lock-free queue for coroutines
     moodycamel::ConcurrentQueue<Coroutine> m_coro_queue;
     // Event buffer

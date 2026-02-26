@@ -8,7 +8,7 @@
 #include <vector>
 #include "galay-kernel/concurrency/UnsafeChannel.h"
 #include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/common/Log.h"
+#include "test/StdoutLog.h"
 #include "test_result_writer.h"
 
 #ifdef USE_EPOLL

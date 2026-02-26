@@ -1,7 +1,7 @@
 #include "galay-kernel/async/FileWatcher.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test_result_writer.h"
-#include "galay-kernel/common/Log.h"
+#include "test/StdoutLog.h"
 
 #ifdef USE_IOURING
 #include "galay-kernel/kernel/IOUringScheduler.h"

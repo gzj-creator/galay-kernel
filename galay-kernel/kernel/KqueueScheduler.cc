@@ -33,14 +33,29 @@ KqueueScheduler::KqueueScheduler(int max_events, int batch_size, int check_inter
 
     // Set pipe non-blocking
     int flags = fcntl(m_notify_pipe[0], F_GETFL, 0);
-    fcntl(m_notify_pipe[0], F_SETFL, flags | O_NONBLOCK);
+    if (flags < 0 || fcntl(m_notify_pipe[0], F_SETFL, flags | O_NONBLOCK) < 0) {
+        close(m_notify_pipe[0]);
+        close(m_notify_pipe[1]);
+        close(m_kqueue_fd);
+        throw std::runtime_error("Failed to set notification pipe read end non-blocking");
+    }
     flags = fcntl(m_notify_pipe[1], F_GETFL, 0);
-    fcntl(m_notify_pipe[1], F_SETFL, flags | O_NONBLOCK);
+    if (flags < 0 || fcntl(m_notify_pipe[1], F_SETFL, flags | O_NONBLOCK) < 0) {
+        close(m_notify_pipe[0]);
+        close(m_notify_pipe[1]);
+        close(m_kqueue_fd);
+        throw std::runtime_error("Failed to set notification pipe write end non-blocking");
+    }
 
     // Add pipe read end to kqueue for notification
     struct kevent ev;
     EV_SET(&ev, m_notify_pipe[0], EVFILT_READ, EV_ADD, 0, 0, nullptr);
-    kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
+    if (kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr) < 0) {
+        close(m_notify_pipe[0]);
+        close(m_notify_pipe[1]);
+        close(m_kqueue_fd);
+        throw std::runtime_error("Failed to register notification pipe to kqueue");
+    }
 
     m_events.resize(m_max_events);
     m_coro_buffer.resize(m_batch_size);
@@ -61,6 +76,7 @@ void KqueueScheduler::start()
     if (m_running.exchange(true, std::memory_order_acq_rel)) {
         return; // Already running
     }
+    m_last_error_code.store(0, std::memory_order_release);
 
     m_thread = std::thread([this]() {
         m_threadId = std::this_thread::get_id();  // 设置调度器线程ID
@@ -84,7 +100,10 @@ void KqueueScheduler::stop()
 void KqueueScheduler::notify()
 {
     char buf = 1;
-    write(m_notify_pipe[1], &buf, 1);
+    if (write(m_notify_pipe[1], &buf, 1) < 0) {
+        m_last_error_code.store(IOError(kNotReady, static_cast<uint32_t>(errno)).code(),
+                                std::memory_order_release);
+    }
 }
 
 int KqueueScheduler::addAccept(IOController* controller)
@@ -242,6 +261,16 @@ int KqueueScheduler::remove(IOController* controller)
     return kevent(m_kqueue_fd, evs, 2, nullptr, 0, nullptr);
 }
 
+std::optional<IOError> KqueueScheduler::lastError() const
+{
+    const uint64_t code = m_last_error_code.load(std::memory_order_acquire);
+    if (code == 0) {
+        return std::nullopt;
+    }
+    return IOError(static_cast<IOErrorCode>(code & 0xffffffffu),
+                   static_cast<uint32_t>(code >> 32));
+}
+
 bool KqueueScheduler::spawn(Coroutine co)
 {
     auto* scheduler = co.belongScheduler();
@@ -303,6 +332,8 @@ void KqueueScheduler::eventLoop()
             if (errno == EINTR) {
                 continue;
             }
+            m_last_error_code.store(IOError(kNotReady, static_cast<uint32_t>(errno)).code(),
+                                    std::memory_order_release);
             break;
         }
         for (int i = 0; i < nev; ++i) {
@@ -313,6 +344,11 @@ void KqueueScheduler::eventLoop()
                 continue;
             }
             if (ev.flags & EV_ERROR) {
+                if (ev.data > 0) {
+                    m_last_error_code.store(
+                        IOError(kNotReady, static_cast<uint32_t>(ev.data)).code(),
+                        std::memory_order_release);
+                }
                 continue;
             }
             if (!ev.udata) {
@@ -468,12 +504,28 @@ void KqueueScheduler::processEvent(struct kevent& ev)
                     if (custom->empty()) {
                         custom->m_waker.wakeUp();
                     } else {
-                        if (addCustom(controller) == OK) {
+                        const int ret = addCustom(controller);
+                        if (ret == OK) {
+                            custom->m_waker.wakeUp();
+                        } else if (ret < 0) {
+                            const uint32_t sys = (ret != -1)
+                                ? static_cast<uint32_t>(-ret)
+                                : static_cast<uint32_t>(errno);
+                            m_last_error_code.store(IOError(kNotReady, sys).code(),
+                                                    std::memory_order_release);
                             custom->m_waker.wakeUp();
                         }
                     }
                 } else {
-                    processCustom(custom->resolveTaskEventType(*task), controller);
+                    const int ret = processCustom(custom->resolveTaskEventType(*task), controller);
+                    if (ret < 0) {
+                        const uint32_t sys = (ret != -1)
+                            ? static_cast<uint32_t>(-ret)
+                            : static_cast<uint32_t>(errno);
+                        m_last_error_code.store(IOError(kNotReady, sys).code(),
+                                                std::memory_order_release);
+                        custom->m_waker.wakeUp();
+                    }
                 }
             }
         }

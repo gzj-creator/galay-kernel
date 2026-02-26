@@ -33,15 +33,6 @@ target_include_directories(galay-kernel
         $<INSTALL_INTERFACE:include/galay-kernel>
 )
 
-# 链接spdlog
-if(ENABLE_LOG)
-    if(GALAY_SPDLOG_TARGET)
-        target_link_libraries(galay-kernel PUBLIC ${GALAY_SPDLOG_TARGET})
-    else()
-        message(FATAL_ERROR "ENABLE_LOG=ON but GALAY_SPDLOG_TARGET is not set. Check top-level spdlog configuration.")
-    endif()
-endif()
-
 # 链接平台特定库
 if(PLATFORM_LIBS)
     target_link_libraries(galay-kernel PUBLIC ${PLATFORM_LIBS})

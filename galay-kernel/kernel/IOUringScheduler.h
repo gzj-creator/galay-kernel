@@ -16,6 +16,7 @@
 #include <vector>
 #include <atomic>
 #include <thread>
+#include <cstdint>
 #include <concurrentqueue/moodycamel/concurrentqueue.h>
 
 #ifndef GALAY_SCHEDULER_QUEUE_DEPTH
@@ -69,6 +70,8 @@ public:
 
     int remove(IOController* controller) override;
 
+    std::optional<IOError> lastError() const override;
+
     bool spawn(Coroutine coro) override;
 
     bool spawnImmidiately(Coroutine co) override;
@@ -85,6 +88,7 @@ private:
 
     moodycamel::ConcurrentQueue<Coroutine> m_coro_queue;
     std::vector<Coroutine> m_coro_buffer;
+    std::atomic<uint64_t> m_last_error_code{0};
 
 private:
     void eventLoop();

@@ -1,5 +1,6 @@
 #include "Awaitable.h"
 #include "galay-kernel/common/Error.h"
+#include <cerrno>
 
 #ifdef USE_EPOLL
 #include "EpollScheduler.h"
@@ -26,7 +27,12 @@ bool AcceptAwaitable::await_suspend(std::coroutine_handle<> handle) {
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addAccept(m_controller) == OK) return false;
+    const int ret = io_scheduler->addAccept(m_controller);
+    if (ret == OK) return false;
+    if (ret < 0) {
+        m_result = std::unexpected(IOError(kAcceptFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+        return false;
+    }
     return true;
 }
 
@@ -47,7 +53,12 @@ bool RecvAwaitable::await_suspend(std::coroutine_handle<> handle) {
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addRecv(m_controller) == OK) return false;
+    const int ret = io_scheduler->addRecv(m_controller);
+    if (ret == OK) return false;
+    if (ret < 0) {
+        m_result = std::unexpected(IOError(kRecvFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+        return false;
+    }
     return true;
 }
 
@@ -68,7 +79,12 @@ bool SendAwaitable::await_suspend(std::coroutine_handle<> handle) {
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addSend(m_controller) == OK) return false;
+    const int ret = io_scheduler->addSend(m_controller);
+    if (ret == OK) return false;
+    if (ret < 0) {
+        m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+        return false;
+    }
     return true;
 }
 
@@ -89,7 +105,12 @@ bool ReadvAwaitable::await_suspend(std::coroutine_handle<> handle) {
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addReadv(m_controller) == OK) return false;
+    const int ret = io_scheduler->addReadv(m_controller);
+    if (ret == OK) return false;
+    if (ret < 0) {
+        m_result = std::unexpected(IOError(kRecvFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+        return false;
+    }
     return true;
 }
 
@@ -110,7 +131,12 @@ bool WritevAwaitable::await_suspend(std::coroutine_handle<> handle) {
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addWritev(m_controller) == OK) return false;
+    const int ret = io_scheduler->addWritev(m_controller);
+    if (ret == OK) return false;
+    if (ret < 0) {
+        m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+        return false;
+    }
     return true;
 }
 
@@ -131,7 +157,12 @@ bool ConnectAwaitable::await_suspend(std::coroutine_handle<> handle) {
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addConnect(m_controller) == OK) return false;
+    const int ret = io_scheduler->addConnect(m_controller);
+    if (ret == OK) return false;
+    if (ret < 0) {
+        m_result = std::unexpected(IOError(kConnectFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+        return false;
+    }
     return true;
 }
 
@@ -173,7 +204,12 @@ bool FileReadAwaitable::await_suspend(std::coroutine_handle<> handle) {
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addFileRead(m_controller) == OK) return false;
+    const int ret = io_scheduler->addFileRead(m_controller);
+    if (ret == OK) return false;
+    if (ret < 0) {
+        m_result = std::unexpected(IOError(kReadFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+        return false;
+    }
     return true;
 }
 
@@ -194,7 +230,12 @@ bool FileWriteAwaitable::await_suspend(std::coroutine_handle<> handle) {
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addFileWrite(m_controller) == OK) return false;
+    const int ret = io_scheduler->addFileWrite(m_controller);
+    if (ret == OK) return false;
+    if (ret < 0) {
+        m_result = std::unexpected(IOError(kWriteFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+        return false;
+    }
     return true;
 }
 
@@ -215,7 +256,12 @@ bool RecvFromAwaitable::await_suspend(std::coroutine_handle<> handle) {
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addRecvFrom(m_controller) == OK) return false;
+    const int ret = io_scheduler->addRecvFrom(m_controller);
+    if (ret == OK) return false;
+    if (ret < 0) {
+        m_result = std::unexpected(IOError(kRecvFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+        return false;
+    }
     return true;
 }
 
@@ -236,7 +282,12 @@ bool SendToAwaitable::await_suspend(std::coroutine_handle<> handle) {
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addSendTo(m_controller) == OK) return false;
+    const int ret = io_scheduler->addSendTo(m_controller);
+    if (ret == OK) return false;
+    if (ret < 0) {
+        m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+        return false;
+    }
     return true;
 }
 
@@ -257,7 +308,12 @@ bool FileWatchAwaitable::await_suspend(std::coroutine_handle<> handle) {
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addFileWatch(m_controller) == OK) return false;
+    const int ret = io_scheduler->addFileWatch(m_controller);
+    if (ret == OK) return false;
+    if (ret < 0) {
+        m_result = std::unexpected(IOError(kReadFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+        return false;
+    }
     return true;
 }
 
@@ -278,7 +334,12 @@ bool SendFileAwaitable::await_suspend(std::coroutine_handle<> handle) {
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addSendFile(m_controller) == OK) return false;
+    const int ret = io_scheduler->addSendFile(m_controller);
+    if (ret == OK) return false;
+    if (ret < 0) {
+        m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+        return false;
+    }
     return true;
 }
 
@@ -298,7 +359,12 @@ bool CustomAwaitable::await_suspend(std::coroutine_handle<> handle) {
         return false;
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addCustom(m_controller) == OK) return false;
+    const int ret = io_scheduler->addCustom(m_controller);
+    if (ret == OK) return false;
+    if (ret < 0) {
+        m_error = IOError(kNotReady, ((ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno)));
+        return false;
+    }
     return true;
 }
 

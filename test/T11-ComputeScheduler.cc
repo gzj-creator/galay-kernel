@@ -11,7 +11,7 @@
 #include "galay-kernel/kernel/ComputeScheduler.h"
 #include "galay-kernel/concurrency/AsyncWaiter.h"
 #include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/common/Log.h"
+#include "test/StdoutLog.h"
 #include "test_result_writer.h"
 
 using namespace galay::kernel;

@@ -586,6 +586,9 @@ struct CustomAwaitable: public AwaitableBase {
 
     bool await_suspend(std::coroutine_handle<> handle);
 
+    /// 调度层错误（addCustom 失败时设置），子类 await_resume 应优先检查
+    std::optional<IOError> m_error;
+
     IOController* m_controller;
     Waker m_waker;
     std::vector<IOTask> m_tasks;

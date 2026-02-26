@@ -6,7 +6,7 @@
 #include <vector>
 #include <cstring>
 #include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/common/Log.h"
+#include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
 #include "galay-kernel/kernel/KqueueScheduler.h"
@@ -411,11 +411,6 @@ void runIOUringBenchmark(const BenchConfig& config) {
 #endif
 
 int main(int argc, char* argv[]) {
-    // 设置日志级别为 info，禁用 debug 日志
-#ifdef USE_LOG
-    spdlog::set_level(spdlog::level::info);
-#endif
-
     // 注册信号处理
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);

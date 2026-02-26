@@ -8,7 +8,7 @@
 #include <cstring>
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/common/Log.h"
+#include "test/StdoutLog.h"
 #include "test_result_writer.h"
 
 #ifdef USE_KQUEUE

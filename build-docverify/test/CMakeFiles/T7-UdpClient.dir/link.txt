@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/T7-UdpClient.dir/T7-UdpClient.cc.o" -o ../bin/T7-UdpClient  ../lib/libgalay-kernel.a

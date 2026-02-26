@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/E3-TcpClient.dir/include/E3-TcpClient.cc.o" -o ../bin/E3-TcpClient  ../lib/libgalay-kernel.a

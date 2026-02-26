@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/B11-TcpIovServer.dir/B11-TcpIovServer.cc.o" -o ../bin/B11-TcpIovServer  ../lib/libgalay-kernel.a

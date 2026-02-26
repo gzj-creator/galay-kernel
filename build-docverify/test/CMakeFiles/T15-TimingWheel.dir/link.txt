@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/T15-TimingWheel.dir/T15-TimingWheel.cc.o" -o ../bin/T15-TimingWheel  ../lib/libgalay-kernel.a

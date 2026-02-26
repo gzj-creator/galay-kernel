@@ -18,7 +18,7 @@
 #include <memory>
 #include "galay-kernel/kernel/ComputeScheduler.h"
 #include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/common/Log.h"
+#include "test/StdoutLog.h"
 
 using namespace galay::kernel;
 using namespace std::chrono_literals;

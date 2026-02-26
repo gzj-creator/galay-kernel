@@ -12,12 +12,7 @@ option(BUILD_EXAMPLES "Build example executables" ON)
 option(ENABLE_CPP23_MODULES "Enable experimental C++23 named modules support" OFF)
 
 # 库类型选项（CMake 标准变量）
-option(BUILD_SHARED_LIBS "Build shared library instead of static" OFF)
-
-# 日志选项
-option(ENABLE_LOG "Enable logging with spdlog" ON)
-# Keep this project header-only for spdlog to avoid linking against system libspdlog.a (often non-PIC).
-set(SPDLOG_USE_HEADER_ONLY ON CACHE BOOL "Use spdlog header-only target (avoid linking libspdlog)" FORCE)
+option(BUILD_SHARED_LIBS "Build shared library instead of static" ON)
 
 # IO后端选项
 option(DISABLE_IOURING "Disable io_uring and use epoll on Linux" ON)

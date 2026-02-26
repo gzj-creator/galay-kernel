@@ -10,6 +10,7 @@
 #include <vector>
 #include <atomic>
 #include <thread>
+#include <cstdint>
 #include <concurrentqueue/moodycamel/concurrentqueue.h>
 
 #ifndef GALAY_SCHEDULER_MAX_EVENTS
@@ -73,6 +74,7 @@ public:
     int addCustom(IOController* controller) override;
 
     int remove(IOController* controller) override;
+    std::optional<IOError> lastError() const override;
 
     bool spawn(Coroutine coro) override;
 
@@ -88,6 +90,7 @@ protected:
     int m_check_interval_ms;
 
     int m_event_fd;
+    std::atomic<uint64_t> m_last_error_code{0};
 
     moodycamel::ConcurrentQueue<Coroutine> m_coro_queue;
     std::vector<struct epoll_event> m_events;

@@ -22,7 +22,8 @@
  * // 或者检查返回值
  * auto result = socket.option().handleNonBlock();
  * if (!result) {
- *     LogError("Failed to set non-block: {}", result.error().message());
+ *     // 向上层传播错误，统一处理
+ *     return std::unexpected(result.error());
  * }
  * @endcode
  */

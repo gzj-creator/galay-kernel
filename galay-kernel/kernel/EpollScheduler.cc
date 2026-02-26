@@ -64,6 +64,7 @@ void EpollScheduler::start()
     if (m_running.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
+    m_last_error_code.store(0, std::memory_order_release);
 
     m_thread = std::thread([this]() {
         m_threadId = std::this_thread::get_id();
@@ -87,7 +88,10 @@ void EpollScheduler::stop()
 void EpollScheduler::notify()
 {
     uint64_t val = 1;
-    if (write(m_event_fd, &val, sizeof(val)) < 0) {}
+    if (write(m_event_fd, &val, sizeof(val)) < 0) {
+        m_last_error_code.store(IOError(kNotReady, static_cast<uint32_t>(errno)).code(),
+                                std::memory_order_release);
+    }
 }
 
 uint32_t EpollScheduler::buildEpollEvents(IOController* controller)
@@ -263,6 +267,16 @@ int EpollScheduler::remove(IOController* controller)
     return epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, controller->m_handle.fd, nullptr);
 }
 
+std::optional<IOError> EpollScheduler::lastError() const
+{
+    const uint64_t code = m_last_error_code.load(std::memory_order_acquire);
+    if (code == 0) {
+        return std::nullopt;
+    }
+    return IOError(static_cast<IOErrorCode>(code & 0xffffffffu),
+                   static_cast<uint32_t>(code >> 32));
+}
+
 bool EpollScheduler::spawn(Coroutine co)
 {
     auto* scheduler = co.belongScheduler();
@@ -321,6 +335,8 @@ void EpollScheduler::eventLoop()
             if (errno == EINTR) {
                 continue;
             }
+            m_last_error_code.store(IOError(kNotReady, static_cast<uint32_t>(errno)).code(),
+                                    std::memory_order_release);
             break;
         }
 
@@ -335,7 +351,9 @@ void EpollScheduler::eventLoop()
             }
 
             if (ev.events & EPOLLERR) {
-                continue;
+                // Try to drive awaitable completion on socket error paths instead
+                // of silently dropping the event and leaving coroutines suspended.
+                ev.events |= (EPOLLIN | EPOLLOUT);
             }
 
             processEvent(ev);
@@ -521,12 +539,28 @@ void EpollScheduler::processEvent(struct epoll_event& ev)
                     if (custom->empty()) {
                         custom->m_waker.wakeUp();
                     } else {
-                        if (addCustom(controller) == OK) {
+                        const int ret = addCustom(controller);
+                        if (ret == OK) {
+                            custom->m_waker.wakeUp();
+                        } else if (ret < 0) {
+                            const uint32_t sys = (ret != -1)
+                                ? static_cast<uint32_t>(-ret)
+                                : static_cast<uint32_t>(errno);
+                            m_last_error_code.store(IOError(kNotReady, sys).code(),
+                                                    std::memory_order_release);
                             custom->m_waker.wakeUp();
                         }
                     }
                 } else {
-                    processCustom(custom->resolveTaskEventType(*task), controller);
+                    const int ret = processCustom(custom->resolveTaskEventType(*task), controller);
+                    if (ret < 0) {
+                        const uint32_t sys = (ret != -1)
+                            ? static_cast<uint32_t>(-ret)
+                            : static_cast<uint32_t>(errno);
+                        m_last_error_code.store(IOError(kNotReady, sys).code(),
+                                                std::memory_order_release);
+                        custom->m_waker.wakeUp();
+                    }
                 }
             }
         }
@@ -541,13 +575,20 @@ void EpollScheduler::syncEpollEvents(IOController* controller)
 {
     uint32_t newEvents = buildEpollEvents(controller);
     if (newEvents == EPOLLET) {
-        epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, controller->m_handle.fd, nullptr);
+        if (epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, controller->m_handle.fd, nullptr) < 0 &&
+            errno != ENOENT) {
+            m_last_error_code.store(IOError(kNotReady, static_cast<uint32_t>(errno)).code(),
+                                    std::memory_order_release);
+        }
         return;
     }
     struct epoll_event ev;
     ev.events = newEvents;
     ev.data.ptr = controller;
-    epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev);
+    if (epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, controller->m_handle.fd, &ev) < 0) {
+        m_last_error_code.store(IOError(kNotReady, static_cast<uint32_t>(errno)).code(),
+                                std::memory_order_release);
+    }
 }
 
 int EpollScheduler::addRecvFrom(IOController* controller)

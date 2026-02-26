@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/T21-Runtime.dir/T21-Runtime.cc.o" -o ../bin/T21-Runtime  ../lib/libgalay-kernel.a

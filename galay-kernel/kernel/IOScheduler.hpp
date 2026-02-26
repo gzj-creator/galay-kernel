@@ -2,10 +2,12 @@
 #define GALAY_KERNEL_IOSCHEDULER_HPP
 
 #include "galay-kernel/common/Defn.hpp"
+#include "galay-kernel/common/Error.h"
 #include "Scheduler.hpp"
 #include "IOController.hpp"
 #include "Awaitable.h"
 #include "galay-kernel/common/TimerManager.hpp"
+#include <optional>
 
 namespace galay::kernel
 {
@@ -196,6 +198,14 @@ public:
      * @param controller IO控制器
      */
     virtual int remove(IOController* controller) = 0;
+
+    /**
+     * @brief 查询调度器最近一次内部错误
+     * @return 如果存在内部错误则返回 IOError；否则返回 std::nullopt
+     */
+    virtual std::optional<IOError> lastError() const {
+        return std::nullopt;
+    }
 
 
     /**

@@ -1,8 +1,6 @@
 #include "IOUringScheduler.h"
 
 #ifdef USE_IOURING
-#include "galay-kernel/common/Error.h"
-#include "galay-kernel/common/Log.h"
 #include <sys/eventfd.h>
 #include <sys/inotify.h>
 #include <sys/socket.h>
@@ -62,6 +60,7 @@ void IOUringScheduler::start()
     if (m_running.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
+    m_last_error_code.store(0, std::memory_order_release);
 
     m_thread = std::thread([this]() {
         m_threadId = std::this_thread::get_id();
@@ -85,7 +84,10 @@ void IOUringScheduler::stop()
 void IOUringScheduler::notify()
 {
     uint64_t val = 1;
-    write(m_event_fd, &val, sizeof(val));
+    if (write(m_event_fd, &val, sizeof(val)) < 0) {
+        m_last_error_code.store(IOError(kNotReady, static_cast<uint32_t>(errno)).code(),
+                                std::memory_order_release);
+    }
 }
 
 int IOUringScheduler::addAccept(IOController* controller)
@@ -459,6 +461,16 @@ int IOUringScheduler::remove(IOController* controller)
     return 0;
 }
 
+std::optional<IOError> IOUringScheduler::lastError() const
+{
+    const uint64_t code = m_last_error_code.load(std::memory_order_acquire);
+    if (code == 0) {
+        return std::nullopt;
+    }
+    return IOError(static_cast<IOErrorCode>(code & 0xffffffffu),
+                   static_cast<uint32_t>(code >> 32));
+}
+
 bool IOUringScheduler::spawn(Coroutine co)
 {
     auto* scheduler = co.belongScheduler();
@@ -517,7 +529,9 @@ void IOUringScheduler::eventLoop()
 
         int submitted = io_uring_submit(&m_ring);
         if (submitted < 0 && submitted != -EBUSY) {
-            LogError("io_uring_submit failed: {}", submitted);
+            m_last_error_code.store(
+                IOError(kNotReady, static_cast<uint32_t>(-submitted)).code(),
+                std::memory_order_release);
         }
 
         int ret = io_uring_wait_cqe_timeout(&m_ring, &cqe, &timeout);
@@ -525,7 +539,9 @@ void IOUringScheduler::eventLoop()
             if (ret == -EINTR || ret == -ETIME) {
                 continue;
             }
-            LogError("io_uring_wait_cqe_timeout failed: {}", ret);
+            m_last_error_code.store(
+                IOError(kNotReady, static_cast<uint32_t>(-ret)).code(),
+                std::memory_order_release);
             break;
         }
 
@@ -576,7 +592,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         if (awaitable->handleComplete(cqe, controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
-            addAccept(controller);
+            const int ret = addAccept(controller);
+            if (ret < 0) {
+                awaitable->m_result = std::unexpected(IOError(kAcceptFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+                awaitable->m_waker.wakeUp();
+            }
         }
         break;
     }
@@ -586,7 +606,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         if (awaitable->handleComplete(cqe, controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
-            addConnect(controller);
+            const int ret = addConnect(controller);
+            if (ret < 0) {
+                awaitable->m_result = std::unexpected(IOError(kConnectFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+                awaitable->m_waker.wakeUp();
+            }
         }
         break;
     }
@@ -596,7 +620,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         if (awaitable->handleComplete(cqe, controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
-            addRecv(controller);
+            const int ret = addRecv(controller);
+            if (ret < 0) {
+                awaitable->m_result = std::unexpected(IOError(kRecvFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+                awaitable->m_waker.wakeUp();
+            }
         }
         break;
     }
@@ -606,7 +634,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         if (awaitable->handleComplete(cqe, controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
-            addSend(controller);
+            const int ret = addSend(controller);
+            if (ret < 0) {
+                awaitable->m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+                awaitable->m_waker.wakeUp();
+            }
         }
         break;
     }
@@ -616,7 +648,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         if (awaitable->handleComplete(cqe, controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
-            addReadv(controller);
+            const int ret = addReadv(controller);
+            if (ret < 0) {
+                awaitable->m_result = std::unexpected(IOError(kRecvFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+                awaitable->m_waker.wakeUp();
+            }
         }
         break;
     }
@@ -626,7 +662,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         if (awaitable->handleComplete(cqe, controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
-            addWritev(controller);
+            const int ret = addWritev(controller);
+            if (ret < 0) {
+                awaitable->m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+                awaitable->m_waker.wakeUp();
+            }
         }
         break;
     }
@@ -636,7 +676,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         if (awaitable->handleComplete(cqe, controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
-            addFileRead(controller);
+            const int ret = addFileRead(controller);
+            if (ret < 0) {
+                awaitable->m_result = std::unexpected(IOError(kReadFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+                awaitable->m_waker.wakeUp();
+            }
         }
         break;
     }
@@ -646,7 +690,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         if (awaitable->handleComplete(cqe, controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
-            addFileWrite(controller);
+            const int ret = addFileWrite(controller);
+            if (ret < 0) {
+                awaitable->m_result = std::unexpected(IOError(kWriteFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+                awaitable->m_waker.wakeUp();
+            }
         }
         break;
     }
@@ -656,7 +704,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         if (awaitable->handleComplete(cqe, controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
-            addRecvFrom(controller);
+            const int ret = addRecvFrom(controller);
+            if (ret < 0) {
+                awaitable->m_result = std::unexpected(IOError(kRecvFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+                awaitable->m_waker.wakeUp();
+            }
         }
         break;
     }
@@ -666,7 +718,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         if (awaitable->handleComplete(cqe, controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
-            addSendTo(controller);
+            const int ret = addSendTo(controller);
+            if (ret < 0) {
+                awaitable->m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+                awaitable->m_waker.wakeUp();
+            }
         }
         break;
     }
@@ -676,7 +732,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         if (awaitable->handleComplete(cqe, controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
-            addFileWatch(controller);
+            const int ret = addFileWatch(controller);
+            if (ret < 0) {
+                awaitable->m_result = std::unexpected(IOError(kReadFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+                awaitable->m_waker.wakeUp();
+            }
         }
         break;
     }
@@ -686,7 +746,11 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
         if (awaitable->handleComplete(cqe, controller->m_handle)) {
             awaitable->m_waker.wakeUp();
         } else {
-            addSendFile(controller);
+            const int ret = addSendFile(controller);
+            if (ret < 0) {
+                awaitable->m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
+                awaitable->m_waker.wakeUp();
+            }
         }
         break;
     }
@@ -701,12 +765,22 @@ void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
                 if (custom->empty()) {
                     custom->m_waker.wakeUp();
                 } else {
-                    if (addCustom(controller) == OK) {
+                    const int ret = addCustom(controller);
+                    if (ret == OK) {
+                        custom->m_waker.wakeUp();
+                    } else if (ret < 0) {
+                        m_last_error_code.store(IOError(kNotReady, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))).code(),
+                                                std::memory_order_release);
                         custom->m_waker.wakeUp();
                     }
                 }
             } else {
-                addCustom(controller);
+                const int ret = addCustom(controller);
+                if (ret < 0) {
+                    m_last_error_code.store(IOError(kNotReady, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))).code(),
+                                            std::memory_order_release);
+                    custom->m_waker.wakeUp();
+                }
             }
         }
         break;

@@ -16,7 +16,7 @@
 #include <vector>
 #include <thread>
 #include "galay-kernel/common/Buffer.h"
-#include "galay-kernel/common/Log.h"
+#include "test/StdoutLog.h"
 
 using namespace galay::kernel;
 using namespace std::chrono;

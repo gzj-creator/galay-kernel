@@ -3,7 +3,6 @@
 #ifdef USE_EPOLL
 
 #include "galay-kernel/kernel/EpollScheduler.h"
-#include "galay-kernel/common/Log.h"
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/eventfd.h>
@@ -39,7 +38,6 @@ bool AioCommitAwaitable::await_suspend(std::coroutine_handle<> handle)
     // 提交 AIO 请求
     int ret = io_submit(m_aio_ctx, m_pending_count, m_pending_ptrs.data());
     if (ret < 0) {
-        LogError("[AioCommit] io_submit failed: {}", strerror(-ret));
         m_result = std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(-ret)));
         return false;
     }
@@ -56,7 +54,6 @@ bool AioCommitAwaitable::await_suspend(std::coroutine_handle<> handle)
     }
     auto io_scheduler = static_cast<IOScheduler*>(scheduler);
     if (io_scheduler->addFileRead(m_controller) < 0) {
-        LogError("[AioCommit] addFileRead failed: {}", strerror(errno));
         m_result = std::unexpected(IOError(kReadFailed, errno));
         return false;
     }
