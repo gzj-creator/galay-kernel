@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/T14-MpscChannel.dir/T14-MpscChannel.cc.o" -o ../bin/T14-MpscChannel  ../lib/libgalay-kernel.a

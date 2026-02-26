@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/T5-UdpSocket.dir/T5-UdpSocket.cc.o" -o ../bin/T5-UdpSocket  ../lib/libgalay-kernel.a

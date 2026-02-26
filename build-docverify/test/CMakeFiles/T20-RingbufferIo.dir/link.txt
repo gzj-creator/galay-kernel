@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/T20-RingbufferIo.dir/T20-RingbufferIo.cc.o" -o ../bin/T20-RingbufferIo  ../lib/libgalay-kernel.a

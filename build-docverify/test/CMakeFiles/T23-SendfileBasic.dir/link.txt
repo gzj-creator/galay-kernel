@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/T23-SendfileBasic.dir/T23-SendfileBasic.cc.o" -o ../bin/T23-SendfileBasic  ../lib/libgalay-kernel.a
