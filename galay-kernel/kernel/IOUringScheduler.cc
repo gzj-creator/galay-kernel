@@ -64,6 +64,7 @@ void IOUringScheduler::start()
 
     m_thread = std::thread([this]() {
         m_threadId = std::this_thread::get_id();
+        (void)applyConfiguredAffinity();
         eventLoop();
     });
 }

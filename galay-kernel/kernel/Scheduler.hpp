@@ -18,6 +18,9 @@
 
 #include "galay-kernel/common/Timer.hpp"
 #include "Coroutine.h"
+#include <atomic>
+#include <cstdint>
+#include <optional>
 #include <thread>
 
 #ifdef USE_IOURING
@@ -109,6 +112,15 @@ public:
     virtual bool addTimer(Timer::ptr timer) = 0;
 
     /**
+     * @brief 配置或取消调度器线程绑核
+     * @param cpu_id 目标 CPU 核心编号（从 0 开始）；传 std::nullopt 表示取消绑核
+     * @return true 配置成功；false 参数无效或平台不支持
+     * @note 默认不绑核，仅在主动调用本接口后生效
+     * @note 在 start() 之前调用可保证立即生效
+     */
+    bool setAffinity(std::optional<uint32_t> cpu_id);
+
+    /**
      * @brief 获取调度器所属线程ID
      * @return 线程ID
      */
@@ -127,7 +139,12 @@ protected:
      * @note 仅供调度器内部使用
      */
     void resume(Coroutine& co);
+    bool applyConfiguredAffinity();
     std::thread::id m_threadId;  ///< 调度器所属线程ID，在 start() 时设置
+
+private:
+    static constexpr int32_t kNoAffinity = -1;
+    std::atomic<int32_t> m_affinity_cpu{kNoAffinity};
 };
 
 

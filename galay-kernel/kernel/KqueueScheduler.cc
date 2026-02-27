@@ -80,6 +80,7 @@ void KqueueScheduler::start()
 
     m_thread = std::thread([this]() {
         m_threadId = std::this_thread::get_id();  // 设置调度器线程ID
+        (void)applyConfiguredAffinity();
         eventLoop();
     });
 }
