@@ -121,7 +121,7 @@ Coroutine server(IOScheduler* scheduler) {
 }
 
 int main() {
-    Runtime runtime; // 零配置：自动创建 IO/Compute 调度器
+    Runtime runtime = RuntimeBuilder().build(); // 零配置：自动创建 IO/Compute 调度器
     runtime.start();
 
     auto* io = runtime.getNextIOScheduler();
@@ -170,7 +170,7 @@ cmake --build . --parallel
 import galay.kernel;
 
 int main() {
-    galay::kernel::Runtime runtime;
+    galay::kernel::Runtime runtime = galay::kernel::RuntimeBuilder().build();
     return 0;
 }
 ```

@@ -129,7 +129,7 @@ cmake --build . --parallel
 import galay.kernel;
 
 int main() {
-    galay::kernel::Runtime runtime;
+    galay::kernel::Runtime runtime = galay::kernel::RuntimeBuilder().build();
     return 0;
 }
 ```
@@ -248,7 +248,7 @@ Coroutine echoServer(IOScheduler* io) {
 }
 
 int main() {
-    Runtime runtime;
+    Runtime runtime = RuntimeBuilder().build();
     runtime.start();
 
     auto* io = runtime.getNextIOScheduler();
