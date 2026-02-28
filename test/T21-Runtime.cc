@@ -316,7 +316,7 @@ void test_runtime_specified_count() {
     std::cout << "\n[测试6] 指定调度器数量" << std::endl;
 
     // 指定创建 3 个 IO 调度器和 5 个计算调度器
-    Runtime runtime(3, 5);
+    Runtime runtime = RuntimeBuilder().ioSchedulerCount(3).computeSchedulerCount(5).build();
 
     runtime.start();
 
@@ -343,7 +343,7 @@ void test_runtime_manual_priority() {
     std::cout << "\n[测试7] 手动添加优先于自动配置" << std::endl;
 
     // 指定自动创建数量，但手动添加调度器
-    Runtime runtime(10, 10);
+    Runtime runtime = RuntimeBuilder().ioSchedulerCount(10).computeSchedulerCount(10).build();
 
     // 手动添加 2 个 IO 调度器
     auto io1 = std::make_unique<IOSchedulerType>();
@@ -371,6 +371,72 @@ void test_runtime_manual_priority() {
     ++g_passed;
 }
 
+// ============== 测试8: RuntimeBuilder 基本功能 ==============
+void test_runtime_builder_basic() {
+    ++g_total;
+    std::cout << "\n[测试8] RuntimeBuilder 基本功能" << std::endl;
+
+    Runtime runtime = RuntimeBuilder()
+        .ioSchedulerCount(3)
+        .computeSchedulerCount(5)
+        .build();
+    runtime.start();
+
+    if (runtime.getIOSchedulerCount() != 3 || runtime.getComputeSchedulerCount() != 5) {
+        std::cout << "❌ 调度器数量不符合预期" << std::endl;
+        runtime.stop();
+        return;
+    }
+    runtime.stop();
+    std::cout << "✅ 测试通过" << std::endl;
+    ++g_passed;
+}
+
+// ============== 测试9: RuntimeBuilder 顺序绑核 ==============
+void test_runtime_builder_sequential_affinity() {
+    ++g_total;
+    std::cout << "\n[测试9] RuntimeBuilder 顺序绑核" << std::endl;
+
+    Runtime runtime = RuntimeBuilder()
+        .ioSchedulerCount(2)
+        .computeSchedulerCount(2)
+        .sequentialAffinity(2, 2)
+        .build();
+    runtime.start();
+    runtime.stop();
+    std::cout << "✅ 测试通过" << std::endl;
+    ++g_passed;
+}
+
+// ============== 测试10: RuntimeBuilder 自定义绑核（严格校验） ==============
+void test_runtime_builder_custom_affinity() {
+    ++g_total;
+    std::cout << "\n[测试10] RuntimeBuilder 自定义绑核（严格校验）" << std::endl;
+
+    // 正确：长度匹配
+    bool ok = RuntimeBuilder()
+        .ioSchedulerCount(2)
+        .computeSchedulerCount(1)
+        .customAffinity({0, 1}, {2});
+    if (!ok) {
+        std::cout << "❌ 长度匹配时应返回 true" << std::endl;
+        return;
+    }
+
+    // 错误：长度不匹配
+    bool fail = RuntimeBuilder()
+        .ioSchedulerCount(2)
+        .computeSchedulerCount(1)
+        .customAffinity({0}, {2});  // io 长度错误
+    if (fail) {
+        std::cout << "❌ 长度不匹配时应返回 false" << std::endl;
+        return;
+    }
+
+    std::cout << "✅ 测试通过" << std::endl;
+    ++g_passed;
+}
+
 // ============== 主函数 ==============
 int main() {
     std::cout << "========================================" << std::endl;
@@ -384,6 +450,9 @@ int main() {
     test_runtime_auto_config();
     test_runtime_specified_count();
     test_runtime_manual_priority();
+    test_runtime_builder_basic();
+    test_runtime_builder_sequential_affinity();
+    test_runtime_builder_custom_affinity();
 
     std::cout << "\n========================================" << std::endl;
     std::cout << "测试结果: " << g_passed.load() << "/" << g_total.load() << " 通过" << std::endl;

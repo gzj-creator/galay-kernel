@@ -29,7 +29,7 @@ Coroutine sleepTask() {
 }  // namespace
 
 int main() {
-    Runtime runtime(1, 1);
+    Runtime runtime = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(1).build();
     runtime.start();
 
     auto* io = runtime.getNextIOScheduler();
