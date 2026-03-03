@@ -211,52 +211,79 @@ namespace galay::kernel
 
     std::vector<struct iovec> RingBuffer::getWriteIovecs()
     {
+        struct iovec raw_iovecs[2];
+        const size_t count = getWriteIovecs(raw_iovecs, 2);
         std::vector<struct iovec> iovecs;
+        iovecs.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            iovecs.push_back(raw_iovecs[i]);
+        }
+        return iovecs;
+    }
 
-        if (m_size == m_capacity) {
-            return iovecs;
+    size_t RingBuffer::getWriteIovecs(struct iovec* out, size_t max_iovecs) const
+    {
+        if (out == nullptr || max_iovecs == 0 || m_size == m_capacity) {
+            return 0;
         }
 
+        size_t count = 0;
         if (m_writeIndex >= m_readIndex) {
             // 可写区域: [writeIndex, capacity) 和 [0, readIndex)
-            size_t firstChunk = m_capacity - m_writeIndex;
-            if (firstChunk > 0) {
-                iovecs.push_back({m_buffer + m_writeIndex, firstChunk});
+            const size_t firstChunk = m_capacity - m_writeIndex;
+            if (firstChunk > 0 && count < max_iovecs) {
+                out[count++] = {m_buffer + m_writeIndex, firstChunk};
             }
-            if (m_readIndex > 0) {
-                iovecs.push_back({m_buffer, m_readIndex});
+            if (m_readIndex > 0 && count < max_iovecs) {
+                out[count++] = {m_buffer, m_readIndex};
             }
         } else {
             // 可写区域: [writeIndex, readIndex)
-            iovecs.push_back({m_buffer + m_writeIndex, m_readIndex - m_writeIndex});
+            if (count < max_iovecs) {
+                out[count++] = {m_buffer + m_writeIndex, m_readIndex - m_writeIndex};
+            }
         }
-
-        return iovecs;
+        return count;
     }
 
     std::vector<struct iovec> RingBuffer::getReadIovecs() const
     {
+        struct iovec raw_iovecs[2];
+        const size_t count = getReadIovecs(raw_iovecs, 2);
         std::vector<struct iovec> iovecs;
+        iovecs.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            iovecs.push_back(raw_iovecs[i]);
+        }
+        return iovecs;
+    }
 
-        if (m_size == 0) {
-            return iovecs;
+    size_t RingBuffer::getReadIovecs(struct iovec* out, size_t max_iovecs) const
+    {
+        if (out == nullptr || max_iovecs == 0 || m_size == 0) {
+            return 0;
         }
 
+        size_t count = 0;
         if (m_readIndex < m_writeIndex) {
             // 可读区域: [readIndex, writeIndex)
-            iovecs.push_back({const_cast<char*>(m_buffer + m_readIndex), m_writeIndex - m_readIndex});
+            if (count < max_iovecs) {
+                out[count++] = {
+                    const_cast<char*>(m_buffer + m_readIndex),
+                    m_writeIndex - m_readIndex
+                };
+            }
         } else {
             // 可读区域: [readIndex, capacity) 和 [0, writeIndex)
-            size_t firstChunk = m_capacity - m_readIndex;
-            if (firstChunk > 0) {
-                iovecs.push_back({const_cast<char*>(m_buffer + m_readIndex), firstChunk});
+            const size_t firstChunk = m_capacity - m_readIndex;
+            if (firstChunk > 0 && count < max_iovecs) {
+                out[count++] = {const_cast<char*>(m_buffer + m_readIndex), firstChunk};
             }
-            if (m_writeIndex > 0) {
-                iovecs.push_back({const_cast<char*>(m_buffer), m_writeIndex});
+            if (m_writeIndex > 0 && count < max_iovecs) {
+                out[count++] = {const_cast<char*>(m_buffer), m_writeIndex};
             }
         }
-
-        return iovecs;
+        return count;
     }
 
     void RingBuffer::produce(size_t len)

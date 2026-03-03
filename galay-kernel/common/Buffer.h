@@ -260,6 +260,7 @@ namespace galay::kernel
          * @endcode
          */
         std::vector<struct iovec> getWriteIovecs();
+        size_t getWriteIovecs(struct iovec* out, size_t max_iovecs = 2) const;
 
         /**
          * @brief 获取可读区域的 iovec 向量（用于 writev）
@@ -272,6 +273,7 @@ namespace galay::kernel
          * @endcode
          */
         std::vector<struct iovec> getReadIovecs() const;
+        size_t getReadIovecs(struct iovec* out, size_t max_iovecs = 2) const;
 
         /**
          * @brief 确认已写入的字节数（移动写指针）
