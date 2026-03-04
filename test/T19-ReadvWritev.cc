@@ -1,5 +1,6 @@
 #include <cstring>
 #include <atomic>
+#include <array>
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/StdoutLog.h"
@@ -79,14 +80,14 @@ Coroutine readvServer([[maybe_unused]] IOScheduler* scheduler) {
     std::memset(header, 0, sizeof(header));
     std::memset(body, 0, sizeof(body));
 
-    std::vector<struct iovec> iovecs(2);
+    std::array<struct iovec, 2> iovecs{};
     iovecs[0].iov_base = header;
     iovecs[0].iov_len = sizeof(header);
     iovecs[1].iov_base = body;
     iovecs[1].iov_len = sizeof(body);
 
     LogInfo("[Server] Waiting for readv...");
-    auto readvResult = co_await client.readv(std::move(iovecs));
+    auto readvResult = co_await client.readv(iovecs);
     if (!readvResult) {
         LogError("[Server] readv failed: {}", readvResult.error().message());
         co_await client.close();
@@ -119,13 +120,13 @@ Coroutine readvServer([[maybe_unused]] IOScheduler* scheduler) {
     const char* respHeader = "RESP:OK_________";  // 16 bytes
     const char* respBody = "Response from server using writev!";
 
-    std::vector<struct iovec> respIovecs(2);
+    std::array<struct iovec, 2> respIovecs{};
     respIovecs[0].iov_base = const_cast<char*>(respHeader);
     respIovecs[0].iov_len = 16;
     respIovecs[1].iov_base = const_cast<char*>(respBody);
     respIovecs[1].iov_len = strlen(respBody);
 
-    auto writevResult = co_await client.writev(std::move(respIovecs));
+    auto writevResult = co_await client.writev(respIovecs);
     if (!writevResult) {
         LogError("[Server] writev failed: {}", writevResult.error().message());
     } else {
@@ -167,14 +168,14 @@ Coroutine writevClient([[maybe_unused]] IOScheduler* scheduler) {
     const char* header = "HEADER:12345678";  // 15 bytes + 1 padding = 16 bytes
     const char* body = "BODY:Hello World from writev!";
 
-    std::vector<struct iovec> iovecs(2);
+    std::array<struct iovec, 2> iovecs{};
     iovecs[0].iov_base = const_cast<char*>(header);
     iovecs[0].iov_len = 16;  // 固定16字节
     iovecs[1].iov_base = const_cast<char*>(body);
     iovecs[1].iov_len = strlen(body);
 
     LogInfo("[Client] Sending with writev...");
-    auto writevResult = co_await client.writev(std::move(iovecs));
+    auto writevResult = co_await client.writev(iovecs);
     if (!writevResult) {
         LogError("[Client] writev failed: {}", writevResult.error().message());
         co_await client.close();
@@ -189,14 +190,14 @@ Coroutine writevClient([[maybe_unused]] IOScheduler* scheduler) {
     std::memset(respHeader, 0, sizeof(respHeader));
     std::memset(respBody, 0, sizeof(respBody));
 
-    std::vector<struct iovec> respIovecs(2);
+    std::array<struct iovec, 2> respIovecs{};
     respIovecs[0].iov_base = respHeader;
     respIovecs[0].iov_len = sizeof(respHeader);
     respIovecs[1].iov_base = respBody;
     respIovecs[1].iov_len = sizeof(respBody);
 
     LogInfo("[Client] Waiting for readv response...");
-    auto readvResult = co_await client.readv(std::move(respIovecs));
+    auto readvResult = co_await client.readv(respIovecs);
     if (!readvResult) {
         LogError("[Client] readv failed: {}", readvResult.error().message());
     } else {

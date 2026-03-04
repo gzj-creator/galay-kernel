@@ -33,6 +33,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <expected>
+#include <span>
 #include <vector>
 #include <sys/uio.h>
 
@@ -161,8 +162,8 @@ struct SendAwaitable: public SendIOContext, public TimeoutSupport<SendAwaitable>
 // ---- Readv ----
 
 struct ReadvIOContext: public IOContextBase {
-    ReadvIOContext(std::vector<struct iovec> iovecs)
-        : m_iovecs(std::move(iovecs)) {}
+    ReadvIOContext(std::span<const struct iovec> iovecs)
+        : m_iovecs(iovecs.begin(), iovecs.end()) {}
 
 #ifdef USE_IOURING
     bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
@@ -175,8 +176,8 @@ struct ReadvIOContext: public IOContextBase {
 };
 
 struct ReadvAwaitable: public ReadvIOContext, public TimeoutSupport<ReadvAwaitable> {
-    ReadvAwaitable(IOController* controller, std::vector<struct iovec> iovecs)
-        : ReadvIOContext(std::move(iovecs)), m_controller(controller) {}
+    ReadvAwaitable(IOController* controller, std::span<const struct iovec> iovecs)
+        : ReadvIOContext(iovecs), m_controller(controller) {}
 
     bool await_ready() { return false; }
     bool await_suspend(std::coroutine_handle<> handle);
@@ -189,8 +190,8 @@ struct ReadvAwaitable: public ReadvIOContext, public TimeoutSupport<ReadvAwaitab
 // ---- Writev ----
 
 struct WritevIOContext: public IOContextBase {
-    WritevIOContext(std::vector<struct iovec> iovecs)
-        : m_iovecs(std::move(iovecs)) {}
+    WritevIOContext(std::span<const struct iovec> iovecs)
+        : m_iovecs(iovecs.begin(), iovecs.end()) {}
 
 #ifdef USE_IOURING
     bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
@@ -203,8 +204,8 @@ struct WritevIOContext: public IOContextBase {
 };
 
 struct WritevAwaitable: public WritevIOContext, public TimeoutSupport<WritevAwaitable> {
-    WritevAwaitable(IOController* controller, std::vector<struct iovec> iovecs)
-        : WritevIOContext(std::move(iovecs)), m_controller(controller) {}
+    WritevAwaitable(IOController* controller, std::span<const struct iovec> iovecs)
+        : WritevIOContext(iovecs), m_controller(controller) {}
 
     bool await_ready() { return false; }
     bool await_suspend(std::coroutine_handle<> handle);

@@ -236,7 +236,7 @@ Coroutine ringBufferServer([[maybe_unused]] IOScheduler* scheduler) {
     auto iovecs = recvBuffer.getWriteIovecs();
     LogInfo("[Server] Prepared {} iovecs for readv", iovecs.size());
 
-    auto readvResult = co_await client.readv(std::move(iovecs));
+    auto readvResult = co_await client.readv(iovecs);
     if (!readvResult) {
         LogError("[Server] readv failed: {}", readvResult.error().message());
         co_await client.close();
@@ -273,7 +273,7 @@ Coroutine ringBufferServer([[maybe_unused]] IOScheduler* scheduler) {
 
     auto writeIovecs = sendBuffer.getReadIovecs();
     if (!writeIovecs.empty()) {
-        auto writevResult = co_await client.writev(std::move(writeIovecs));
+        auto writevResult = co_await client.writev(writeIovecs);
         if (!writevResult) {
             LogError("[Server] writev failed: {}", writevResult.error().message());
         } else {
@@ -317,7 +317,7 @@ Coroutine ringBufferClient([[maybe_unused]] IOScheduler* scheduler) {
 
     // 使用 writev 发送
     auto writeIovecs = sendBuffer.getReadIovecs();
-    auto writevResult = co_await client.writev(std::move(writeIovecs));
+    auto writevResult = co_await client.writev(writeIovecs);
     if (!writevResult) {
         LogError("[Client] writev failed: {}", writevResult.error().message());
         co_await client.close();
@@ -331,7 +331,7 @@ Coroutine ringBufferClient([[maybe_unused]] IOScheduler* scheduler) {
     RingBuffer recvBuffer(1024);
 
     auto readIovecs = recvBuffer.getWriteIovecs();
-    auto readvResult = co_await client.readv(std::move(readIovecs));
+    auto readvResult = co_await client.readv(readIovecs);
     if (!readvResult) {
         LogError("[Client] readv failed: {}", readvResult.error().message());
     } else {

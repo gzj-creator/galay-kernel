@@ -255,7 +255,7 @@ namespace galay::kernel
          *
          * @code
          * auto iovecs = buffer.getWriteIovecs();
-         * ssize_t n = co_await socket.readv(std::move(iovecs));
+         * ssize_t n = co_await socket.readv(iovecs);
          * buffer.produce(n);
          * @endcode
          */
@@ -268,7 +268,7 @@ namespace galay::kernel
          *
          * @code
          * auto iovecs = buffer.getReadIovecs();
-         * ssize_t n = co_await socket.writev(std::move(iovecs));
+         * ssize_t n = co_await socket.writev(iovecs);
          * buffer.consume(n);
          * @endcode
          */

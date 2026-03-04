@@ -66,7 +66,7 @@ Coroutine benchClient(const BenchConfig& config, [[maybe_unused]] int clientId) 
 
         // 使用 writev 发送
         auto writeIovecs = sendBuffer.getReadIovecs();
-        auto sendResult = co_await client.writev(std::move(writeIovecs));
+        auto sendResult = co_await client.writev(writeIovecs);
         if (!sendResult) {
             g_error_count.fetch_add(1, std::memory_order_relaxed);
             break;
@@ -75,7 +75,7 @@ Coroutine benchClient(const BenchConfig& config, [[maybe_unused]] int clientId) 
 
         // 使用 readv 接收
         auto readIovecs = recvBuffer.getWriteIovecs();
-        auto recvResult = co_await client.readv(std::move(readIovecs));
+        auto recvResult = co_await client.readv(readIovecs);
         if (!recvResult) {
             g_error_count.fetch_add(1, std::memory_order_relaxed);
             break;

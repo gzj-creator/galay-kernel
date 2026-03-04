@@ -55,6 +55,7 @@
 #include "galay-kernel/kernel/IOScheduler.hpp"
 #include "galay-kernel/kernel/Awaitable.h"
 #include <expected>
+#include <span>
 
 namespace galay::async
 {
@@ -259,7 +260,7 @@ public:
     /**
      * @brief 异步 scatter-gather 读取数据
      *
-     * @param iovecs iovec 向量，描述多个接收缓冲区
+     * @param iovecs iovec 视图，描述多个接收缓冲区
      * @return ReadvAwaitable 可等待对象，co_await后返回读取的总字节数
      *
      * @note
@@ -269,21 +270,21 @@ public:
      *
      * @code
      * char header[64], body[1024];
-     * std::vector<struct iovec> iovecs(2);
+     * std::array<struct iovec, 2> iovecs{};
      * iovecs[0] = {header, sizeof(header)};
      * iovecs[1] = {body, sizeof(body)};
-     * auto result = co_await socket.readv(std::move(iovecs));
+     * auto result = co_await socket.readv(iovecs);
      * if (result) {
      *     size_t totalRead = result.value();
      * }
      * @endcode
      */
-    ReadvAwaitable readv(std::vector<struct iovec> iovecs);
+    ReadvAwaitable readv(std::span<const struct iovec> iovecs);
 
     /**
      * @brief 异步 scatter-gather 写入数据
      *
-     * @param iovecs iovec 向量，描述多个发送缓冲区
+     * @param iovecs iovec 视图，描述多个发送缓冲区
      * @return WritevAwaitable 可等待对象，co_await后返回写入的总字节数
      *
      * @note
@@ -294,16 +295,16 @@ public:
      * @code
      * const char* header = "HTTP/1.1 200 OK\r\n";
      * const char* body = "Hello World";
-     * std::vector<struct iovec> iovecs(2);
+     * std::array<struct iovec, 2> iovecs{};
      * iovecs[0] = {const_cast<char*>(header), strlen(header)};
      * iovecs[1] = {const_cast<char*>(body), strlen(body)};
-     * auto result = co_await socket.writev(std::move(iovecs));
+     * auto result = co_await socket.writev(iovecs);
      * if (result) {
      *     size_t totalWritten = result.value();
      * }
      * @endcode
      */
-    WritevAwaitable writev(std::vector<struct iovec> iovecs);
+    WritevAwaitable writev(std::span<const struct iovec> iovecs);
 
     /**
      * @brief 异步零拷贝发送文件

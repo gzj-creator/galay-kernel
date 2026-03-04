@@ -85,14 +85,14 @@ SendAwaitable TcpSocket::send(const char* buffer, size_t length)
     return SendAwaitable(&m_controller, buffer, length);
 }
 
-ReadvAwaitable TcpSocket::readv(std::vector<struct iovec> iovecs)
+ReadvAwaitable TcpSocket::readv(std::span<const struct iovec> iovecs)
 {
-    return ReadvAwaitable(&m_controller, std::move(iovecs));
+    return ReadvAwaitable(&m_controller, iovecs);
 }
 
-WritevAwaitable TcpSocket::writev(std::vector<struct iovec> iovecs)
+WritevAwaitable TcpSocket::writev(std::span<const struct iovec> iovecs)
 {
-    return WritevAwaitable(&m_controller, std::move(iovecs));
+    return WritevAwaitable(&m_controller, iovecs);
 }
 
 SendFileAwaitable TcpSocket::sendfile(int file_fd, off_t offset, size_t count)

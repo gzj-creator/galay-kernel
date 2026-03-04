@@ -48,14 +48,14 @@ Coroutine handleClient(GHandle clientHandle) {
         if (writeIovecs.empty()) {
             // 缓冲区满，先发送
             auto readIovecs = buffer.getReadIovecs();
-            auto sendResult = co_await client.writev(std::move(readIovecs));
+            auto sendResult = co_await client.writev(readIovecs);
             if (!sendResult) break;
             buffer.consume(sendResult.value());
             g_total_bytes.fetch_add(sendResult.value(), std::memory_order_relaxed);
             continue;
         }
 
-        auto recvResult = co_await client.readv(std::move(writeIovecs));
+        auto recvResult = co_await client.readv(writeIovecs);
         if (!recvResult) break;
 
         size_t bytesRead = recvResult.value();
@@ -67,7 +67,7 @@ Coroutine handleClient(GHandle clientHandle) {
 
         // 使用 writev 发送数据 (Echo)
         auto readIovecs = buffer.getReadIovecs();
-        auto sendResult = co_await client.writev(std::move(readIovecs));
+        auto sendResult = co_await client.writev(readIovecs);
         if (!sendResult) break;
 
         buffer.consume(sendResult.value());
