@@ -20,6 +20,7 @@ KqueueScheduler::KqueueScheduler(int max_events, int batch_size, int check_inter
     , m_max_events(max_events)
     , m_batch_size(batch_size)
     , m_check_interval_ms(check_interval_ms)
+    , m_worker(static_cast<size_t>(batch_size))
 {
     if (m_kqueue_fd == -1) {
         throw std::runtime_error("Failed to create kqueue");

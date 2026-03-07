@@ -92,6 +92,7 @@ protected:
     int m_event_fd;
     std::atomic<uint64_t> m_last_error_code{0};
 
+    IOSchedulerWorkerState m_worker;
     moodycamel::ConcurrentQueue<Coroutine> m_coro_queue;
     std::vector<struct epoll_event> m_events;
     std::vector<Coroutine> m_coro_buffer;

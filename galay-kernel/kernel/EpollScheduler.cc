@@ -25,6 +25,7 @@ EpollScheduler::EpollScheduler(int max_events, int batch_size, int check_interva
     , m_batch_size(batch_size)
     , m_check_interval_ms(check_interval_ms)
     , m_event_fd(eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC))
+    , m_worker(static_cast<size_t>(batch_size))
 {
     if (m_epoll_fd == -1) {
         throw std::runtime_error("Failed to create epoll");

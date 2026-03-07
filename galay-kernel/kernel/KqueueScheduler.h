@@ -85,6 +85,7 @@ protected:
     // Pipe for notification (kqueue uses pipe)
     int m_notify_pipe[2];
     std::atomic<uint64_t> m_last_error_code{0};
+    IOSchedulerWorkerState m_worker;
     // Lock-free queue for coroutines
     moodycamel::ConcurrentQueue<Coroutine> m_coro_queue;
     // Event buffer

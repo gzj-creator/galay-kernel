@@ -7,10 +7,113 @@
 #include "IOController.hpp"
 #include "Awaitable.h"
 #include "galay-kernel/common/TimerManager.hpp"
+#include <algorithm>
+#include <deque>
 #include <optional>
+#include <concurrentqueue/moodycamel/concurrentqueue.h>
 
 namespace galay::kernel
 {
+
+struct IOSchedulerWorkerState {
+    explicit IOSchedulerWorkerState(size_t inject_batch_size = GALAY_SCHEDULER_BATCH_SIZE,
+                                    uint32_t lifo_limit = 8,
+                                    uint32_t inject_interval = 8)
+        : inject_buffer(std::max<size_t>(1, inject_batch_size))
+        , lifo_poll_limit(lifo_limit)
+        , inject_check_interval(inject_interval)
+    {
+    }
+
+    void resizeInjectBuffer(size_t inject_batch_size) {
+        inject_buffer.resize(std::max<size_t>(1, inject_batch_size));
+    }
+
+    void scheduleLocal(Coroutine co) {
+        if (!co.isValid()) {
+            return;
+        }
+        if (lifo_enabled) {
+            if (lifo_slot.has_value()) {
+                local_queue.push_back(std::move(*lifo_slot));
+            }
+            lifo_slot = std::move(co);
+            return;
+        }
+        local_queue.push_back(std::move(co));
+    }
+
+    void scheduleInjected(Coroutine co) {
+        if (!co.isValid()) {
+            return;
+        }
+        inject_queue.enqueue(std::move(co));
+    }
+
+    size_t drainInjected(size_t max_batch = 0) {
+        if (inject_buffer.empty()) {
+            return 0;
+        }
+        const size_t limit =
+            (max_batch == 0) ? inject_buffer.size() : std::min(max_batch, inject_buffer.size());
+        const size_t count = inject_queue.try_dequeue_bulk(inject_buffer.data(), limit);
+        for (size_t i = 0; i < count; ++i) {
+            local_queue.push_back(std::move(inject_buffer[i]));
+        }
+        polls_since_inject = 0;
+        return count;
+    }
+
+    bool shouldCheckInjected() const {
+        return polls_since_inject >= inject_check_interval;
+    }
+
+    bool hasLocalWork() const {
+        return lifo_slot.has_value() || !local_queue.empty();
+    }
+
+    void prepareForRun() {
+        if (lifo_enabled && lifo_slot.has_value() && consecutive_lifo_polls >= lifo_poll_limit) {
+            local_queue.push_back(std::move(*lifo_slot));
+            lifo_slot.reset();
+            lifo_enabled = false;
+            consecutive_lifo_polls = 0;
+        }
+    }
+
+    bool popNext(Coroutine& out) {
+        prepareForRun();
+
+        if (lifo_slot.has_value()) {
+            out = std::move(*lifo_slot);
+            lifo_slot.reset();
+            ++consecutive_lifo_polls;
+            ++polls_since_inject;
+            return true;
+        }
+
+        if (!local_queue.empty()) {
+            out = std::move(local_queue.front());
+            local_queue.pop_front();
+            lifo_enabled = true;
+            consecutive_lifo_polls = 0;
+            ++polls_since_inject;
+            return true;
+        }
+
+        return false;
+    }
+
+    std::optional<Coroutine> lifo_slot;
+    std::deque<Coroutine> local_queue;
+    moodycamel::ConcurrentQueue<Coroutine> inject_queue;
+    std::vector<Coroutine> inject_buffer;
+    uint32_t consecutive_lifo_polls = 0;
+    uint32_t lifo_poll_limit = 8;
+    uint32_t polls_since_inject = 0;
+    uint32_t inject_check_interval = 8;
+    bool lifo_enabled = true;
+};
 
 // ========== getAwaitable 模板特化 ==========
 
