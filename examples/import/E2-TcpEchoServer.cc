@@ -6,6 +6,7 @@ import galay.kernel;
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <thread>
 
 using namespace galay::async;
@@ -65,9 +66,9 @@ Coroutine echoServer() {
 
     char buffer[1024];
     auto recvResult = co_await client.recv(buffer, sizeof(buffer));
-    if (recvResult && recvResult.value().size() > 0) {
-        auto& bytes = recvResult.value();
-        auto sendResult = co_await client.send(bytes.c_str(), bytes.size());
+    if (recvResult && recvResult.value() > 0) {
+        size_t bytes = recvResult.value();
+        auto sendResult = co_await client.send(buffer, bytes);
         if (!sendResult) {
             std::cerr << "send failed\n";
         }
@@ -106,8 +107,8 @@ Coroutine echoClient() {
 
     char buffer[1024];
     auto recvResult = co_await socket.recv(buffer, sizeof(buffer));
-    if (recvResult && recvResult.value().size() > 0) {
-        std::cout << "echo response: " << recvResult.value().toStringView() << "\n";
+    if (recvResult && recvResult.value() > 0) {
+        std::cout << "echo response: " << std::string_view(buffer, recvResult.value()) << "\n";
     }
 
     co_await socket.close();

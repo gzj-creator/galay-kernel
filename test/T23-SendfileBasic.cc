@@ -192,10 +192,10 @@ Coroutine client() {
         size_t to_recv = std::min(sizeof(buffer), static_cast<size_t>(file_size - total_received));
         auto result = co_await socket.recv(buffer, to_recv);
 
-        if (!result || result.value().size() == 0) break;
+        if (!result || result.value() == 0) break;
 
-        ofs.write(reinterpret_cast<const char*>(result.value().data()), result.value().size());
-        total_received += result.value().size();
+        ofs.write(buffer, result.value());
+        total_received += result.value();
     }
 
     ofs.close();

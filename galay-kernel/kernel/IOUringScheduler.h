@@ -17,7 +17,6 @@
 #include <atomic>
 #include <thread>
 #include <cstdint>
-#include <concurrentqueue/moodycamel/concurrentqueue.h>
 
 #ifndef GALAY_SCHEDULER_QUEUE_DEPTH
 #define GALAY_SCHEDULER_QUEUE_DEPTH 4096
@@ -73,6 +72,9 @@ public:
     std::optional<IOError> lastError() const override;
 
     bool spawn(Coroutine coro) override;
+    bool schedule(TaskRef task) override;
+    bool spawnDeferred(Coroutine co) override;
+    bool scheduleDeferred(TaskRef task) override;
 
     bool spawnImmidiately(Coroutine co) override;
 
@@ -86,8 +88,7 @@ private:
     int m_event_fd;
     uint64_t m_eventfd_buf;  // eventfd 读取缓冲区
 
-    moodycamel::ConcurrentQueue<Coroutine> m_coro_queue;
-    std::vector<Coroutine> m_coro_buffer;
+    IOSchedulerWorkerState m_worker;
     std::atomic<uint64_t> m_last_error_code{0};
 
 private:

@@ -1,18 +1,17 @@
 /**
  * @file E2-TcpEchoServer.cc
- * @brief TCP Echo服务器示例
- * @details 演示如何使用TcpSocket创建一个简单的Echo服务器
- *
- * 使用场景：
- *   - 学习TCP服务器基本用法
- *   - 理解异步IO和协程的配合
- *   - 作为其他TCP服务器的基础模板
+ * @brief TCP Echo 自闭环示例
  */
 
+#include <atomic>
+#include <chrono>
 #include <iostream>
+#include <string>
+#include <string_view>
+#include <thread>
+
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
-#include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
 #include "galay-kernel/kernel/KqueueScheduler.h"
@@ -32,112 +31,101 @@ using IOSchedulerType = galay::kernel::IOUringScheduler;
 using namespace galay::async;
 using namespace galay::kernel;
 
-/**
- * @brief Echo服务器协程
- * @details 接收客户端数据并原样返回
- */
+namespace {
+constexpr uint16_t kPort = 9082;
+std::atomic<bool> g_server_ready{false};
+std::atomic<bool> g_done{false};
+std::atomic<bool> g_ok{false};
+
 Coroutine echoServer() {
-    LogInfo("TCP Echo Server starting...");
-
-    // 创建监听socket
     TcpSocket listener;
+    listener.option().handleReuseAddr();
+    listener.option().handleNonBlock();
 
-    // 设置socket选项
-    auto optResult = listener.option().handleReuseAddr();
-    if (!optResult) {
-        LogError("Failed to set reuse addr: {}", optResult.error().message());
+    if (!listener.bind(Host(IPType::IPV4, "127.0.0.1", kPort))) {
+        g_done.store(true, std::memory_order_release);
+        co_return;
+    }
+    if (!listener.listen(16)) {
+        g_done.store(true, std::memory_order_release);
         co_return;
     }
 
-    optResult = listener.option().handleNonBlock();
-    if (!optResult) {
-        LogError("Failed to set non-block: {}", optResult.error().message());
+    g_server_ready.store(true, std::memory_order_release);
+
+    Host peer;
+    auto accepted = co_await listener.accept(&peer);
+    if (!accepted) {
+        co_await listener.close();
+        g_done.store(true, std::memory_order_release);
         co_return;
     }
 
-    // 绑定地址
-    Host bindHost(IPType::IPV4, "127.0.0.1", 8080);
-    auto bindResult = listener.bind(bindHost);
-    if (!bindResult) {
-        LogError("Failed to bind: {}", bindResult.error().message());
-        co_return;
-    }
+    TcpSocket client(accepted.value());
+    client.option().handleNonBlock();
 
-    // 开始监听
-    auto listenResult = listener.listen(128);
-    if (!listenResult) {
-        LogError("Failed to listen: {}", listenResult.error().message());
-        co_return;
-    }
-
-    LogInfo("Server listening on 127.0.0.1:8080");
-
-    // 接受客户端连接
-    Host clientHost;
-    auto acceptResult = co_await listener.accept(&clientHost);
-    if (!acceptResult) {
-        LogError("Failed to accept: {}", acceptResult.error().message());
-        co_return;
-    }
-
-    LogInfo("Client connected from {}:{}", clientHost.ip(), clientHost.port());
-
-    // 创建客户端socket
-    TcpSocket client(acceptResult.value());
-
-    optResult = client.option().handleNonBlock();
-    if (!optResult) {
-        LogError("Failed to set client non-block: {}", optResult.error().message());
-        co_await client.close();
-        co_return;
-    }
-
-    // Echo循环：接收数据并回显
-    char buffer[1024];
-    while (true) {
-        auto recvResult = co_await client.recv(buffer, sizeof(buffer));
-        if (!recvResult) {
-            LogError("Recv error: {}", recvResult.error().message());
-            break;
-        }
-
-        auto& bytes = recvResult.value();
-        if (bytes.size() == 0) {
-            LogInfo("Client disconnected");
-            break;
-        }
-
-        LogInfo("Received: {}", bytes.toStringView());
-
-        // 回显数据
-        auto sendResult = co_await client.send(bytes.c_str(), bytes.size());
-        if (!sendResult) {
-            LogError("Send error: {}", sendResult.error().message());
-            break;
-        }
+    char buffer[256]{};
+    auto recvResult = co_await client.recv(buffer, sizeof(buffer));
+    if (recvResult && recvResult.value() > 0) {
+        auto sendResult = co_await client.send(buffer, recvResult.value());
+        g_ok.store(static_cast<bool>(sendResult), std::memory_order_release);
     }
 
     co_await client.close();
     co_await listener.close();
-    LogInfo("Server stopped");
+    g_done.store(true, std::memory_order_release);
 }
 
-int main() {
-    // 创建IO调度器
-    IOSchedulerType scheduler;
+Coroutine echoClient() {
+    while (!g_server_ready.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 
-    // 启动调度器
+    TcpSocket socket;
+    socket.option().handleNonBlock();
+
+    auto connected = co_await socket.connect(Host(IPType::IPV4, "127.0.0.1", kPort));
+    if (!connected) {
+        co_return;
+    }
+
+    constexpr const char* kMsg = "hello from E2";
+    auto sendResult = co_await socket.send(kMsg, std::char_traits<char>::length(kMsg));
+    if (!sendResult) {
+        co_await socket.close();
+        co_return;
+    }
+
+    char buffer[256]{};
+    auto recvResult = co_await socket.recv(buffer, sizeof(buffer));
+    if (recvResult && recvResult.value() > 0) {
+        g_ok.store(std::string_view(buffer, recvResult.value()) == kMsg, std::memory_order_release);
+    }
+
+    co_await socket.close();
+}
+}  // namespace
+
+int main() {
+    IOSchedulerType scheduler;
     scheduler.start();
 
-    // 提交服务器协程
     scheduler.spawn(echoServer());
+    scheduler.spawn(echoClient());
 
-    // 等待用户输入退出
-    std::cout << "Press Enter to stop server..." << std::endl;
-    std::cin.get();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!g_done.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
 
-    // 停止调度器
     scheduler.stop();
 
+    if (!g_ok.load(std::memory_order_acquire)) {
+        std::cerr << "tcp echo server example failed\n";
+        return 1;
+    }
+
+    std::cout << "tcp echo server example passed\n";
     return 0;
 }

@@ -91,7 +91,7 @@ Coroutine recvLoop(std::shared_ptr<TcpSocket> sock,
             LogError("[{}] failed after {} bytes: {}", label, totalBytes, result.error().message());
             co_return;
         }
-        int64_t n = static_cast<int64_t>(result.value().size());
+        int64_t n = static_cast<int64_t>(result.value());
         if (n == 0) {
             LogError("[{}] peer closed after {} bytes", label, totalBytes);
             co_return;

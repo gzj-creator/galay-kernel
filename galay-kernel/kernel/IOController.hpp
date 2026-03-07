@@ -55,6 +55,9 @@ struct IOController {
         : m_handle(other.m_handle)
         , m_type(other.m_type)
         , m_awaitable{other.m_awaitable[READ], other.m_awaitable[WRITE]}
+#ifdef USE_EPOLL
+        , m_registered_events(other.m_registered_events)
+#endif
 #ifdef USE_IOURING
         , m_sqe_tag{{this, READ}, {this, WRITE}}
 #endif
@@ -66,6 +69,9 @@ struct IOController {
             m_type = other.m_type;
             m_awaitable[READ] = other.m_awaitable[READ];
             m_awaitable[WRITE] = other.m_awaitable[WRITE];
+#ifdef USE_EPOLL
+            m_registered_events = other.m_registered_events;
+#endif
 #ifdef USE_IOURING
             m_sqe_tag[READ] = {this, READ};
             m_sqe_tag[WRITE] = {this, WRITE};
@@ -78,6 +84,9 @@ struct IOController {
         : m_handle(other.m_handle)
         , m_type(other.m_type)
         , m_awaitable{other.m_awaitable[READ], other.m_awaitable[WRITE]}
+#ifdef USE_EPOLL
+        , m_registered_events(other.m_registered_events)
+#endif
 #ifdef USE_IOURING
         , m_sqe_tag{{this, READ}, {this, WRITE}}
 #endif
@@ -91,6 +100,9 @@ struct IOController {
             m_type = other.m_type;
             m_awaitable[READ] = other.m_awaitable[READ];
             m_awaitable[WRITE] = other.m_awaitable[WRITE];
+#ifdef USE_EPOLL
+            m_registered_events = other.m_registered_events;
+#endif
 #ifdef USE_IOURING
             m_sqe_tag[READ] = {this, READ};
             m_sqe_tag[WRITE] = {this, WRITE};
@@ -105,6 +117,9 @@ struct IOController {
         m_type = IOEventType::INVALID;
         m_awaitable[READ] = nullptr;
         m_awaitable[WRITE] = nullptr;
+#ifdef USE_EPOLL
+        m_registered_events = 0;
+#endif
 #ifdef USE_IOURING
         m_sqe_tag[READ] = {this, READ};
         m_sqe_tag[WRITE] = {this, WRITE};
@@ -127,6 +142,9 @@ struct IOController {
     GHandle m_handle = GHandle::invalid();
     IOEventType m_type = IOEventType::INVALID;  ///< 当前IO事件类型
     void* m_awaitable[IOController::SIZE] = {nullptr, nullptr};
+#ifdef USE_EPOLL
+    uint32_t m_registered_events = 0;          ///< epoll 已注册的事件掩码缓存
+#endif
 #ifdef USE_IOURING
     SqeTag m_sqe_tag[SIZE];
 #endif

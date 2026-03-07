@@ -224,6 +224,9 @@ socket.option().handleReuseAddr();
 auto result = co_await socket.recvfrom(buffer, size, &from);
 if (!result && result.error().code() == EAGAIN) {
     // 重试或等待
+} else if (result) {
+    size_t bytes = result.value();
+    (void)bytes;
 }
 
 // 5. 限制消息大小

@@ -65,44 +65,4 @@ std::expected<void, IOError> TcpSocket::listen(int backlog)
     return {};
 }
 
-AcceptAwaitable TcpSocket::accept(Host* clientHost)
-{
-    return AcceptAwaitable(&m_controller, clientHost);
-}
-
-ConnectAwaitable TcpSocket::connect(const Host& host)
-{
-    return ConnectAwaitable(&m_controller, host);
-}
-
-RecvAwaitable TcpSocket::recv(char* buffer, size_t length)
-{
-    return RecvAwaitable(&m_controller, buffer, length);
-}
-
-SendAwaitable TcpSocket::send(const char* buffer, size_t length)
-{
-    return SendAwaitable(&m_controller, buffer, length);
-}
-
-ReadvAwaitable TcpSocket::readv(std::span<const struct iovec> iovecs)
-{
-    return ReadvAwaitable(&m_controller, iovecs);
-}
-
-WritevAwaitable TcpSocket::writev(std::span<const struct iovec> iovecs)
-{
-    return WritevAwaitable(&m_controller, iovecs);
-}
-
-SendFileAwaitable TcpSocket::sendfile(int file_fd, off_t offset, size_t count)
-{
-    return SendFileAwaitable(&m_controller, file_fd, offset, count);
-}
-
-CloseAwaitable TcpSocket::close()
-{
-    return CloseAwaitable(&m_controller);
-}
-
 }

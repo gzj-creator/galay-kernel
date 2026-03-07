@@ -62,7 +62,7 @@ struct SendThenRecvAwaitable : public CustomAwaitable {
 
     bool await_ready() { return false; }
 
-    std::expected<Bytes, IOError> await_resume() {
+    std::expected<size_t, IOError> await_resume() {
         onCompleted();
         return std::move(m_recv.m_result);
     }
@@ -116,8 +116,7 @@ Coroutine serverCoroutine([[maybe_unused]] IOScheduler* scheduler, int listen_fd
     // 检查 RECV
     bool recvOk = false;
     if (recvResult.has_value()) {
-        std::string received(reinterpret_cast<const char*>(recvResult->data()),
-                             recvResult->size());
+        std::string received(recvBuf, recvResult.value());
         LogInfo("[Server] RECV: \"{}\"", received);
         recvOk = (received == "world");
     } else {
@@ -173,7 +172,7 @@ Coroutine clientCoroutine([[maybe_unused]] IOScheduler* scheduler, const char* i
         g_failed++;
         co_return;
     }
-    std::string received(reinterpret_cast<const char*>(recvResult->data()), recvResult->size());
+    std::string received(buf, recvResult.value());
     LogInfo("[Client] Received: \"{}\"", received);
 
     // SEND 回复

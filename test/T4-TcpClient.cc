@@ -6,6 +6,7 @@
 #include <iostream>
 #include <atomic>
 #include <cstring>
+#include <string_view>
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/StdoutLog.h"
@@ -84,11 +85,12 @@ Coroutine echoClient() {
             continue;
         }
 
-        auto& bytes = recvResult.value();
-        LogInfo("Client: Received echo: {}", bytes.toStringView());
+        size_t bytes = recvResult.value();
+        std::string_view payload(buffer, bytes);
+        LogInfo("Client: Received echo: {}", payload);
 
         // 验证回显内容
-        if (bytes.toStringView() == messages[i]) {
+        if (payload == messages[i]) {
             LogInfo("Client: Message {} echo verified", i + 1);
             success_count++;
         } else {

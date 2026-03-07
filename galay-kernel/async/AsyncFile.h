@@ -48,7 +48,18 @@ public:
     // 打开文件
     std::expected<void, IOError> open(const std::string& path, FileOpenMode mode, int permissions = 0644);
 
-    // 异步读取
+    /**
+     * @brief 异步读取文件
+     *
+     * @param buffer 读取缓冲区
+     * @param length 缓冲区大小
+     * @param offset 文件偏移
+     * @return FileReadAwaitable 可等待对象，co_await 后返回读取到的字节数
+     *
+     * @note
+     * - 返回值为0表示 EOF
+     * - 缓冲区生命周期必须持续到 co_await 完成
+     */
     FileReadAwaitable read(char* buffer, size_t length, off_t offset = 0);
 
     // 异步写入

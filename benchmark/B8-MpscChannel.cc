@@ -2,6 +2,11 @@
  * @file bench_mpsc_channel.cc
  * @brief MpscChannel 性能压测与正确性验证
  *
+ * 角色定位：
+ * - MpscChannel 用于多生产者跨线程发送 + 单消费者协程接收
+ * - 本 benchmark 主要用于评估跨线程 / 跨调度器语义下的吞吐、延迟与正确性
+ * - 不用于和 UnsafeChannel 的同线程极限路径做“谁更快”的直接结论
+ *
  * 测试项目：
  * 1. 吞吐量：单生产者/多生产者场景下的消息吞吐量
  * 2. 延迟：消息从发送到接收的延迟
@@ -517,6 +522,8 @@ void benchSustained(int duration_sec) {
 
 int main() {
     LogInfo("=== MpscChannel Benchmark ===");
+    LogInfo("role: cross-thread MPSC channel, single-consumer correctness path");
+    LogInfo("note: use B9-UnsafeChannel for same-thread/high-performance channel measurements");
     LogInfo("");
 
     // 1. 单生产者吞吐量

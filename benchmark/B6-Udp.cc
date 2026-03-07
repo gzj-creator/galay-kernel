@@ -73,12 +73,12 @@ Coroutine udpServerWorker(int worker_id) {
             break;
         }
 
-        auto& bytes = recvResult.value();
+        size_t bytes = recvResult.value();
         g_total_received.fetch_add(1, std::memory_order_relaxed);
-        g_total_bytes_received.fetch_add(bytes.size(), std::memory_order_relaxed);
+        g_total_bytes_received.fetch_add(bytes, std::memory_order_relaxed);
 
         // Echo回发送方
-        auto sendResult = co_await socket.sendto(bytes.c_str(), bytes.size(), from);
+        auto sendResult = co_await socket.sendto(buffer, bytes, from);
         if (sendResult) {
             g_total_sent.fetch_add(1, std::memory_order_relaxed);
             g_total_bytes_sent.fetch_add(sendResult.value(), std::memory_order_relaxed);
@@ -123,9 +123,14 @@ Coroutine udpBenchmarkClient(int client_id) {
         }
 
         // 批量接收
+        // UDP 丢包时也要保证 benchmark 可以收敛退出，不要永久卡在 recvfrom。
         for (int i = 0; i < PIPELINE_SIZE; ++i) {
+            if (!g_running.load(std::memory_order_relaxed)) {
+                break;
+            }
             Host from;
-            auto recvResult = co_await socket.recvfrom(recv_buffer, sizeof(recv_buffer), &from);
+            auto recvResult = co_await socket.recvfrom(recv_buffer, sizeof(recv_buffer), &from)
+                                    .timeout(std::chrono::milliseconds(50));
             if (recvResult) {
                 local_received++;
             }

@@ -37,14 +37,11 @@ inline std::pair<std::expected<GHandle, IOError>, Host> handleAccept(GHandle lis
     return {handle, std::move(host)};
 }
 
-inline std::expected<Bytes, IOError> handleRecv(GHandle handle, char* buffer, size_t length)
+inline std::expected<size_t, IOError> handleRecv(GHandle handle, char* buffer, size_t length)
 {
-    int recvBytes = recv(handle.fd, buffer, length, 0);
-    if (recvBytes > 0) {
-        return Bytes::fromCString(buffer, recvBytes, recvBytes);
-    } else if (recvBytes == 0) {
-        // recv == 0 means orderly peer shutdown. Do not carry stale errno.
-        return std::unexpected(IOError(kDisconnectError, 0));
+    ssize_t recvBytes = recv(handle.fd, buffer, length, 0);
+    if (recvBytes >= 0) {
+        return static_cast<size_t>(recvBytes);
     } else {
         if(static_cast<uint32_t>(errno) == EAGAIN || static_cast<uint32_t>(errno) == EWOULDBLOCK || static_cast<uint32_t>(errno) == EINTR) {
             return std::unexpected(IOError(kNotReady, 0));
@@ -108,17 +105,14 @@ inline std::expected<void, IOError> handleConnect(GHandle handle, const Host& ho
     }
 }
 
-inline std::pair<std::expected<Bytes, IOError>, Host> handleRecvFrom(GHandle handle, char* buffer, size_t length)
+inline std::pair<std::expected<size_t, IOError>, Host> handleRecvFrom(GHandle handle, char* buffer, size_t length)
 {
     sockaddr_storage addr{};
     socklen_t addr_len = sizeof(addr);
     ssize_t recvBytes = recvfrom(handle.fd, buffer, length, 0, reinterpret_cast<sockaddr*>(&addr), &addr_len);
-    if (recvBytes > 0) {
-        Bytes bytes = Bytes::fromCString(buffer, recvBytes, recvBytes);
+    if (recvBytes >= 0) {
         Host host = Host::fromSockAddr(addr);
-        return {std::move(bytes), std::move(host)};
-    } else if (recvBytes == 0) {
-        return {std::unexpected(IOError(kRecvFailed, 0)), Host{}};
+        return {static_cast<size_t>(recvBytes), std::move(host)};
     } else {
         if (static_cast<uint32_t>(errno) == EAGAIN || static_cast<uint32_t>(errno) == EWOULDBLOCK || static_cast<uint32_t>(errno) == EINTR) {
             return {std::unexpected(IOError(kNotReady, 0)), Host{}};
@@ -140,13 +134,11 @@ inline std::expected<size_t, IOError> handleSendTo(GHandle handle, const char* b
     }
 }
 
-inline std::expected<Bytes, IOError> handleFileRead(GHandle handle, char* buffer, size_t length, off_t offset)
+inline std::expected<size_t, IOError> handleFileRead(GHandle handle, char* buffer, size_t length, off_t offset)
 {
     ssize_t readBytes = pread(handle.fd, buffer, length, offset);
-    if (readBytes > 0) {
-        return Bytes::fromCString(buffer, readBytes, readBytes);
-    } else if (readBytes == 0) {
-        return Bytes();
+    if (readBytes >= 0) {
+        return static_cast<size_t>(readBytes);
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return std::unexpected(IOError(kNotReady, 0));
@@ -233,13 +225,11 @@ inline std::expected<GHandle, IOError> handleAccept(struct io_uring_cqe* cqe)
     return std::unexpected(IOError(kAcceptFailed, static_cast<uint32_t>(-res)));
 }
 
-inline std::expected<Bytes, IOError> handleRecv(struct io_uring_cqe* cqe, char* buffer)
+inline std::expected<size_t, IOError> handleRecv(struct io_uring_cqe* cqe, char* buffer)
 {
     int res = cqe->res;
-    if (res > 0) {
-        return Bytes::fromCString(buffer, res, res);
-    } else if (res == 0) {
-        return std::unexpected(IOError(kDisconnectError, 0));
+    if (res >= 0) {
+        return static_cast<size_t>(res);
     }
     if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
         return std::unexpected(IOError(kNotReady, 0));
@@ -297,15 +287,12 @@ inline std::expected<void, IOError> handleConnect(struct io_uring_cqe* cqe)
     return std::unexpected(IOError(kConnectFailed, static_cast<uint32_t>(-res)));
 }
 
-inline std::pair<std::expected<Bytes, IOError>, Host> handleRecvFrom(struct io_uring_cqe* cqe, char* buffer, const sockaddr_storage& addr)
+inline std::pair<std::expected<size_t, IOError>, Host> handleRecvFrom(struct io_uring_cqe* cqe, char* buffer, const sockaddr_storage& addr)
 {
     int res = cqe->res;
-    if (res > 0) {
-        Bytes bytes = Bytes::fromCString(buffer, res, res);
+    if (res >= 0) {
         Host host = Host::fromSockAddr(addr);
-        return {std::move(bytes), std::move(host)};
-    } else if (res == 0) {
-        return {std::unexpected(IOError(kRecvFailed, 0)), Host{}};
+        return {static_cast<size_t>(res), std::move(host)};
     }
     if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
         return {std::unexpected(IOError(kNotReady, 0)), Host{}};
@@ -325,13 +312,11 @@ inline std::expected<size_t, IOError> handleSendTo(struct io_uring_cqe* cqe)
     return std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res)));
 }
 
-inline std::expected<Bytes, IOError> handleFileRead(struct io_uring_cqe* cqe, char* buffer)
+inline std::expected<size_t, IOError> handleFileRead(struct io_uring_cqe* cqe, char* buffer)
 {
     int res = cqe->res;
-    if (res > 0) {
-        return Bytes::fromCString(buffer, res, res);
-    } else if (res == 0) {
-        return Bytes();
+    if (res >= 0) {
+        return static_cast<size_t>(res);
     }
     if (-res == EAGAIN || -res == EWOULDBLOCK || -res == EINTR) {
         return std::unexpected(IOError(kNotReady, 0));

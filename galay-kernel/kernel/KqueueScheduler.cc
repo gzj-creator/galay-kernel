@@ -20,6 +20,7 @@ KqueueScheduler::KqueueScheduler(int max_events, int batch_size, int check_inter
     , m_max_events(max_events)
     , m_batch_size(batch_size)
     , m_check_interval_ms(check_interval_ms)
+    , m_worker(static_cast<size_t>(batch_size))
 {
     if (m_kqueue_fd == -1) {
         throw std::runtime_error("Failed to create kqueue");
@@ -58,7 +59,6 @@ KqueueScheduler::KqueueScheduler(int max_events, int batch_size, int check_inter
     }
 
     m_events.resize(m_max_events);
-    m_coro_buffer.resize(m_batch_size);
 }
 
 KqueueScheduler::~KqueueScheduler()
@@ -281,7 +281,69 @@ bool KqueueScheduler::spawn(Coroutine co)
     } else {
         if(scheduler != this) return false;
     }
-    m_coro_queue.enqueue(std::move(co));
+    TaskRef task = std::move(co).detachTask();
+
+    if (std::this_thread::get_id() == m_threadId) {
+        m_worker.scheduleLocal(std::move(task));
+        return true;
+    }
+
+    m_worker.scheduleInjected(std::move(task));
+    notify();
+    return true;
+}
+
+bool KqueueScheduler::schedule(TaskRef task)
+{
+    auto* state = task.state();
+    if (!state || state->m_scheduler != this) {
+        return false;
+    }
+
+    if (std::this_thread::get_id() == m_threadId) {
+        m_worker.scheduleLocal(std::move(task));
+        return true;
+    }
+
+    m_worker.scheduleInjected(std::move(task));
+    notify();
+    return true;
+}
+
+bool KqueueScheduler::spawnDeferred(Coroutine co)
+{
+    auto* scheduler = co.belongScheduler();
+    if (!scheduler) {
+        co.belongScheduler(this);
+    } else if (scheduler != this) {
+        return false;
+    }
+    TaskRef task = std::move(co).detachTask();
+
+    if (std::this_thread::get_id() == m_threadId) {
+        m_worker.scheduleLocalDeferred(std::move(task));
+        return true;
+    }
+
+    m_worker.scheduleInjected(std::move(task));
+    notify();
+    return true;
+}
+
+bool KqueueScheduler::scheduleDeferred(TaskRef task)
+{
+    auto* state = task.state();
+    if (!state || state->m_scheduler != this) {
+        return false;
+    }
+
+    if (std::this_thread::get_id() == m_threadId) {
+        m_worker.scheduleLocalDeferred(std::move(task));
+        return true;
+    }
+
+    m_worker.scheduleInjected(std::move(task));
+    notify();
     return true;
 }
 
@@ -292,21 +354,31 @@ bool KqueueScheduler::spawnImmidiately(Coroutine co)
         return false;
     }
     co.belongScheduler(this);
-    resume(co);
+    TaskRef task = std::move(co).detachTask();
+    resume(task);
     return true;
 }
 
 void KqueueScheduler::processPendingCoroutines()
 {
-    // 循环处理直到队列为空，因为resume可能会spawn新协程
+    TaskRef next;
     while (true) {
-        size_t count = m_coro_queue.try_dequeue_bulk(m_coro_buffer.data(), m_batch_size);
-        if (count == 0) {
-            break;
+        if (!m_worker.hasLocalWork() ||
+            m_worker.shouldCheckInjected() ||
+            m_worker.hasPendingInjected()) {
+            m_worker.drainInjected();
         }
-        for (size_t i = 0; i < count; ++i) {
-           Scheduler::resume( m_coro_buffer[i]);
+
+        if (!m_worker.popNext(next)) {
+            if (m_worker.hasPendingInjected()) {
+                continue;
+            }
+            if (m_worker.drainInjected() == 0 || !m_worker.popNext(next)) {
+                break;
+            }
         }
+
+        Scheduler::resume(next);
     }
 }
 
@@ -379,95 +451,40 @@ void KqueueScheduler::processEvent(struct kevent& ev)
     // ===== 读方向事件 =====
     if (ev.filter == EVFILT_READ) {
         if (t & ACCEPT) {
-            AcceptAwaitable* awaitable = controller->getAwaitable<AcceptAwaitable>();
-            if (awaitable) {
-                if(awaitable->handleComplete(controller->m_handle)) {
-                    awaitable->m_waker.wakeUp();
-                }
-            }
+            completeAwaitableAndWake(controller, controller->getAwaitable<AcceptAwaitable>());
         }
         else if (t & RECV) {
-            RecvAwaitable* awaitable = controller->getAwaitable<RecvAwaitable>();
-            if (awaitable) {
-                if(awaitable->handleComplete(controller->m_handle)) {
-                    awaitable->m_waker.wakeUp();
-                }
-            }
+            completeAwaitableAndWake(controller, controller->getAwaitable<RecvAwaitable>());
         }
         else if (t & READV) {
-            ReadvAwaitable* awaitable = controller->getAwaitable<ReadvAwaitable>();
-            if (awaitable) {
-                if(awaitable->handleComplete(controller->m_handle)) {
-                    awaitable->m_waker.wakeUp();
-                }
-            }
+            completeAwaitableAndWake(controller, controller->getAwaitable<ReadvAwaitable>());
         }
         else if (t & RECVFROM) {
-            RecvFromAwaitable* awaitable = controller->getAwaitable<RecvFromAwaitable>();
-            if (awaitable) {
-                if(awaitable->handleComplete(controller->m_handle)) {
-                    awaitable->m_waker.wakeUp();
-                }
-            }
+            completeAwaitableAndWake(controller, controller->getAwaitable<RecvFromAwaitable>());
         }
         else if (t & FILEREAD) {
-            FileReadAwaitable* awaitable = controller->getAwaitable<FileReadAwaitable>();
-            if (awaitable) {
-                if(awaitable->handleComplete(controller->m_handle)) {
-                    awaitable->m_waker.wakeUp();
-                }
-            }
+            completeAwaitableAndWake(controller, controller->getAwaitable<FileReadAwaitable>());
         }
     }
     // ===== 写方向事件 =====
     else if (ev.filter == EVFILT_WRITE) {
         if (t & CONNECT) {
-            ConnectAwaitable* awaitable = controller->getAwaitable<ConnectAwaitable>();
-            if (awaitable) {
-                if(awaitable->handleComplete(controller->m_handle)) {
-                    awaitable->m_waker.wakeUp();
-                }
-            }
+            completeAwaitableAndWake(controller, controller->getAwaitable<ConnectAwaitable>());
         }
         else if (t & SEND) {
-            SendAwaitable* awaitable = controller->getAwaitable<SendAwaitable>();
-            if (awaitable) {
-                if(awaitable->handleComplete(controller->m_handle)) {
-                    awaitable->m_waker.wakeUp();
-                }
-            }
+            completeAwaitableAndWake(controller, controller->getAwaitable<SendAwaitable>());
         }
         else if (t & WRITEV) {
-            WritevAwaitable* awaitable = controller->getAwaitable<WritevAwaitable>();
-            if (awaitable) {
-                if(awaitable->handleComplete(controller->m_handle)) {
-                    awaitable->m_waker.wakeUp();
-                }
-            }
+            completeAwaitableAndWake(controller, controller->getAwaitable<WritevAwaitable>());
         }
         else if (t & SENDTO) {
-            SendToAwaitable* awaitable = controller->getAwaitable<SendToAwaitable>();
-            if (awaitable) {
-                if(awaitable->handleComplete(controller->m_handle)) {
-                    awaitable->m_waker.wakeUp();
-                }
-            }
+            completeAwaitableAndWake(controller, controller->getAwaitable<SendToAwaitable>());
         }
         else if (t & FILEWRITE) {
-            FileWriteAwaitable* awaitable = controller->getAwaitable<FileWriteAwaitable>();
-            if (awaitable) {
-                if(awaitable->handleComplete(controller->m_handle)) {
-                    awaitable->m_waker.wakeUp();
-                }
-            }
+            completeAwaitableAndWake(controller, controller->getAwaitable<FileWriteAwaitable>());
         }
         else if (t & SENDFILE) {
-            SendFileAwaitable* awaitable = controller->getAwaitable<SendFileAwaitable>();
-            if (awaitable) {
-                if(awaitable->handleComplete(controller->m_handle)) {
-                    awaitable->m_waker.wakeUp();
-                }
-            }
+            completeAwaitableAndWake(controller, controller->getAwaitable<SendFileAwaitable>());
         }
     }
     // ===== 文件监控事件 =====

@@ -99,6 +99,33 @@ public:
     virtual bool spawn(Coroutine co) = 0;
 
     /**
+     * @brief 直接提交已绑定调度器的任务引用
+     * @param task 已绑定当前调度器的任务引用
+     * @note 默认回退为包装成 Coroutine 再走 spawn；高性能调度器应覆写以避免额外包装
+     */
+    virtual bool schedule(TaskRef task) {
+        return spawn(Coroutine(std::move(task)));
+    }
+
+    /**
+     * @brief 延后提交协程到调度器执行
+     * @param co 要执行的协程
+     * @note 默认行为与 spawn 相同；支持本地 worker 的调度器可覆写为让已就绪任务先执行
+     */
+    virtual bool spawnDeferred(Coroutine co) {
+        return spawn(std::move(co));
+    }
+
+    /**
+     * @brief 延后提交已绑定调度器的任务引用
+     * @param task 已绑定当前调度器的任务引用
+     * @note 默认回退为包装成 Coroutine 再走 spawnDeferred
+     */
+    virtual bool scheduleDeferred(TaskRef task) {
+        return spawnDeferred(Coroutine(std::move(task)));
+    }
+
+    /**
      * @brief 提交协程到调度器执行
      * @param co 要执行的协程
      * @note 协程立即执行，需要该接口只适合在协程内部调用以避免调度导致的延迟，已经spwan的协程调用此接口无效
@@ -139,6 +166,7 @@ protected:
      * @note 仅供调度器内部使用
      */
     void resume(Coroutine& co);
+    void resume(TaskRef& task);
     bool applyConfiguredAffinity();
     std::thread::id m_threadId;  ///< 调度器所属线程ID，在 start() 时设置
 
@@ -149,11 +177,21 @@ private:
 
 
 inline void Scheduler::resume(Coroutine& co) {
-    if (!co.m_data || !co.m_data->m_handle || co.m_data->m_done.load(std::memory_order_relaxed)) {
+    auto* state = co.m_task.state();
+    if (!state || !state->m_handle || state->m_done.load(std::memory_order_relaxed)) {
         return;
     }
-    co.m_data->m_queued.store(false, std::memory_order_release);
-    co.m_data->m_handle.resume();
+    state->m_queued.store(false, std::memory_order_release);
+    state->m_handle.resume();
+}
+
+inline void Scheduler::resume(TaskRef& task) {
+    auto* state = task.state();
+    if (!state || !state->m_handle || state->m_done.load(std::memory_order_relaxed)) {
+        return;
+    }
+    state->m_queued.store(false, std::memory_order_release);
+    state->m_handle.resume();
 }
 
 

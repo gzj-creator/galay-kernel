@@ -85,6 +85,12 @@ namespace galay::kernel
             uint64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
                 now.time_since_epoch()).count();
 
+            // 空闲时间轮重新以当前时刻作为基准，避免首个新定时器被历史 tick 立即冲刷。
+            if (m_size == 0) {
+                m_startTime = now;
+                m_currentTick = 0;
+            }
+
             // 计算剩余时间（纳秒）
             if (expireTimeNs <= nowNs) {
                 // 已经过期，立即执行
@@ -94,14 +100,8 @@ namespace galay::kernel
 
             uint64_t remainingNs = expireTimeNs - nowNs;
 
-            // 计算剩余时间对应的 tick 数
-            uint64_t delayTicks = remainingNs / m_tickDuration;
-
-            if (delayTicks == 0) {
-                // 不足一个 tick，立即执行
-                timer->handleTimeout();
-                return true;
-            }
+            // 向上取整到下一个 tick，避免边界定时器因少量调度开销被立即触发。
+            uint64_t delayTicks = (remainingNs + m_tickDuration - 1) / m_tickDuration;
 
             // 计算绝对到期 tick（使用与 tick() 相同的计算方式）
             uint64_t elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(

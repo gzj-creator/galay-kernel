@@ -1,22 +1,20 @@
 /**
- * @file sendfile_example.cc
- * @brief SendFile 零拷贝文件传输示例
- * @details 演示如何使用 TcpSocket::sendfile() 实现高效的文件传输
- *
- * 使用场景：
- *   - HTTP 文件服务器
- *   - FTP 服务器
- *   - 文件分发系统
- *   - 任何需要高效传输大文件的场景
+ * @file E1-SendfileExample.cc
+ * @brief SendFile 最小闭环示例
  */
 
-#include <iostream>
+#include <atomic>
+#include <algorithm>
+#include <chrono>
 #include <fcntl.h>
+#include <iostream>
+#include <string>
+#include <thread>
 #include <unistd.h>
 #include <sys/stat.h>
+
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
-#include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
 #include "galay-kernel/kernel/KqueueScheduler.h"
@@ -36,250 +34,145 @@ using IOSchedulerType = galay::kernel::IOUringScheduler;
 using namespace galay::async;
 using namespace galay::kernel;
 
-/**
- * @brief 获取文件大小
- */
-off_t getFileSize(int fd) {
-    struct stat st;
-    if (fstat(fd, &st) < 0) {
-        return -1;
-    }
-    return st.st_size;
-}
+namespace {
+constexpr const char* kTestFile = "/tmp/galay_sendfile_example.dat";
+constexpr uint16_t kPort = 9080;
+constexpr size_t kFileSize = 1024 * 1024;  // 1 MiB
 
-/**
- * @brief HTTP 文件服务器示例
- * @details 简单的 HTTP 服务器，使用 sendfile 发送文件
- */
-Coroutine handleHttpRequest(TcpSocket client) {
-    LogInfo("Client connected");
+std::atomic<bool> g_server_ready{false};
+std::atomic<bool> g_done{false};
+std::atomic<size_t> g_received{0};
 
-    // 接收 HTTP 请求（简化版，只读取第一行）
-    char request[1024] = {0};
-    auto recvResult = co_await client.recv(request, sizeof(request) - 1);
-
-    if (!recvResult) {
-        LogError("Failed to receive request: {}", recvResult.error().message());
-        co_await client.close();
-        co_return;
+bool createTestFile() {
+    int fd = ::open(kTestFile, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+    if (fd < 0) {
+        return false;
     }
 
-    LogInfo("Request: {}", request);
-
-    // 解析请求（简化版）
-    // 假设请求格式为: GET /filename HTTP/1.1
-    const char* file_to_send = "/tmp/test_file.dat";
-
-    // 发送 HTTP 响应头
-    const char* response_header =
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: application/octet-stream\r\n"
-        "Connection: close\r\n"
-        "\r\n";
-
-    auto sendResult = co_await client.send(response_header, strlen(response_header));
-    if (!sendResult) {
-        LogError("Failed to send response header: {}", sendResult.error().message());
-        co_await client.close();
-        co_return;
-    }
-
-    // 打开文件
-    int file_fd = open(file_to_send, O_RDONLY);
-    if (file_fd < 0) {
-        LogError("Failed to open file: {}", strerror(errno));
-        co_await client.close();
-        co_return;
-    }
-
-    // 获取文件大小
-    off_t file_size = getFileSize(file_fd);
-    if (file_size < 0) {
-        LogError("Failed to get file size");
-        close(file_fd);
-        co_await client.close();
-        co_return;
-    }
-
-    // 使用 sendfile 发送文件内容
-    size_t total_sent = 0;
-    off_t offset = 0;
-
-    while (total_sent < static_cast<size_t>(file_size)) {
-        size_t remaining = file_size - total_sent;
-        size_t chunk_size = std::min(remaining, size_t(1024 * 1024));
-
-        auto result = co_await client.sendfile(file_fd, offset, chunk_size);
-        if (!result) {
-            LogError("Sendfile failed: {}", result.error().message());
-            break;
+    std::string chunk(4096, 'S');
+    size_t written = 0;
+    while (written < kFileSize) {
+        const size_t want = std::min(chunk.size(), kFileSize - written);
+        ssize_t n = ::write(fd, chunk.data(), want);
+        if (n <= 0) {
+            ::close(fd);
+            return false;
         }
-
-        size_t sent = result.value();
-        if (sent == 0) break;
-
-        total_sent += sent;
-        offset += sent;
+        written += static_cast<size_t>(n);
     }
 
-    close(file_fd);
-    LogInfo("HTTP response completed: {} bytes", total_sent);
-
-    co_await client.close();
-    LogInfo("Client disconnected");
+    ::close(fd);
+    return true;
 }
 
-/**
- * @brief 简单的文件服务器
- */
-Coroutine fileServer() {
-    LogInfo("=== File Server Example ===");
-
+Coroutine sendfileServer() {
     TcpSocket listener;
+    listener.option().handleReuseAddr();
+    listener.option().handleNonBlock();
 
-    // 设置 socket 选项
-    auto optResult = listener.option().handleReuseAddr();
-    if (!optResult) {
-        LogError("Failed to set reuse addr: {}", optResult.error().message());
-        co_return;
-    }
-
-    optResult = listener.option().handleNonBlock();
-    if (!optResult) {
-        LogError("Failed to set non-block: {}", optResult.error().message());
-        co_return;
-    }
-
-    // 绑定地址
-    Host bindHost(IPType::IPV4, "0.0.0.0", 8080);
-    auto bindResult = listener.bind(bindHost);
+    auto bindResult = listener.bind(Host(IPType::IPV4, "127.0.0.1", kPort));
     if (!bindResult) {
-        LogError("Failed to bind: {}", bindResult.error().message());
+        g_done.store(true, std::memory_order_release);
         co_return;
     }
 
-    // 监听
-    auto listenResult = listener.listen(128);
+    auto listenResult = listener.listen(16);
     if (!listenResult) {
-        LogError("Failed to listen: {}", listenResult.error().message());
+        g_done.store(true, std::memory_order_release);
         co_return;
     }
 
-    LogInfo("Server listening on 0.0.0.0:8080");
-    LogInfo("Waiting for connections...");
+    g_server_ready.store(true, std::memory_order_release);
 
-    // 接受连接循环
-    while (true) {
-        Host clientHost;
-        auto acceptResult = co_await listener.accept(&clientHost);
+    Host peer;
+    auto accepted = co_await listener.accept(&peer);
+    if (!accepted) {
+        co_await listener.close();
+        g_done.store(true, std::memory_order_release);
+        co_return;
+    }
 
-        if (!acceptResult) {
-            LogError("Accept failed: {}", acceptResult.error().message());
+    TcpSocket client(accepted.value());
+    client.option().handleNonBlock();
+
+    int fd = ::open(kTestFile, O_RDONLY);
+    if (fd < 0) {
+        co_await client.close();
+        co_await listener.close();
+        g_done.store(true, std::memory_order_release);
+        co_return;
+    }
+
+    size_t sent_total = 0;
+    while (sent_total < kFileSize) {
+        auto sent = co_await client.sendfile(fd, static_cast<off_t>(sent_total), kFileSize - sent_total);
+        if (!sent || sent.value() == 0) {
             break;
         }
-
-        LogInfo("Accepted connection from {}:{}", clientHost.ip(), clientHost.port());
-
-        // 创建客户端 socket
-        TcpSocket client(acceptResult.value());
-
-        optResult = client.option().handleNonBlock();
-        if (!optResult) {
-            LogError("Failed to set client non-block: {}", optResult.error().message());
-            co_await client.close();
-            continue;
-        }
-
-        // 处理请求（spawn新协程）
-        co_await spawn(handleHttpRequest(std::move(client)));
+        sent_total += sent.value();
     }
 
+    ::close(fd);
+    co_await client.close();
     co_await listener.close();
+    g_done.store(true, std::memory_order_release);
 }
 
-/**
- * @brief 性能对比示例：sendfile vs read+send
- */
-Coroutine performanceComparison() {
-    LogInfo("\n=== Performance Comparison: sendfile vs read+send ===");
-
-    const char* test_file = "/tmp/large_test_file.dat";
-
-    // 创建测试文件（10MB）
-    {
-        int fd = open(test_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd >= 0) {
-            const size_t size = 10 * 1024 * 1024; // 10MB
-            char buffer[4096] = {0};
-            for (size_t i = 0; i < size; i += sizeof(buffer)) {
-                if (write(fd, buffer, sizeof(buffer)) < 0) break;
-            }
-            close(fd);
-            LogInfo("Created test file: {} (10MB)", test_file);
-        }
+Coroutine sendfileClient() {
+    while (!g_server_ready.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    // TODO: 实现性能对比测试
-    // 1. 使用 sendfile 发送文件
-    // 2. 使用传统的 read + send 发送文件
-    // 3. 比较两者的性能差异
+    TcpSocket socket;
+    socket.option().handleNonBlock();
 
-    LogInfo("Performance comparison completed");
-    co_return;
+    auto connected = co_await socket.connect(Host(IPType::IPV4, "127.0.0.1", kPort));
+    if (!connected) {
+        g_done.store(true, std::memory_order_release);
+        co_return;
+    }
+
+    char buffer[8192];
+    size_t total = 0;
+    while (total < kFileSize) {
+        auto recv = co_await socket.recv(buffer, sizeof(buffer));
+        if (!recv || recv.value() == 0) {
+            break;
+        }
+        total += recv.value();
+    }
+
+    g_received.store(total, std::memory_order_release);
+    co_await socket.close();
 }
+}  // namespace
 
 int main() {
-    LogInfo("=== SendFile Example ===\n");
+    if (!createTestFile()) {
+        std::cerr << "failed to create test file\n";
+        return 1;
+    }
 
-    // 创建调度器
     IOSchedulerType scheduler;
     scheduler.start();
 
-    // 启动文件服务器
-    scheduler.spawn(fileServer());
+    scheduler.spawn(sendfileServer());
+    scheduler.spawn(sendfileClient());
 
-    // 保持运行
-    LogInfo("\nPress Ctrl+C to stop the server\n");
-
-    // 简单的运行循环
-    while (true) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!g_done.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
     scheduler.stop();
+    ::unlink(kTestFile);
+
+    if (g_received.load(std::memory_order_acquire) != kFileSize) {
+        std::cerr << "sendfile example failed\n";
+        return 1;
+    }
+
+    std::cout << "sendfile example passed\n";
     return 0;
 }
-
-/**
- * 使用说明：
- *
- * 1. 编译程序：
- *    g++ -std=c++20 sendfile_example.cc -o sendfile_example -lgalay-kernel
- *
- * 2. 准备测试文件：
- *    dd if=/dev/zero of=/tmp/test_file.dat bs=1M count=10
- *
- * 3. 运行服务器：
- *    ./sendfile_example
- *
- * 4. 使用客户端测试：
- *    curl http://localhost:8080/ -o received_file.dat
- *    或
- *    wget http://localhost:8080/ -O received_file.dat
- *
- * 5. 验证文件：
- *    diff /tmp/test_file.dat received_file.dat
- *
- * 性能优势：
- *   - 零拷贝：数据直接从文件系统缓存传输到网络，不经过用户空间
- *   - 减少 CPU 使用：避免了用户空间的内存拷贝
- *   - 提高吞吐量：特别是在发送大文件时，性能提升显著
- *   - 降低延迟：减少了系统调用次数和上下文切换
- *
- * 适用场景：
- *   - 静态文件服务器（HTTP/HTTPS）
- *   - 文件下载服务
- *   - 视频流媒体服务
- *   - CDN 边缘节点
- *   - 备份和同步系统
- */

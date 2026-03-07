@@ -2,6 +2,11 @@
  * @file bench_unsafe_channel.cc
  * @brief UnsafeChannel 性能压测
  *
+ * 角色定位：
+ * - UnsafeChannel 仅用于同线程 / 同调度器协程通信
+ * - 本 benchmark 用于评估单线程高性能通道路径
+ * - 与 MpscChannel 的对比仅用于展示语义差异下的参考量级，不代表跨线程场景优劣
+ *
  * 测试项目：
  * 1. 吞吐量：同调度器内的消息吞吐量
  * 2. 延迟：消息从发送到接收的延迟
@@ -402,6 +407,8 @@ void benchComparison(int64_t message_count) {
 
 int main() {
     LogInfo("=== UnsafeChannel Benchmark ===");
+    LogInfo("role: same-thread / same-scheduler high-performance channel");
+    LogInfo("note: MpscChannel numbers in this benchmark are reference-only because semantics differ");
     LogInfo("");
 
     // 1. UnsafeChannel 吞吐量

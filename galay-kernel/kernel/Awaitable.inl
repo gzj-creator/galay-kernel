@@ -119,14 +119,18 @@ inline bool SendIOContext::handleComplete(GHandle handle) {
 }
 
 inline bool ReadvIOContext::handleComplete(GHandle handle) {
-    auto result = io::handleReadv(handle, m_iovecs.data(), static_cast<int>(m_iovecs.size()));
+    auto result = io::handleReadv(handle,
+                                  const_cast<struct iovec*>(m_iovecs.data()),
+                                  static_cast<int>(m_iovecs.size()));
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
 inline bool WritevIOContext::handleComplete(GHandle handle) {
-    auto result = io::handleWritev(handle, m_iovecs.data(), static_cast<int>(m_iovecs.size()));
+    auto result = io::handleWritev(handle,
+                                   const_cast<struct iovec*>(m_iovecs.data()),
+                                   static_cast<int>(m_iovecs.size()));
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;

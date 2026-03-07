@@ -11,6 +11,7 @@
 
 #include <iostream>
 #include <atomic>
+#include <string_view>
 #include "galay-kernel/async/UdpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/StdoutLog.h"
@@ -78,12 +79,12 @@ Coroutine udpServer() {
         co_return;
     }
 
-    auto& bytes = recvResult.value();
+    size_t bytes = recvResult.value();
     LogInfo("Received from {}:{}: {}",
-            clientHost.ip(), clientHost.port(), bytes.toStringView());
+            clientHost.ip(), clientHost.port(), std::string_view(buffer, bytes));
 
     // 回显数据
-    auto sendResult = co_await socket.sendto(bytes.c_str(), bytes.size(), clientHost);
+    auto sendResult = co_await socket.sendto(buffer, bytes, clientHost);
     if (!sendResult) {
         LogError("Failed to sendto: {}", sendResult.error().message());
         co_return;
@@ -135,9 +136,9 @@ Coroutine udpClient() {
         co_return;
     }
 
-    auto& bytes = recvResult.value();
+    size_t bytes = recvResult.value();
     LogInfo("Received from {}:{}: {}",
-            fromHost.ip(), fromHost.port(), bytes.toStringView());
+            fromHost.ip(), fromHost.port(), std::string_view(buffer, bytes));
 
     co_await socket.close();
 }

@@ -29,24 +29,59 @@
 
 #include <atomic>
 #include <coroutine>
-#include <memory>
 #include <optional>
 #include <thread>
+#include <cstdint>
 
 namespace galay::kernel
 {
 
 class PromiseType;
-struct CoroutineData;
+struct TaskState;
 struct WaitResult;
 class Waker;
 class Scheduler;
+class TaskRef;
+
+/**
+ * @brief 轻量任务引用
+ *
+ * @details
+ * - 仅保存 `TaskState*`
+ * - 使用 intrusive refcount 管理生命周期
+ * - 供 `Coroutine` / `Waker` / scheduler 内部共享同一任务状态
+ */
+class TaskRef
+{
+public:
+    TaskRef() noexcept = default;
+    TaskRef(const TaskRef& other) noexcept;
+    TaskRef(TaskRef&& other) noexcept;
+    ~TaskRef();
+
+    TaskRef& operator=(const TaskRef& other) noexcept;
+    TaskRef& operator=(TaskRef&& other) noexcept;
+
+    bool isValid() const noexcept { return m_state != nullptr; }
+    TaskState* state() const noexcept { return m_state; }
+    Scheduler* belongScheduler() const noexcept;
+
+private:
+    friend class Coroutine;
+
+    explicit TaskRef(TaskState* state, bool retain_ref) noexcept;
+
+    void retain() noexcept;
+    void release() noexcept;
+
+    TaskState* m_state = nullptr;
+};
 
 /**
  * @brief 协程类
  *
  * @details 封装C++20协程句柄，提供协程生命周期管理。
- * 使用shared_ptr管理协程数据，支持拷贝和移动。
+ * 通过轻量 `TaskRef` 引用共享任务状态，支持廉价拷贝和移动。
  *
  * @note
  * - 协程函数返回类型必须是Coroutine
@@ -89,7 +124,7 @@ public:
     /**
      * @brief 拷贝构造函数
      * @param other 被拷贝的协程
-     * @note 使用shared_ptr，拷贝后共享同一协程数据
+     * @note 拷贝后共享同一任务状态
      */
     Coroutine(const Coroutine& other) noexcept;
 
@@ -111,7 +146,7 @@ public:
      * @brief 检查协程是否有效
      * @return true 如果协程数据有效
      */
-    bool isValid() const { return m_data != nullptr; }
+    bool isValid() const { return m_task.isValid(); }
 
     /**
      * @brief 检查协程是否已完成
@@ -133,6 +168,9 @@ public:
      */
     Scheduler* belongScheduler() const;
 
+    TaskRef taskRef() const noexcept { return m_task; }
+    TaskRef detachTask() && noexcept { return std::move(m_task); }
+
     /**
      * @brief 设置所属调度器
      * @param scheduler 调度器指针
@@ -152,7 +190,11 @@ public:
     void resume();
 
 private:
-    std::shared_ptr<CoroutineData> m_data;  ///< 协程数据，使用shared_ptr管理生命周期
+    friend class Waker;
+
+    explicit Coroutine(TaskRef task) noexcept;
+
+    TaskRef m_task;  ///< 轻量任务引用
 };
 
 /**
@@ -275,15 +317,19 @@ inline SpawnAwaitable spawn(Coroutine co) {
  *
  * @details 存储协程的状态信息，使用64字节对齐避免伪共享。
  *
- * @note 由Coroutine通过shared_ptr管理
+ * @note 由 `Coroutine` / `Waker` / scheduler 通过 intrusive refcount 管理
  */
-struct alignas(64) CoroutineData
+struct alignas(64) TaskState
 {
+    explicit TaskState(std::coroutine_handle<Coroutine::promise_type> handle) noexcept
+        : m_handle(handle) {}
+
     std::coroutine_handle<Coroutine::promise_type> m_handle = nullptr;    ///< 底层协程句柄
     Scheduler* m_scheduler = nullptr;                                     ///< 所属调度器
     std::optional<Coroutine> m_next;                                      ///< 后续协程（用于链式执行）
-    std::atomic<bool> m_done{false};                                   ///< 协程是否完成（线程安全）
-    std::atomic<bool> m_queued{false};                                 ///< 是否已在调度队列中（防重复入队）
+    std::atomic<uint32_t> m_refs{1};                                      ///< intrusive 引用计数
+    std::atomic<bool> m_done{false};                                      ///< 协程是否完成（线程安全）
+    std::atomic<bool> m_queued{false};                                    ///< 是否已在调度队列中（防重复入队）
 };
 
 /**
@@ -343,10 +389,23 @@ public:
     void return_void() noexcept;
 
     /**
-     * @brief 获取关联的Coroutine对象
-     * @return Coroutine对象
+     * @brief 获取关联的Coroutine对象（复制）
+     * @return Coroutine对象副本
      */
     Coroutine getCoroutine() { return m_coroutine; }
+
+    /**
+     * @brief 获取关联的Coroutine对象引用
+     * @return Coroutine对象引用
+     */
+    Coroutine& coroutineRef() noexcept { return m_coroutine; }
+    const Coroutine& coroutineRef() const noexcept { return m_coroutine; }
+
+    /**
+     * @brief 获取底层任务引用视图
+     * @return 只读 TaskRef 引用，不增加引用计数
+     */
+    const TaskRef& taskRefView() const noexcept { return m_coroutine.m_task; }
 
 
 private:
