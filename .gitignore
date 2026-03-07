@@ -5,3 +5,4 @@ install
 test_results
 .vscode
 .claude/
+.worktrees
