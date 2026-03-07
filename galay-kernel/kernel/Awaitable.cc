@@ -13,162 +13,96 @@
 namespace galay::kernel
 {
 
+namespace {
+
+template <typename AwaitableT, IOEventType Event, IOErrorCode ErrorCode, auto RegisterFn>
+inline bool suspendRegisteredAwaitable(AwaitableT& awaitable, std::coroutine_handle<> handle) {
+    awaitable.m_waker = Waker(handle);
+#ifdef USE_IOURING
+    awaitable.m_sqe_type = Event;
+#endif
+    awaitable.m_controller->fillAwaitable(Event, &awaitable);
+    auto* scheduler = awaitable.m_waker.getScheduler();
+    if (scheduler == nullptr || scheduler->type() != kIOScheduler) {
+        awaitable.m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    const int ret = (static_cast<IOScheduler*>(scheduler)->*RegisterFn)(awaitable.m_controller);
+    return detail::finalizeAwaitableAddResult(ret, ErrorCode, awaitable.m_result);
+}
+
+template <auto RegisterFn>
+inline bool suspendCustomAwaitable(CustomAwaitable& awaitable, std::coroutine_handle<> handle) {
+    awaitable.m_waker = Waker(handle);
+#ifdef USE_IOURING
+    awaitable.m_sqe_type = CUSTOM;
+#endif
+    awaitable.m_controller->fillAwaitable(CUSTOM, &awaitable);
+    auto* scheduler = awaitable.m_waker.getScheduler();
+    if (scheduler == nullptr || scheduler->type() != kIOScheduler) {
+        return false;
+    }
+    const int ret = (static_cast<IOScheduler*>(scheduler)->*RegisterFn)(awaitable.m_controller);
+    if (ret == 1) {
+        return false;
+    }
+    if (ret < 0) {
+        awaitable.m_error = IOError(kNotReady, detail::normalizeAwaitableErrno(ret));
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
 // ============ await_suspend / await_resume implementations ============
 
 bool AcceptAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-#ifdef USE_IOURING
-    m_sqe_type = ACCEPT;
-#endif
-    m_controller->fillAwaitable(ACCEPT, this);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    const int ret = io_scheduler->addAccept(m_controller);
-    if (ret == OK) return false;
-    if (ret < 0) {
-        m_result = std::unexpected(IOError(kAcceptFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-        return false;
-    }
-    return true;
+    return suspendRegisteredAwaitable<AcceptAwaitable, ACCEPT, kAcceptFailed, &IOScheduler::addAccept>(*this, handle);
 }
 
 std::expected<GHandle, IOError> AcceptAwaitable::await_resume() {
-    m_controller->removeAwaitable(ACCEPT);
-    return std::move(m_result);
+    return detail::resumeIOAwaitable<ACCEPT>(*this);
 }
 
 bool RecvAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-#ifdef USE_IOURING
-    m_sqe_type = RECV;
-#endif
-    m_controller->fillAwaitable(RECV, this);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    const int ret = io_scheduler->addRecv(m_controller);
-    if (ret == OK) return false;
-    if (ret < 0) {
-        m_result = std::unexpected(IOError(kRecvFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-        return false;
-    }
-    return true;
+    return suspendRegisteredAwaitable<RecvAwaitable, RECV, kRecvFailed, &IOScheduler::addRecv>(*this, handle);
 }
 
 std::expected<Bytes, IOError> RecvAwaitable::await_resume() {
-    m_controller->removeAwaitable(RECV);
-    return std::move(m_result);
+    return detail::resumeIOAwaitable<RECV>(*this);
 }
 
 bool SendAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-#ifdef USE_IOURING
-    m_sqe_type = SEND;
-#endif
-    m_controller->fillAwaitable(SEND, this);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    const int ret = io_scheduler->addSend(m_controller);
-    if (ret == OK) return false;
-    if (ret < 0) {
-        m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-        return false;
-    }
-    return true;
+    return suspendRegisteredAwaitable<SendAwaitable, SEND, kSendFailed, &IOScheduler::addSend>(*this, handle);
 }
 
 std::expected<size_t, IOError> SendAwaitable::await_resume() {
-    m_controller->removeAwaitable(SEND);
-    return std::move(m_result);
+    return detail::resumeIOAwaitable<SEND>(*this);
 }
 
 bool ReadvAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-#ifdef USE_IOURING
-    m_sqe_type = READV;
-#endif
-    m_controller->fillAwaitable(READV, this);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    const int ret = io_scheduler->addReadv(m_controller);
-    if (ret == OK) return false;
-    if (ret < 0) {
-        m_result = std::unexpected(IOError(kRecvFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-        return false;
-    }
-    return true;
+    return suspendRegisteredAwaitable<ReadvAwaitable, READV, kRecvFailed, &IOScheduler::addReadv>(*this, handle);
 }
 
 std::expected<size_t, IOError> ReadvAwaitable::await_resume() {
-    m_controller->removeAwaitable(READV);
-    return std::move(m_result);
+    return detail::resumeIOAwaitable<READV>(*this);
 }
 
 bool WritevAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-#ifdef USE_IOURING
-    m_sqe_type = WRITEV;
-#endif
-    m_controller->fillAwaitable(WRITEV, this);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    const int ret = io_scheduler->addWritev(m_controller);
-    if (ret == OK) return false;
-    if (ret < 0) {
-        m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-        return false;
-    }
-    return true;
+    return suspendRegisteredAwaitable<WritevAwaitable, WRITEV, kSendFailed, &IOScheduler::addWritev>(*this, handle);
 }
 
 std::expected<size_t, IOError> WritevAwaitable::await_resume() {
-    m_controller->removeAwaitable(WRITEV);
-    return std::move(m_result);
+    return detail::resumeIOAwaitable<WRITEV>(*this);
 }
 
 bool ConnectAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-#ifdef USE_IOURING
-    m_sqe_type = CONNECT;
-#endif
-    m_controller->fillAwaitable(CONNECT, this);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    const int ret = io_scheduler->addConnect(m_controller);
-    if (ret == OK) return false;
-    if (ret < 0) {
-        m_result = std::unexpected(IOError(kConnectFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-        return false;
-    }
-    return true;
+    return suspendRegisteredAwaitable<ConnectAwaitable, CONNECT, kConnectFailed, &IOScheduler::addConnect>(*this, handle);
 }
 
 std::expected<void, IOError> ConnectAwaitable::await_resume() {
-    m_controller->removeAwaitable(CONNECT);
-    return std::move(m_result);
+    return detail::resumeIOAwaitable<CONNECT>(*this);
 }
 
 bool CloseAwaitable::await_suspend(std::coroutine_handle<> handle) {
@@ -193,179 +127,55 @@ std::expected<void, IOError> CloseAwaitable::await_resume() {
 }
 
 bool FileReadAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-#ifdef USE_IOURING
-    m_sqe_type = FILEREAD;
-#endif
-    m_controller->fillAwaitable(FILEREAD, this);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    const int ret = io_scheduler->addFileRead(m_controller);
-    if (ret == OK) return false;
-    if (ret < 0) {
-        m_result = std::unexpected(IOError(kReadFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-        return false;
-    }
-    return true;
+    return suspendRegisteredAwaitable<FileReadAwaitable, FILEREAD, kReadFailed, &IOScheduler::addFileRead>(*this, handle);
 }
 
 std::expected<Bytes, IOError> FileReadAwaitable::await_resume() {
-    m_controller->removeAwaitable(FILEREAD);
-    return std::move(m_result);
+    return detail::resumeIOAwaitable<FILEREAD>(*this);
 }
 
 bool FileWriteAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-#ifdef USE_IOURING
-    m_sqe_type = FILEWRITE;
-#endif
-    m_controller->fillAwaitable(FILEWRITE, this);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    const int ret = io_scheduler->addFileWrite(m_controller);
-    if (ret == OK) return false;
-    if (ret < 0) {
-        m_result = std::unexpected(IOError(kWriteFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-        return false;
-    }
-    return true;
+    return suspendRegisteredAwaitable<FileWriteAwaitable, FILEWRITE, kWriteFailed, &IOScheduler::addFileWrite>(*this, handle);
 }
 
 std::expected<size_t, IOError> FileWriteAwaitable::await_resume() {
-    m_controller->removeAwaitable(FILEWRITE);
-    return std::move(m_result);
+    return detail::resumeIOAwaitable<FILEWRITE>(*this);
 }
 
 bool RecvFromAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-#ifdef USE_IOURING
-    m_sqe_type = RECVFROM;
-#endif
-    m_controller->fillAwaitable(RECVFROM, this);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    const int ret = io_scheduler->addRecvFrom(m_controller);
-    if (ret == OK) return false;
-    if (ret < 0) {
-        m_result = std::unexpected(IOError(kRecvFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-        return false;
-    }
-    return true;
+    return suspendRegisteredAwaitable<RecvFromAwaitable, RECVFROM, kRecvFailed, &IOScheduler::addRecvFrom>(*this, handle);
 }
 
 std::expected<Bytes, IOError> RecvFromAwaitable::await_resume() {
-    m_controller->removeAwaitable(RECVFROM);
-    return std::move(m_result);
+    return detail::resumeIOAwaitable<RECVFROM>(*this);
 }
 
 bool SendToAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-#ifdef USE_IOURING
-    m_sqe_type = SENDTO;
-#endif
-    m_controller->fillAwaitable(SENDTO, this);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    const int ret = io_scheduler->addSendTo(m_controller);
-    if (ret == OK) return false;
-    if (ret < 0) {
-        m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-        return false;
-    }
-    return true;
+    return suspendRegisteredAwaitable<SendToAwaitable, SENDTO, kSendFailed, &IOScheduler::addSendTo>(*this, handle);
 }
 
 std::expected<size_t, IOError> SendToAwaitable::await_resume() {
-    m_controller->removeAwaitable(SENDTO);
-    return std::move(m_result);
+    return detail::resumeIOAwaitable<SENDTO>(*this);
 }
 
 bool FileWatchAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-#ifdef USE_IOURING
-    m_sqe_type = FILEWATCH;
-#endif
-    m_controller->fillAwaitable(FILEWATCH, this);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    const int ret = io_scheduler->addFileWatch(m_controller);
-    if (ret == OK) return false;
-    if (ret < 0) {
-        m_result = std::unexpected(IOError(kReadFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-        return false;
-    }
-    return true;
+    return suspendRegisteredAwaitable<FileWatchAwaitable, FILEWATCH, kReadFailed, &IOScheduler::addFileWatch>(*this, handle);
 }
 
 std::expected<FileWatchResult, IOError> FileWatchAwaitable::await_resume() {
-    m_controller->removeAwaitable(FILEWATCH);
-    return std::move(m_result);
+    return detail::resumeIOAwaitable<FILEWATCH>(*this);
 }
 
 bool SendFileAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-#ifdef USE_IOURING
-    m_sqe_type = SENDFILE;
-#endif
-    m_controller->fillAwaitable(SENDFILE, this);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    const int ret = io_scheduler->addSendFile(m_controller);
-    if (ret == OK) return false;
-    if (ret < 0) {
-        m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-        return false;
-    }
-    return true;
+    return suspendRegisteredAwaitable<SendFileAwaitable, SENDFILE, kSendFailed, &IOScheduler::addSendFile>(*this, handle);
 }
 
 std::expected<size_t, IOError> SendFileAwaitable::await_resume() {
-    m_controller->removeAwaitable(SENDFILE);
-    return std::move(m_result);
+    return detail::resumeIOAwaitable<SENDFILE>(*this);
 }
 
 bool CustomAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-#ifdef USE_IOURING
-    m_sqe_type = CUSTOM;
-#endif
-    m_controller->fillAwaitable(CUSTOM, this);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    const int ret = io_scheduler->addCustom(m_controller);
-    if (ret == OK) return false;
-    if (ret < 0) {
-        m_error = IOError(kNotReady, ((ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno)));
-        return false;
-    }
-    return true;
+    return suspendCustomAwaitable<&IOScheduler::addCustom>(*this, handle);
 }
 
 }

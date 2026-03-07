@@ -9,19 +9,21 @@ namespace galay::kernel
 class Waker
 {
 public:
-    Waker() {}
-    Waker(std::coroutine_handle<> handle);
-    Waker(const Waker& other);
-    Waker(Waker&& waker);
-    Waker& operator=(const Waker& other);
-    Waker& operator=(Waker&& other);
+    Waker() = default;
+    explicit Waker(TaskRef task) noexcept;
+    explicit Waker(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
+    Waker(std::coroutine_handle<> handle) noexcept;
+    Waker(const Waker& other) = default;
+    Waker(Waker&& waker) noexcept = default;
+    Waker& operator=(const Waker& other) = default;
+    Waker& operator=(Waker&& other) noexcept = default;
 
     Scheduler* getScheduler();
 
     void wakeUp();
 
 private:
-    Coroutine m_coroutine;
+    TaskRef m_task;
 };
 
 

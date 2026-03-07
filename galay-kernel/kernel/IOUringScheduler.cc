@@ -16,11 +16,30 @@
 namespace galay::kernel
 {
 
+namespace {
+
+inline int waitForIoUringCompletion(struct io_uring* ring,
+                                    struct io_uring_cqe** cqe,
+                                    struct __kernel_timespec* timeout) {
+    if (io_uring_sq_ready(ring) == 0) {
+        return io_uring_wait_cqe_timeout(ring, cqe, timeout);
+    }
+
+    const int ret = io_uring_submit_and_wait_timeout(ring, cqe, 1, timeout, nullptr);
+    if (ret == -EBUSY) {
+        return io_uring_wait_cqe_timeout(ring, cqe, timeout);
+    }
+    return ret;
+}
+
+}  // namespace
+
 IOUringScheduler::IOUringScheduler(int queue_depth, int batch_size)
     : m_running(false)
     , m_queue_depth(queue_depth)
     , m_batch_size(batch_size)
     , m_event_fd(eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC))
+    , m_worker(static_cast<size_t>(batch_size))
 {
     if (m_event_fd == -1) {
         throw std::runtime_error("Failed to create eventfd");
@@ -43,7 +62,6 @@ IOUringScheduler::IOUringScheduler(int queue_depth, int batch_size)
         }
     }
 
-    m_coro_buffer.resize(m_batch_size);
 }
 
 IOUringScheduler::~IOUringScheduler()
@@ -343,12 +361,11 @@ int IOUringScheduler::addCustom(IOController* controller)
 {
     auto* custom = controller->getAwaitable<CustomAwaitable>();
     if (custom == nullptr) return -1;
-    while (auto* task = custom->front()) {
-        bool done = task->context->handleComplete(nullptr, controller->m_handle);
-        if (done) { custom->popFront(); continue; }
-        return submitCustomSqe(custom->resolveTaskEventType(*task), task->context, controller);
+    auto* task = custom->front();
+    if (task == nullptr) {
+        return OK;  // 队列空，由调用方决定是否唤醒
     }
-    return OK;  // 队列空，由调用方决定是否唤醒
+    return submitCustomSqe(custom->resolveTaskEventType(*task), task->context, controller);
 }
 
 int IOUringScheduler::submitCustomSqe(IOEventType type, IOContextBase* ctx, IOController* controller)
@@ -481,7 +498,34 @@ bool IOUringScheduler::spawn(Coroutine co)
     } else {
         if(scheduler != this) return false;
     }
-    m_coro_queue.enqueue(std::move(co));
+    TaskRef task = std::move(co).detachTask();
+
+    if (std::this_thread::get_id() == m_threadId) {
+        m_worker.scheduleLocal(std::move(task));
+        return true;
+    }
+
+    m_worker.scheduleInjected(std::move(task));
+    notify();
+    return true;
+}
+
+bool IOUringScheduler::spawnDeferred(Coroutine co)
+{
+    auto* scheduler = co.belongScheduler();
+    if (!scheduler) {
+        co.belongScheduler(this);
+    } else if (scheduler != this) {
+        return false;
+    }
+    TaskRef task = std::move(co).detachTask();
+
+    if (std::this_thread::get_id() == m_threadId) {
+        m_worker.scheduleLocalDeferred(std::move(task));
+        return true;
+    }
+
+    m_worker.scheduleInjected(std::move(task));
     notify();
     return true;
 }
@@ -493,20 +537,31 @@ bool IOUringScheduler::spawnImmidiately(Coroutine co)
         return false;
     }
     co.belongScheduler(this);
-    resume(co);
+    TaskRef task = std::move(co).detachTask();
+    resume(task);
     return true;
 }
 
 void IOUringScheduler::processPendingCoroutines()
 {
+    TaskRef next;
     while (true) {
-        size_t count = m_coro_queue.try_dequeue_bulk(m_coro_buffer.data(), m_batch_size);
-        if (count == 0) {
-            break;
+        if (!m_worker.hasLocalWork() ||
+            m_worker.shouldCheckInjected() ||
+            m_worker.hasPendingInjected()) {
+            m_worker.drainInjected();
         }
-        for (size_t i = 0; i < count; ++i) {
-            Scheduler::resume(m_coro_buffer[i]);
+
+        if (!m_worker.popNext(next)) {
+            if (m_worker.hasPendingInjected()) {
+                continue;
+            }
+            if (m_worker.drainInjected() == 0 || !m_worker.popNext(next)) {
+                break;
+            }
         }
+
+        Scheduler::resume(next);
     }
 }
 
@@ -528,14 +583,7 @@ void IOUringScheduler::eventLoop()
         processPendingCoroutines();
         m_timer_manager.tick();
 
-        int submitted = io_uring_submit(&m_ring);
-        if (submitted < 0 && submitted != -EBUSY) {
-            m_last_error_code.store(
-                IOError(kNotReady, static_cast<uint32_t>(-submitted)).code(),
-                std::memory_order_release);
-        }
-
-        int ret = io_uring_wait_cqe_timeout(&m_ring, &cqe, &timeout);
+        int ret = waitForIoUringCompletion(&m_ring, &cqe, &timeout);
         if (ret < 0) {
             if (ret == -EINTR || ret == -ETIME) {
                 continue;

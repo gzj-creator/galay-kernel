@@ -1,47 +1,39 @@
 #include "Waker.h"
+#include "Scheduler.hpp"
 
 namespace galay::kernel {
 
 
-Waker::Waker(std::coroutine_handle<> handle)
-    : m_coroutine(std::coroutine_handle<Coroutine::promise_type>::from_address(handle.address()).promise().getCoroutine())
+Waker::Waker(TaskRef task) noexcept
+    : m_task(std::move(task))
 {
 }
 
-Waker::Waker(const Waker& other)
-    : m_coroutine(other.m_coroutine)
+Waker::Waker(std::coroutine_handle<Coroutine::promise_type> handle) noexcept
+    : m_task(handle.promise().taskRefView())
 {
 }
 
-Waker::Waker(Waker&& waker)
-    : m_coroutine(waker.m_coroutine) 
+Waker::Waker(std::coroutine_handle<> handle) noexcept
+    : Waker(std::coroutine_handle<Coroutine::promise_type>::from_address(handle.address()))
 {
-}
-
-Waker& Waker::operator=(const Waker& other)
-{
-    if (this != &other) {
-        m_coroutine = other.m_coroutine;
-    }
-    return *this;
-}
-
-Waker& Waker::operator=(Waker&& other)
-{
-    if (this != &other) {
-        m_coroutine = other.m_coroutine;  // 使用拷贝而不是移动
-    }
-    return *this;
 }
 
 Scheduler* Waker::getScheduler()
 {
-    return m_coroutine.belongScheduler();
+    return m_task.belongScheduler();
 }
 
 void Waker::wakeUp()
 {
-    m_coroutine.resume();
+    auto* state = m_task.state();
+    if (!state || !state->m_handle || !state->m_scheduler || state->m_done.load(std::memory_order_relaxed)) {
+        return;
+    }
+
+    if (!state->m_queued.exchange(true, std::memory_order_acq_rel)) {
+        state->m_scheduler->spawn(Coroutine(m_task));
+    }
 }
 
 }

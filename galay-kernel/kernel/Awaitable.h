@@ -30,10 +30,14 @@
 #include "Timeout.hpp"
 #include "FileWatchDefs.hpp"
 #include "Waker.h"
+#include <cerrno>
 #include <coroutine>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <expected>
 #include <span>
+#include <array>
 #include <vector>
 #include <sys/uio.h>
 
@@ -70,6 +74,36 @@ struct IOContextBase: public AwaitableBase {
     // 返回 INVALID 表示沿用静态 task.type。
     virtual IOEventType type() const { return IOEventType::INVALID; }
 };
+
+namespace detail {
+
+inline uint32_t normalizeAwaitableErrno(int ret) noexcept {
+    return (ret < 0 && ret != -1)
+        ? static_cast<uint32_t>(-ret)
+        : static_cast<uint32_t>(errno);
+}
+
+template <typename ResultT>
+inline bool finalizeAwaitableAddResult(int ret,
+                                       IOErrorCode io_error,
+                                       std::expected<ResultT, IOError>& result) {
+    if (ret == 1) {
+        return false;
+    }
+    if (ret < 0) {
+        result = std::unexpected(IOError(io_error, normalizeAwaitableErrno(ret)));
+        return false;
+    }
+    return true;
+}
+
+template <IOEventType Event, typename AwaitableT>
+inline auto resumeIOAwaitable(AwaitableT& awaitable) -> decltype(std::move(awaitable.m_result)) {
+    awaitable.m_controller->removeAwaitable(Event);
+    return std::move(awaitable.m_result);
+}
+
+}  // namespace detail
 
 // ==================== 第三层：IOContext + Awaitable ====================
 
@@ -163,7 +197,16 @@ struct SendAwaitable: public SendIOContext, public TimeoutSupport<SendAwaitable>
 
 struct ReadvIOContext: public IOContextBase {
     ReadvIOContext(std::span<const struct iovec> iovecs)
-        : m_iovecs(iovecs.begin(), iovecs.end()) {}
+        : m_owned_iovecs(iovecs.begin(), iovecs.end())
+        , m_iovecs(m_owned_iovecs.data(), m_owned_iovecs.size()) {}
+
+    template<size_t N>
+    ReadvIOContext(std::array<struct iovec, N>& iovecs, size_t count)
+        : m_iovecs(iovecs.data(), validateBorrowedCountOrAbort(count, N, "readv")) {}
+
+    template<size_t N>
+    ReadvIOContext(struct iovec (&iovecs)[N], size_t count)
+        : m_iovecs(iovecs, validateBorrowedCountOrAbort(count, N, "readv")) {}
 
 #ifdef USE_IOURING
     bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
@@ -171,13 +214,34 @@ struct ReadvIOContext: public IOContextBase {
     bool handleComplete(GHandle handle) override;
 #endif
 
-    std::vector<struct iovec> m_iovecs;
+    static size_t validateBorrowedCountOrAbort(size_t count, size_t capacity, const char* op) {
+        if (count <= capacity) {
+            return count;
+        }
+        std::fprintf(stderr,
+                     "invalid borrowed %s count: %zu > %zu\n",
+                     op,
+                     count,
+                     capacity);
+        std::abort();
+    }
+
+    std::vector<struct iovec> m_owned_iovecs;
+    std::span<const struct iovec> m_iovecs;
     std::expected<size_t, IOError> m_result;
 };
 
 struct ReadvAwaitable: public ReadvIOContext, public TimeoutSupport<ReadvAwaitable> {
     ReadvAwaitable(IOController* controller, std::span<const struct iovec> iovecs)
         : ReadvIOContext(iovecs), m_controller(controller) {}
+
+    template<size_t N>
+    ReadvAwaitable(IOController* controller, std::array<struct iovec, N>& iovecs, size_t count)
+        : ReadvIOContext(iovecs, count), m_controller(controller) {}
+
+    template<size_t N>
+    ReadvAwaitable(IOController* controller, struct iovec (&iovecs)[N], size_t count)
+        : ReadvIOContext(iovecs, count), m_controller(controller) {}
 
     bool await_ready() { return false; }
     bool await_suspend(std::coroutine_handle<> handle);
@@ -191,7 +255,16 @@ struct ReadvAwaitable: public ReadvIOContext, public TimeoutSupport<ReadvAwaitab
 
 struct WritevIOContext: public IOContextBase {
     WritevIOContext(std::span<const struct iovec> iovecs)
-        : m_iovecs(iovecs.begin(), iovecs.end()) {}
+        : m_owned_iovecs(iovecs.begin(), iovecs.end())
+        , m_iovecs(m_owned_iovecs.data(), m_owned_iovecs.size()) {}
+
+    template<size_t N>
+    WritevIOContext(std::array<struct iovec, N>& iovecs, size_t count)
+        : m_iovecs(iovecs.data(), validateBorrowedCountOrAbort(count, N, "writev")) {}
+
+    template<size_t N>
+    WritevIOContext(struct iovec (&iovecs)[N], size_t count)
+        : m_iovecs(iovecs, validateBorrowedCountOrAbort(count, N, "writev")) {}
 
 #ifdef USE_IOURING
     bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
@@ -199,13 +272,34 @@ struct WritevIOContext: public IOContextBase {
     bool handleComplete(GHandle handle) override;
 #endif
 
-    std::vector<struct iovec> m_iovecs;
+    static size_t validateBorrowedCountOrAbort(size_t count, size_t capacity, const char* op) {
+        if (count <= capacity) {
+            return count;
+        }
+        std::fprintf(stderr,
+                     "invalid borrowed %s count: %zu > %zu\n",
+                     op,
+                     count,
+                     capacity);
+        std::abort();
+    }
+
+    std::vector<struct iovec> m_owned_iovecs;
+    std::span<const struct iovec> m_iovecs;
     std::expected<size_t, IOError> m_result;
 };
 
 struct WritevAwaitable: public WritevIOContext, public TimeoutSupport<WritevAwaitable> {
     WritevAwaitable(IOController* controller, std::span<const struct iovec> iovecs)
         : WritevIOContext(iovecs), m_controller(controller) {}
+
+    template<size_t N>
+    WritevAwaitable(IOController* controller, std::array<struct iovec, N>& iovecs, size_t count)
+        : WritevIOContext(iovecs, count), m_controller(controller) {}
+
+    template<size_t N>
+    WritevAwaitable(IOController* controller, struct iovec (&iovecs)[N], size_t count)
+        : WritevIOContext(iovecs, count), m_controller(controller) {}
 
     bool await_ready() { return false; }
     bool await_suspend(std::coroutine_handle<> handle);

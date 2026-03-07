@@ -275,7 +275,7 @@ private:
             m_waiterHandle = {};
             if (handle) {
                 if (m_wake_mode == UnsafeChannelWakeMode::Deferred) {
-                    auto waiter = handle.promise().getCoroutine();
+                    auto& waiter = handle.promise().coroutineRef();
                     if (waiter.belongScheduler()) {
                         waiter.resume();
                         return;
