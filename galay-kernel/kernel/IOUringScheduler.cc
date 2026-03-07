@@ -185,9 +185,17 @@ int IOUringScheduler::addReadv(IOController* controller)
         return -EAGAIN;
     }
 
-    io_uring_prep_readv(sqe, controller->m_handle.fd,
-                        awaitable->m_iovecs.data(),
-                        static_cast<unsigned>(awaitable->m_iovecs.size()), 0);
+    // For sockets, recv/send and recvmsg/sendmsg map better than readv/writev on io_uring.
+    if (awaitable->m_iovecs.size() == 1) {
+        const auto& iov = awaitable->m_iovecs[0];
+        io_uring_prep_recv(sqe,
+                           controller->m_handle.fd,
+                           iov.iov_base,
+                           static_cast<unsigned>(iov.iov_len),
+                           0);
+    } else {
+        io_uring_prep_recvmsg(sqe, controller->m_handle.fd, &awaitable->m_msg, 0);
+    }
     io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::READ]);
     return 0;
 }
@@ -202,9 +210,17 @@ int IOUringScheduler::addWritev(IOController* controller)
         return -EAGAIN;
     }
 
-    io_uring_prep_writev(sqe, controller->m_handle.fd,
-                         awaitable->m_iovecs.data(),
-                         static_cast<unsigned>(awaitable->m_iovecs.size()), 0);
+    // For sockets, recv/send and recvmsg/sendmsg map better than readv/writev on io_uring.
+    if (awaitable->m_iovecs.size() == 1) {
+        const auto& iov = awaitable->m_iovecs[0];
+        io_uring_prep_send(sqe,
+                           controller->m_handle.fd,
+                           iov.iov_base,
+                           static_cast<unsigned>(iov.iov_len),
+                           0);
+    } else {
+        io_uring_prep_sendmsg(sqe, controller->m_handle.fd, &awaitable->m_msg, 0);
+    }
     io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::WRITE]);
     return 0;
 }
@@ -510,6 +526,23 @@ bool IOUringScheduler::spawn(Coroutine co)
     return true;
 }
 
+bool IOUringScheduler::schedule(TaskRef task)
+{
+    auto* state = task.state();
+    if (!state || state->m_scheduler != this) {
+        return false;
+    }
+
+    if (std::this_thread::get_id() == m_threadId) {
+        m_worker.scheduleLocal(std::move(task));
+        return true;
+    }
+
+    m_worker.scheduleInjected(std::move(task));
+    notify();
+    return true;
+}
+
 bool IOUringScheduler::spawnDeferred(Coroutine co)
 {
     auto* scheduler = co.belongScheduler();
@@ -519,6 +552,23 @@ bool IOUringScheduler::spawnDeferred(Coroutine co)
         return false;
     }
     TaskRef task = std::move(co).detachTask();
+
+    if (std::this_thread::get_id() == m_threadId) {
+        m_worker.scheduleLocalDeferred(std::move(task));
+        return true;
+    }
+
+    m_worker.scheduleInjected(std::move(task));
+    notify();
+    return true;
+}
+
+bool IOUringScheduler::scheduleDeferred(TaskRef task)
+{
+    auto* state = task.state();
+    if (!state || state->m_scheduler != this) {
+        return false;
+    }
 
     if (std::this_thread::get_id() == m_threadId) {
         m_worker.scheduleLocalDeferred(std::move(task));

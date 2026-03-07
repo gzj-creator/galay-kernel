@@ -232,7 +232,7 @@ Coroutine benchmarkWorkerAsync(galay::async::AsyncFile* file, int worker_id, con
             g_total_errors.fetch_add(1, std::memory_order_relaxed);
         } else {
             g_total_reads.fetch_add(1, std::memory_order_relaxed);
-            g_total_bytes_read.fetch_add(read_result.value().size(), std::memory_order_relaxed);
+            g_total_bytes_read.fetch_add(read_result.value(), std::memory_order_relaxed);
         }
 
         ops++;

@@ -1,18 +1,19 @@
 /**
  * @file bench_tcp_iov_client.cc
- * @brief TCP 压测客户端 - 使用 readv/writev + RingBuffer
+ * @brief TCP 压测客户端 - 使用用户自管双段 readv/writev
  *
  * 与 bench_tcp_client.cc 对比，测试 scatter-gather IO 的性能
  */
 
 #include <iostream>
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <thread>
 #include <vector>
 #include <cstring>
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/StdoutLog.h"
 
@@ -26,6 +27,60 @@
 
 using namespace galay::async;
 using namespace galay::kernel;
+
+namespace {
+
+constexpr const char* benchmarkBackend() {
+#if defined(USE_KQUEUE)
+    return "kqueue";
+#elif defined(USE_IOURING)
+    return "io_uring";
+#elif defined(USE_EPOLL)
+    return "epoll";
+#else
+    return "unknown";
+#endif
+}
+
+constexpr const char* benchmarkBuildMode() {
+#ifdef NDEBUG
+    return "release-like";
+#else
+    return "debug-like";
+#endif
+}
+
+constexpr size_t kPrefixBytes = 64;
+constexpr size_t kBodyBytes = 8192;
+
+size_t fillMessageIovecs(std::array<struct iovec, 2>& iovecs, std::string_view message) {
+    const size_t prefixLen = std::min(message.size(), kPrefixBytes);
+    const size_t bodyLen = message.size() > prefixLen ? message.size() - prefixLen : 0;
+
+    iovecs[0].iov_base = const_cast<char*>(message.data());
+    iovecs[0].iov_len = prefixLen;
+    if (bodyLen == 0) {
+        return prefixLen == 0 ? 0 : 1;
+    }
+
+    iovecs[1].iov_base = const_cast<char*>(message.data() + prefixLen);
+    iovecs[1].iov_len = bodyLen;
+    return 2;
+}
+
+size_t fillResponseIovecs(std::array<struct iovec, 2>& iovecs,
+                          char* prefix,
+                          size_t prefixLen,
+                          char* body,
+                          size_t bodyLen) {
+    iovecs[0].iov_base = prefix;
+    iovecs[0].iov_len = prefixLen;
+    iovecs[1].iov_base = body;
+    iovecs[1].iov_len = bodyLen;
+    return bodyLen == 0 ? 1 : 2;
+}
+
+}  // namespace
 
 std::atomic<uint64_t> g_total_requests{0};
 std::atomic<uint64_t> g_total_bytes{0};
@@ -41,7 +96,7 @@ struct BenchConfig {
     int duration = 10;  // seconds
 };
 
-// 单个客户端连接的压测协程 - 使用 readv/writev + RingBuffer
+// 单个客户端连接的压测协程 - 使用用户自管双段 iovec
 Coroutine benchClient(const BenchConfig& config, [[maybe_unused]] int clientId) {
     TcpSocket client;
     client.option().handleNonBlock();
@@ -53,29 +108,30 @@ Coroutine benchClient(const BenchConfig& config, [[maybe_unused]] int clientId) 
         co_return;
     }
 
-    // 准备发送和接收缓冲区
-    RingBuffer sendBuffer(8192);
-    RingBuffer recvBuffer(8192);
+    std::array<struct iovec, 2> writeIovecs{};
+    std::array<struct iovec, 2> readIovecs{};
+    std::array<char, kPrefixBytes> respPrefix{};
+    std::array<char, kBodyBytes> respBody{};
 
     // 准备测试数据
     std::string message(config.messageSize, 'X');
+    const size_t writeCount = fillMessageIovecs(writeIovecs, message);
+    const size_t readCount = fillResponseIovecs(readIovecs,
+                                                respPrefix.data(),
+                                                respPrefix.size(),
+                                                respBody.data(),
+                                                respBody.size());
 
     while (g_running.load(std::memory_order_relaxed)) {
-        // 写入数据到发送缓冲区
-        sendBuffer.write(message.data(), message.size());
-
         // 使用 writev 发送
-        auto writeIovecs = sendBuffer.getReadIovecs();
-        auto sendResult = co_await client.writev(writeIovecs);
+        auto sendResult = co_await client.writev(writeIovecs, writeCount);
         if (!sendResult) {
             g_error_count.fetch_add(1, std::memory_order_relaxed);
             break;
         }
-        sendBuffer.consume(sendResult.value());
 
         // 使用 readv 接收
-        auto readIovecs = recvBuffer.getWriteIovecs();
-        auto recvResult = co_await client.readv(readIovecs);
+        auto recvResult = co_await client.readv(readIovecs, readCount);
         if (!recvResult) {
             g_error_count.fetch_add(1, std::memory_order_relaxed);
             break;
@@ -85,12 +141,6 @@ Coroutine benchClient(const BenchConfig& config, [[maybe_unused]] int clientId) 
         if (bytesRead == 0) {
             break;
         }
-
-        recvBuffer.produce(bytesRead);
-
-        // 消费接收到的数据
-        size_t consumed = recvBuffer.readable();
-        recvBuffer.consume(consumed);
 
         g_total_requests.fetch_add(1, std::memory_order_relaxed);
         g_total_bytes.fetch_add(message.size() + bytesRead, std::memory_order_relaxed);
@@ -178,6 +228,12 @@ int main(int argc, char* argv[]) {
     std::cout << "Connections: " << config.connections << std::endl;
     std::cout << "Message Size: " << config.messageSize << " bytes" << std::endl;
     std::cout << "Duration: " << config.duration << " seconds" << std::endl;
+    std::cout << "Meta: backend=" << benchmarkBackend()
+              << " | build=" << benchmarkBuildMode()
+              << " | role=client"
+              << " | io_mode=iov-2seg"
+              << " | scenario=tcp-echo"
+              << " | split=" << kPrefixBytes << "+rest" << std::endl;
     std::cout << "===========================================" << std::endl;
 
 #if defined(USE_KQUEUE)

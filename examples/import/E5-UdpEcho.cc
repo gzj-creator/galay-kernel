@@ -6,6 +6,7 @@ import galay.kernel;
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <thread>
 
 using namespace galay::async;
@@ -43,9 +44,9 @@ Coroutine udpServer() {
     char buffer[1024];
     Host peer;
     auto recvResult = co_await socket.recvfrom(buffer, sizeof(buffer), &peer);
-    if (recvResult && recvResult.value().size() > 0) {
-        auto& bytes = recvResult.value();
-        auto sendResult = co_await socket.sendto(bytes.c_str(), bytes.size(), peer);
+    if (recvResult) {
+        size_t bytes = recvResult.value();
+        auto sendResult = co_await socket.sendto(buffer, bytes, peer);
         if (!sendResult) {
             std::cerr << "udp sendto failed\n";
         }
@@ -79,8 +80,8 @@ Coroutine udpClient() {
     char buffer[1024];
     Host peer;
     auto recvResult = co_await socket.recvfrom(buffer, sizeof(buffer), &peer);
-    if (recvResult && recvResult.value().size() > 0) {
-        std::cout << "udp response: " << recvResult.value().toStringView() << "\n";
+    if (recvResult) {
+        std::cout << "udp response: " << std::string_view(buffer, recvResult.value()) << "\n";
     }
 
     co_await socket.close();

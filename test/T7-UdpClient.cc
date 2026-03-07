@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <string_view>
 #include "galay-kernel/async/UdpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/StdoutLog.h"
@@ -75,11 +76,12 @@ Coroutine udpEchoClient() {
             continue;
         }
 
-        auto& bytes = recvResult.value();
-        LogInfo("Client: Received echo from {}:{}: {}", from.ip(), from.port(), bytes.toStringView());
+        size_t bytes = recvResult.value();
+        auto payload = std::string_view(buffer, bytes);
+        LogInfo("Client: Received echo from {}:{}: {}", from.ip(), from.port(), payload);
 
         // 验证回显内容
-        if (bytes.toStringView() == messages[i]) {
+        if (payload == messages[i]) {
             LogInfo("Client: Message {} echo verified", i + 1);
             success_count++;
         } else {

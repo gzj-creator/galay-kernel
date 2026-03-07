@@ -25,7 +25,6 @@
 
 #include "galay-kernel/common/Defn.hpp"
 #include "galay-kernel/common/Error.h"
-#include "galay-kernel/common/Bytes.h"
 #include "galay-kernel/common/Host.hpp"
 #include "Timeout.hpp"
 #include "FileWatchDefs.hpp"
@@ -38,7 +37,7 @@
 #include <expected>
 #include <span>
 #include <array>
-#include <vector>
+#include <sys/socket.h>
 #include <sys/uio.h>
 
 #ifdef USE_EPOLL
@@ -149,7 +148,7 @@ struct RecvIOContext: public IOContextBase {
 
     char* m_buffer;
     size_t m_length;
-    std::expected<Bytes, IOError> m_result;
+    std::expected<size_t, IOError> m_result;
 };
 
 struct RecvAwaitable: public RecvIOContext, public TimeoutSupport<RecvAwaitable> {
@@ -158,7 +157,7 @@ struct RecvAwaitable: public RecvIOContext, public TimeoutSupport<RecvAwaitable>
 
     bool await_ready() { return false; }
     bool await_suspend(std::coroutine_handle<> handle);
-    std::expected<Bytes, IOError> await_resume();
+    std::expected<size_t, IOError> await_resume();
 
     IOController* m_controller;
     Waker m_waker;
@@ -196,17 +195,21 @@ struct SendAwaitable: public SendIOContext, public TimeoutSupport<SendAwaitable>
 // ---- Readv ----
 
 struct ReadvIOContext: public IOContextBase {
-    ReadvIOContext(std::span<const struct iovec> iovecs)
-        : m_owned_iovecs(iovecs.begin(), iovecs.end())
-        , m_iovecs(m_owned_iovecs.data(), m_owned_iovecs.size()) {}
-
     template<size_t N>
     ReadvIOContext(std::array<struct iovec, N>& iovecs, size_t count)
-        : m_iovecs(iovecs.data(), validateBorrowedCountOrAbort(count, N, "readv")) {}
+        : m_iovecs(iovecs.data(), validateBorrowedCountOrAbort(count, N, "readv")) {
+#ifdef USE_IOURING
+        initMsghdr();
+#endif
+    }
 
     template<size_t N>
     ReadvIOContext(struct iovec (&iovecs)[N], size_t count)
-        : m_iovecs(iovecs, validateBorrowedCountOrAbort(count, N, "readv")) {}
+        : m_iovecs(iovecs, validateBorrowedCountOrAbort(count, N, "readv")) {
+#ifdef USE_IOURING
+        initMsghdr();
+#endif
+    }
 
 #ifdef USE_IOURING
     bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
@@ -226,15 +229,20 @@ struct ReadvIOContext: public IOContextBase {
         std::abort();
     }
 
-    std::vector<struct iovec> m_owned_iovecs;
     std::span<const struct iovec> m_iovecs;
     std::expected<size_t, IOError> m_result;
+
+#ifdef USE_IOURING
+    void initMsghdr() {
+        m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
+        m_msg.msg_iovlen = m_iovecs.size();
+    }
+
+    struct msghdr m_msg{};
+#endif
 };
 
 struct ReadvAwaitable: public ReadvIOContext, public TimeoutSupport<ReadvAwaitable> {
-    ReadvAwaitable(IOController* controller, std::span<const struct iovec> iovecs)
-        : ReadvIOContext(iovecs), m_controller(controller) {}
-
     template<size_t N>
     ReadvAwaitable(IOController* controller, std::array<struct iovec, N>& iovecs, size_t count)
         : ReadvIOContext(iovecs, count), m_controller(controller) {}
@@ -254,17 +262,21 @@ struct ReadvAwaitable: public ReadvIOContext, public TimeoutSupport<ReadvAwaitab
 // ---- Writev ----
 
 struct WritevIOContext: public IOContextBase {
-    WritevIOContext(std::span<const struct iovec> iovecs)
-        : m_owned_iovecs(iovecs.begin(), iovecs.end())
-        , m_iovecs(m_owned_iovecs.data(), m_owned_iovecs.size()) {}
-
     template<size_t N>
     WritevIOContext(std::array<struct iovec, N>& iovecs, size_t count)
-        : m_iovecs(iovecs.data(), validateBorrowedCountOrAbort(count, N, "writev")) {}
+        : m_iovecs(iovecs.data(), validateBorrowedCountOrAbort(count, N, "writev")) {
+#ifdef USE_IOURING
+        initMsghdr();
+#endif
+    }
 
     template<size_t N>
     WritevIOContext(struct iovec (&iovecs)[N], size_t count)
-        : m_iovecs(iovecs, validateBorrowedCountOrAbort(count, N, "writev")) {}
+        : m_iovecs(iovecs, validateBorrowedCountOrAbort(count, N, "writev")) {
+#ifdef USE_IOURING
+        initMsghdr();
+#endif
+    }
 
 #ifdef USE_IOURING
     bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
@@ -284,15 +296,20 @@ struct WritevIOContext: public IOContextBase {
         std::abort();
     }
 
-    std::vector<struct iovec> m_owned_iovecs;
     std::span<const struct iovec> m_iovecs;
     std::expected<size_t, IOError> m_result;
+
+#ifdef USE_IOURING
+    void initMsghdr() {
+        m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
+        m_msg.msg_iovlen = m_iovecs.size();
+    }
+
+    struct msghdr m_msg{};
+#endif
 };
 
 struct WritevAwaitable: public WritevIOContext, public TimeoutSupport<WritevAwaitable> {
-    WritevAwaitable(IOController* controller, std::span<const struct iovec> iovecs)
-        : WritevIOContext(iovecs), m_controller(controller) {}
-
     template<size_t N>
     WritevAwaitable(IOController* controller, std::array<struct iovec, N>& iovecs, size_t count)
         : WritevIOContext(iovecs, count), m_controller(controller) {}
@@ -367,7 +384,7 @@ struct RecvFromIOContext: public IOContextBase {
     char* m_buffer;
     size_t m_length;
     Host* m_from;
-    std::expected<Bytes, IOError> m_result;
+    std::expected<size_t, IOError> m_result;
 
 #ifdef USE_IOURING
     struct msghdr m_msg;
@@ -382,7 +399,7 @@ struct RecvFromAwaitable: public RecvFromIOContext, public TimeoutSupport<RecvFr
 
     bool await_ready() { return false; }
     bool await_suspend(std::coroutine_handle<> handle);
-    std::expected<Bytes, IOError> await_resume();
+    std::expected<size_t, IOError> await_resume();
 
     IOController* m_controller;
     Waker m_waker;
@@ -445,7 +462,7 @@ struct FileReadIOContext: public IOContextBase {
     char* m_buffer;
     size_t m_length;
     off_t m_offset;
-    std::expected<Bytes, IOError> m_result;
+    std::expected<size_t, IOError> m_result;
 
 #ifdef USE_EPOLL
     int m_event_fd;
@@ -471,7 +488,7 @@ struct FileReadAwaitable: public FileReadIOContext, public TimeoutSupport<FileRe
 
     bool await_ready() { return false; }
     bool await_suspend(std::coroutine_handle<> handle);
-    std::expected<Bytes, IOError> await_resume();
+    std::expected<size_t, IOError> await_resume();
 
     IOController* m_controller;
     Waker m_waker;
@@ -634,7 +651,7 @@ struct SendFileAwaitable: public SendFileIOContext, public TimeoutSupport<SendFi
  *     }
  *
  *     bool await_ready() { return false; }
- *     std::expected<Bytes, IOError> await_resume() {
+ *     std::expected<size_t, IOError> await_resume() {
  *         onCompleted();
  *         return std::move(m_recv.m_result);
  *     }

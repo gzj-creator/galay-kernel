@@ -209,18 +209,6 @@ namespace galay::kernel
         delete[] m_buffer;
     }
 
-    std::vector<struct iovec> RingBuffer::getWriteIovecs()
-    {
-        struct iovec raw_iovecs[2];
-        const size_t count = getWriteIovecs(raw_iovecs, 2);
-        std::vector<struct iovec> iovecs;
-        iovecs.reserve(count);
-        for (size_t i = 0; i < count; ++i) {
-            iovecs.push_back(raw_iovecs[i]);
-        }
-        return iovecs;
-    }
-
     size_t RingBuffer::getWriteIovecs(struct iovec* out, size_t max_iovecs) const
     {
         if (out == nullptr || max_iovecs == 0 || m_size == m_capacity) {
@@ -244,18 +232,6 @@ namespace galay::kernel
             }
         }
         return count;
-    }
-
-    std::vector<struct iovec> RingBuffer::getReadIovecs() const
-    {
-        struct iovec raw_iovecs[2];
-        const size_t count = getReadIovecs(raw_iovecs, 2);
-        std::vector<struct iovec> iovecs;
-        iovecs.reserve(count);
-        for (size_t i = 0; i < count; ++i) {
-            iovecs.push_back(raw_iovecs[i]);
-        }
-        return iovecs;
     }
 
     size_t RingBuffer::getReadIovecs(struct iovec* out, size_t max_iovecs) const
@@ -322,8 +298,10 @@ namespace galay::kernel
         size_t toWrite = std::min(len, writable());
         size_t written = 0;
 
-        auto iovecs = getWriteIovecs();
-        for (const auto& iov : iovecs) {
+        std::array<struct iovec, 2> iovecs{};
+        const size_t iovecCount = getWriteIovecs(iovecs);
+        for (size_t i = 0; i < iovecCount; ++i) {
+            const auto& iov = iovecs[i];
             if (written >= toWrite) break;
             size_t chunkSize = std::min(iov.iov_len, toWrite - written);
             std::memcpy(iov.iov_base, src + written, chunkSize);

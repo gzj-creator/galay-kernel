@@ -1,6 +1,7 @@
 #include <exception>
 #include <iostream>
 #include <cstring>
+#include <string_view>
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/StdoutLog.h"
@@ -80,15 +81,15 @@ Coroutine echoServer([[maybe_unused]] IOScheduler* scheduler) {
             break;
         }
 
-        auto& bytes = recvResult.value();
-        if (bytes.size() == 0) {
+        size_t bytes = recvResult.value();
+        if (bytes == 0) {
             LogInfo("Client disconnected");
             break;
         }
 
-        LogInfo("Received: {}", bytes.toStringView());
+        LogInfo("Received: {}", std::string_view(buffer, bytes));
 
-        auto sendResult = co_await client.send(bytes.c_str(), bytes.size());
+        auto sendResult = co_await client.send(buffer, bytes);
         if (!sendResult) {
             LogError("Send error: {}", sendResult.error().message());
             break;
@@ -139,8 +140,8 @@ Coroutine echoClient([[maybe_unused]] IOScheduler* scheduler) {
         co_return;
     }
 
-    auto& bytes = recvResult.value();
-    LogInfo("Client: Received echo: {}", bytes.toStringView());
+    size_t bytes = recvResult.value();
+    LogInfo("Client: Received echo: {}", std::string_view(buffer, bytes));
 
     co_await client.close();
     LogInfo("Client stopped");

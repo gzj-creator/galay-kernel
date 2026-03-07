@@ -87,7 +87,7 @@ Coroutine readvServer([[maybe_unused]] IOScheduler* scheduler) {
     iovecs[1].iov_len = sizeof(body);
 
     LogInfo("[Server] Waiting for readv...");
-    auto readvResult = co_await client.readv(iovecs);
+    auto readvResult = co_await client.readv(iovecs, iovecs.size());
     if (!readvResult) {
         LogError("[Server] readv failed: {}", readvResult.error().message());
         co_await client.close();
@@ -126,7 +126,7 @@ Coroutine readvServer([[maybe_unused]] IOScheduler* scheduler) {
     respIovecs[1].iov_base = const_cast<char*>(respBody);
     respIovecs[1].iov_len = strlen(respBody);
 
-    auto writevResult = co_await client.writev(respIovecs);
+    auto writevResult = co_await client.writev(respIovecs, respIovecs.size());
     if (!writevResult) {
         LogError("[Server] writev failed: {}", writevResult.error().message());
     } else {
@@ -175,7 +175,7 @@ Coroutine writevClient([[maybe_unused]] IOScheduler* scheduler) {
     iovecs[1].iov_len = strlen(body);
 
     LogInfo("[Client] Sending with writev...");
-    auto writevResult = co_await client.writev(iovecs);
+    auto writevResult = co_await client.writev(iovecs, iovecs.size());
     if (!writevResult) {
         LogError("[Client] writev failed: {}", writevResult.error().message());
         co_await client.close();
@@ -197,7 +197,7 @@ Coroutine writevClient([[maybe_unused]] IOScheduler* scheduler) {
     respIovecs[1].iov_len = sizeof(respBody);
 
     LogInfo("[Client] Waiting for readv response...");
-    auto readvResult = co_await client.readv(respIovecs);
+    auto readvResult = co_await client.readv(respIovecs, respIovecs.size());
     if (!readvResult) {
         LogError("[Client] readv failed: {}", readvResult.error().message());
     } else {

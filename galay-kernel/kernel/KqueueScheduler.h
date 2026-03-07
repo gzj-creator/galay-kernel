@@ -11,7 +11,6 @@
 #include <atomic>
 #include <thread>
 #include <cstdint>
-#include <concurrentqueue/moodycamel/concurrentqueue.h>
 
 // Scheduler configuration macros
 #ifndef GALAY_SCHEDULER_MAX_EVENTS
@@ -70,6 +69,9 @@ public:
     std::optional<IOError> lastError() const override;
     // Coroutine scheduling
     bool spawn(Coroutine coro) override;
+    bool schedule(TaskRef task) override;
+    bool spawnDeferred(Coroutine co) override;
+    bool scheduleDeferred(TaskRef task) override;
 
     bool spawnImmidiately(Coroutine co) override;
 protected:
@@ -86,12 +88,8 @@ protected:
     int m_notify_pipe[2];
     std::atomic<uint64_t> m_last_error_code{0};
     IOSchedulerWorkerState m_worker;
-    // Lock-free queue for coroutines
-    moodycamel::ConcurrentQueue<Coroutine> m_coro_queue;
     // Event buffer
     std::vector<struct kevent> m_events;
-    // Coroutine buffer for batch processing
-    std::vector<Coroutine> m_coro_buffer;
 
 private:
     // Main controller loop

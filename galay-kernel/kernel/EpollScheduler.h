@@ -11,7 +11,6 @@
 #include <atomic>
 #include <thread>
 #include <cstdint>
-#include <concurrentqueue/moodycamel/concurrentqueue.h>
 
 #ifndef GALAY_SCHEDULER_MAX_EVENTS
 #define GALAY_SCHEDULER_MAX_EVENTS 1024
@@ -77,6 +76,9 @@ public:
     std::optional<IOError> lastError() const override;
 
     bool spawn(Coroutine coro) override;
+    bool schedule(TaskRef task) override;
+    bool spawnDeferred(Coroutine co) override;
+    bool scheduleDeferred(TaskRef task) override;
 
     bool spawnImmidiately(Coroutine co) override;
 
@@ -93,9 +95,7 @@ protected:
     std::atomic<uint64_t> m_last_error_code{0};
 
     IOSchedulerWorkerState m_worker;
-    moodycamel::ConcurrentQueue<Coroutine> m_coro_queue;
     std::vector<struct epoll_event> m_events;
-    std::vector<Coroutine> m_coro_buffer;
 
 private:
     void eventLoop();
@@ -103,6 +103,7 @@ private:
     void processEvent(struct epoll_event& ev);
     void syncEpollEvents(IOController* controller);
     uint32_t buildEpollEvents(IOController* controller);
+    int applyEpollEvents(IOController* controller, uint32_t events);
     int processCustom(IOEventType type, IOController* controller);
 };
 

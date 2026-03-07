@@ -2,10 +2,10 @@
 #define GALAY_BUFFER_H
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <string>
 #include <cstdint>
-#include <vector>
 #include <sys/types.h>
 #include <sys/uio.h>
 
@@ -217,7 +217,7 @@ namespace galay::kernel
      *          特性:
      *          - 固定容量，不自动扩容
      *          - 支持环绕读写
-     *          - getWriteIovecs() 返回1-2个iovec用于 readv 接收数据
+     *          - getWriteIovecs(out) 返回1-2个iovec用于 readv 接收数据
      *          - readableView() 自动线性化，返回连续的 string_view
      */
     class RingBuffer
@@ -250,30 +250,44 @@ namespace galay::kernel
         // ============ 核心接口 ============
 
         /**
-         * @brief 获取可写区域的 iovec 向量（用于 readv）
-         * @return 1-2个iovec，描述可写的连续内存区域
+         * @brief 获取可写区域的 iovec（用于 readv）
+         * @param out 输出数组
+         * @param max_iovecs 输出数组容量，最多使用前2个槽位
+         * @return 实际填充的 iovec 数量
          *
          * @code
-         * auto iovecs = buffer.getWriteIovecs();
-         * ssize_t n = co_await socket.readv(iovecs);
+         * std::array<struct iovec, 2> iovecs{};
+         * size_t count = buffer.getWriteIovecs(iovecs);
+         * ssize_t n = co_await socket.readv(iovecs, count);
          * buffer.produce(n);
          * @endcode
          */
-        std::vector<struct iovec> getWriteIovecs();
         size_t getWriteIovecs(struct iovec* out, size_t max_iovecs = 2) const;
 
+        template<size_t N>
+        size_t getWriteIovecs(std::array<struct iovec, N>& out) const {
+            return getWriteIovecs(out.data(), N);
+        }
+
         /**
-         * @brief 获取可读区域的 iovec 向量（用于 writev）
-         * @return 1-2个iovec，描述可读的连续内存区域
+         * @brief 获取可读区域的 iovec（用于 writev）
+         * @param out 输出数组
+         * @param max_iovecs 输出数组容量，最多使用前2个槽位
+         * @return 实际填充的 iovec 数量
          *
          * @code
-         * auto iovecs = buffer.getReadIovecs();
-         * ssize_t n = co_await socket.writev(iovecs);
+         * std::array<struct iovec, 2> iovecs{};
+         * size_t count = buffer.getReadIovecs(iovecs);
+         * ssize_t n = co_await socket.writev(iovecs, count);
          * buffer.consume(n);
          * @endcode
          */
-        std::vector<struct iovec> getReadIovecs() const;
         size_t getReadIovecs(struct iovec* out, size_t max_iovecs = 2) const;
+
+        template<size_t N>
+        size_t getReadIovecs(std::array<struct iovec, N>& out) const {
+            return getReadIovecs(out.data(), N);
+        }
 
         /**
          * @brief 确认已写入的字节数（移动写指针）

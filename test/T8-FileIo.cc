@@ -1,6 +1,7 @@
 #include <cstring>
 #include <fstream>
 #include <atomic>
+#include <string_view>
 #include "galay-kernel/common/Defn.hpp"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/StdoutLog.h"
@@ -69,9 +70,10 @@ Coroutine testKqueueFileIO(std::atomic<bool>* done) {
             LogError("[Kqueue] Read failed: {}", result.error().message());
             g_failed++;
         } else {
-            auto& bytes = result.value();
-            LogInfo("[Kqueue] Read {} bytes: {}", bytes.size(), bytes.toStringView());
-            if (bytes.toStringView() == TEST_CONTENT) {
+            size_t bytes = result.value();
+            std::string_view payload(buffer, bytes);
+            LogInfo("[Kqueue] Read {} bytes: {}", bytes, payload);
+            if (payload == TEST_CONTENT) {
                 LogInfo("[Kqueue] Test 1 PASSED: Content matches");
                 g_passed++;
             } else {
@@ -113,7 +115,7 @@ Coroutine testKqueueFileIO(std::atomic<bool>* done) {
             auto readResult = co_await file.read(buffer, sizeof(buffer) - 1, 0);
             if (readResult) {
                 std::string_view written(writeContent);
-                std::string_view readBack = readResult.value().toStringView();
+                std::string_view readBack(buffer, readResult.value());
                 if (readBack.substr(0, written.size()) == written) {
                     LogInfo("[Kqueue] Test 2 PASSED: Write and read back successful");
                     g_passed++;
@@ -357,9 +359,10 @@ Coroutine testIOUringFileIO(std::atomic<bool>* done) {
             LogError("[io_uring] Read failed: {}", result.error().message());
             g_failed++;
         } else {
-            auto& bytes = result.value();
-            LogInfo("[io_uring] Read {} bytes: {}", bytes.size(), bytes.toStringView());
-            if (bytes.toStringView() == TEST_CONTENT) {
+            size_t bytes = result.value();
+            std::string_view payload(buffer, bytes);
+            LogInfo("[io_uring] Read {} bytes: {}", bytes, payload);
+            if (payload == TEST_CONTENT) {
                 LogInfo("[io_uring] Test 1 PASSED: Content matches");
                 g_passed++;
             } else {
@@ -401,7 +404,7 @@ Coroutine testIOUringFileIO(std::atomic<bool>* done) {
             auto readResult = co_await file.read(buffer, sizeof(buffer) - 1, 0);
             if (readResult) {
                 std::string_view written(writeContent);
-                std::string_view readBack = readResult.value().toStringView();
+                std::string_view readBack(buffer, readResult.value());
                 if (readBack.substr(0, written.size()) == written) {
                     LogInfo("[io_uring] Test 2 PASSED: Write and read back successful");
                     g_passed++;

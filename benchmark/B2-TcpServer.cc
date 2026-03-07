@@ -18,6 +18,30 @@
 using namespace galay::async;
 using namespace galay::kernel;
 
+namespace {
+
+constexpr const char* benchmarkBackend() {
+#if defined(USE_KQUEUE)
+    return "kqueue";
+#elif defined(USE_IOURING)
+    return "io_uring";
+#elif defined(USE_EPOLL)
+    return "epoll";
+#else
+    return "unknown";
+#endif
+}
+
+constexpr const char* benchmarkBuildMode() {
+#ifdef NDEBUG
+    return "release-like";
+#else
+    return "debug-like";
+#endif
+}
+
+}  // namespace
+
 std::atomic<uint64_t> g_total_connections{0};
 std::atomic<uint64_t> g_total_bytes{0};
 std::atomic<uint64_t> g_total_requests{0};
@@ -40,16 +64,16 @@ Coroutine handleClient(GHandle clientHandle) {
             break;
         }
 
-        auto& bytes = recvResult.value();
-        if (bytes.size() == 0) {
+        size_t bytes = recvResult.value();
+        if (bytes == 0) {
             break;
         }
 
-        g_total_bytes.fetch_add(bytes.size(), std::memory_order_relaxed);
+        g_total_bytes.fetch_add(bytes, std::memory_order_relaxed);
         g_total_requests.fetch_add(1, std::memory_order_relaxed);
 
         // Echo back
-        auto sendResult = co_await client.send(bytes.c_str(), bytes.size());
+        auto sendResult = co_await client.send(buffer, bytes);
         if (!sendResult) {
             break;
         }
@@ -118,6 +142,9 @@ int main(int argc, char* argv[]) {
     }
 
     LogInfo("Benchmark Server starting on port {}", port);
+    LogInfo("meta: backend={}, build={}, role=server, io_mode=plain, scenario=tcp-echo",
+            benchmarkBackend(),
+            benchmarkBuildMode());
 
 #if defined(USE_KQUEUE)
     LogInfo("Using KqueueScheduler (macOS)");

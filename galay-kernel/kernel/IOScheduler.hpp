@@ -8,6 +8,7 @@
 #include "Awaitable.h"
 #include "galay-kernel/common/TimerManager.hpp"
 #include <algorithm>
+#include <atomic>
 #include <deque>
 #include <optional>
 #include <concurrentqueue/moodycamel/concurrentqueue.h>
@@ -29,25 +30,33 @@ struct IOSchedulerWorkerState {
         inject_buffer.resize(std::max<size_t>(1, inject_batch_size));
     }
 
-    void scheduleLocal(Coroutine co) {
-        if (!co.isValid()) {
+    void scheduleLocal(TaskRef task) {
+        if (!task.isValid()) {
             return;
         }
         if (lifo_enabled) {
             if (lifo_slot.has_value()) {
                 local_queue.push_back(std::move(*lifo_slot));
             }
-            lifo_slot = std::move(co);
+            lifo_slot = std::move(task);
             return;
         }
-        local_queue.push_back(std::move(co));
+        local_queue.push_back(std::move(task));
     }
 
-    void scheduleInjected(Coroutine co) {
-        if (!co.isValid()) {
+    void scheduleLocalDeferred(TaskRef task) {
+        if (!task.isValid()) {
             return;
         }
-        inject_queue.enqueue(std::move(co));
+        local_queue.push_back(std::move(task));
+    }
+
+    void scheduleInjected(TaskRef task) {
+        if (!task.isValid()) {
+            return;
+        }
+        inject_queue.enqueue(std::move(task));
+        ++injected_total;
     }
 
     size_t drainInjected(size_t max_batch = 0) {
@@ -60,8 +69,13 @@ struct IOSchedulerWorkerState {
         for (size_t i = 0; i < count; ++i) {
             local_queue.push_back(std::move(inject_buffer[i]));
         }
+        injected_drained += count;
         polls_since_inject = 0;
         return count;
+    }
+
+    bool hasPendingInjected() const {
+        return injected_drained < injected_total.load(std::memory_order_acquire);
     }
 
     bool shouldCheckInjected() const {
@@ -81,7 +95,7 @@ struct IOSchedulerWorkerState {
         }
     }
 
-    bool popNext(Coroutine& out) {
+    bool popNext(TaskRef& out) {
         prepareForRun();
 
         if (lifo_slot.has_value()) {
@@ -104,10 +118,12 @@ struct IOSchedulerWorkerState {
         return false;
     }
 
-    std::optional<Coroutine> lifo_slot;
-    std::deque<Coroutine> local_queue;
-    moodycamel::ConcurrentQueue<Coroutine> inject_queue;
-    std::vector<Coroutine> inject_buffer;
+    std::optional<TaskRef> lifo_slot;
+    std::deque<TaskRef> local_queue;
+    moodycamel::ConcurrentQueue<TaskRef> inject_queue;
+    std::vector<TaskRef> inject_buffer;
+    std::atomic<uint64_t> injected_total{0};
+    uint64_t injected_drained = 0;
     uint32_t consecutive_lifo_polls = 0;
     uint32_t lifo_poll_limit = 8;
     uint32_t polls_since_inject = 0;
@@ -181,6 +197,13 @@ template<>
 inline auto IOController::getAwaitable() -> CustomAwaitable* {
     return static_cast<CustomAwaitable*>(m_awaitable[READ]);
 };
+
+template<typename Awaitable>
+inline void completeAwaitableAndWake(IOController* controller, Awaitable* awaitable) {
+    if (awaitable && awaitable->handleComplete(controller->m_handle)) {
+        awaitable->m_waker.wakeUp();
+    }
+}
 
 /**
  * @brief IO调度器接口

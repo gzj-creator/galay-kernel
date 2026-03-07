@@ -69,7 +69,7 @@ bool RecvAwaitable::await_suspend(std::coroutine_handle<> handle) {
     return suspendRegisteredAwaitable<RecvAwaitable, RECV, kRecvFailed, &IOScheduler::addRecv>(*this, handle);
 }
 
-std::expected<Bytes, IOError> RecvAwaitable::await_resume() {
+std::expected<size_t, IOError> RecvAwaitable::await_resume() {
     return detail::resumeIOAwaitable<RECV>(*this);
 }
 
@@ -130,7 +130,7 @@ bool FileReadAwaitable::await_suspend(std::coroutine_handle<> handle) {
     return suspendRegisteredAwaitable<FileReadAwaitable, FILEREAD, kReadFailed, &IOScheduler::addFileRead>(*this, handle);
 }
 
-std::expected<Bytes, IOError> FileReadAwaitable::await_resume() {
+std::expected<size_t, IOError> FileReadAwaitable::await_resume() {
     return detail::resumeIOAwaitable<FILEREAD>(*this);
 }
 
@@ -146,7 +146,7 @@ bool RecvFromAwaitable::await_suspend(std::coroutine_handle<> handle) {
     return suspendRegisteredAwaitable<RecvFromAwaitable, RECVFROM, kRecvFailed, &IOScheduler::addRecvFrom>(*this, handle);
 }
 
-std::expected<Bytes, IOError> RecvFromAwaitable::await_resume() {
+std::expected<size_t, IOError> RecvFromAwaitable::await_resume() {
     return detail::resumeIOAwaitable<RECVFROM>(*this);
 }
 

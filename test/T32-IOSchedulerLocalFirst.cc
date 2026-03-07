@@ -6,12 +6,16 @@
 #include "galay-kernel/kernel/KqueueScheduler.h"
 using IOSchedulerType = galay::kernel::KqueueScheduler;
 static constexpr const char* kSchedulerName = "kqueue";
+#elif defined(USE_IOURING)
+#include "galay-kernel/kernel/IOUringScheduler.h"
+using IOSchedulerType = galay::kernel::IOUringScheduler;
+static constexpr const char* kSchedulerName = "io_uring";
 #elif defined(USE_EPOLL)
 #include "galay-kernel/kernel/EpollScheduler.h"
 using IOSchedulerType = galay::kernel::EpollScheduler;
 static constexpr const char* kSchedulerName = "epoll";
 #else
-#error "T32-IOSchedulerLocalFirst requires kqueue or epoll"
+#error "T32-IOSchedulerLocalFirst requires kqueue, epoll, or io_uring"
 #endif
 
 #include <array>

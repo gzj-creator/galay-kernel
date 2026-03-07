@@ -32,7 +32,7 @@ void Waker::wakeUp()
     }
 
     if (!state->m_queued.exchange(true, std::memory_order_acq_rel)) {
-        state->m_scheduler->spawn(Coroutine(m_task));
+        state->m_scheduler->schedule(m_task);
     }
 }
 

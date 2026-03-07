@@ -6,6 +6,7 @@ import galay.kernel;
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <thread>
 
 using namespace galay::async;
@@ -65,7 +66,7 @@ Coroutine tinyServer() {
 
     char buffer[256];
     auto recvResult = co_await client.recv(buffer, sizeof(buffer));
-    if (recvResult && recvResult.value().size() > 0) {
+    if (recvResult && recvResult.value() > 0) {
         constexpr const char* kResponse = "pong from import server";
         auto sendResult = co_await client.send(kResponse, std::char_traits<char>::length(kResponse));
         if (!sendResult) {
@@ -106,8 +107,8 @@ Coroutine tcpClient() {
 
     char buffer[256];
     auto recvResult = co_await socket.recv(buffer, sizeof(buffer));
-    if (recvResult && recvResult.value().size() > 0) {
-        std::cout << "tcp client received: " << recvResult.value().toStringView() << "\n";
+    if (recvResult && recvResult.value() > 0) {
+        std::cout << "tcp client received: " << std::string_view(buffer, recvResult.value()) << "\n";
     }
 
     co_await socket.close();

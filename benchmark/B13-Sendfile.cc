@@ -185,8 +185,8 @@ Coroutine benchmarkClient(size_t file_size) {
 
     while (total_received < file_size) {
         auto result = co_await socket.recv(buffer, sizeof(buffer));
-        if (!result || result.value().size() == 0) break;
-        total_received += result.value().size();
+        if (!result || result.value() == 0) break;
+        total_received += result.value();
     }
 
     g_bytes_received = total_received;

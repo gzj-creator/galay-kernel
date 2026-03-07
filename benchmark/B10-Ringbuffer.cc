@@ -6,10 +6,11 @@
  * 1. 写入吞吐量：连续写入数据的速度
  * 2. 读写吞吐量：写入后立即消费的速度
  * 3. 环绕性能：频繁环绕时的性能
- * 4. iovec 获取性能：getWriteIovecs/getReadIovecs 的开销
+ * 4. borrowed iovec 获取性能：getWriteIovecs(out)/getReadIovecs(out) 的开销
  */
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -72,15 +73,17 @@ void benchReadWriteThroughput(size_t chunkSize) {
 
     size_t totalProcessed = 0;
     auto start = steady_clock::now();
+    std::array<struct iovec, 2> iovecs{};
 
     while (totalProcessed < TOTAL_DATA_SIZE) {
         // 写入
         size_t written = buffer.write(writeData.data(), chunkSize);
 
         // 通过 iovec 读取
-        auto iovecs = buffer.getReadIovecs();
+        size_t iovecCount = buffer.getReadIovecs(iovecs);
         size_t bytesRead = 0;
-        for (const auto& iov : iovecs) {
+        for (size_t i = 0; i < iovecCount; ++i) {
+            const auto& iov = iovecs[i];
             size_t toRead = std::min(iov.iov_len, chunkSize - bytesRead);
             std::memcpy(readData.data() + bytesRead, iov.iov_base, toRead);
             bytesRead += toRead;
@@ -111,6 +114,7 @@ void benchWrapAroundPerformance() {
     size_t targetData = 100 * 1024 * 1024;  // 100MB
 
     auto start = steady_clock::now();
+    std::array<struct iovec, 2> iovecs{};
 
     while (totalWritten < targetData) {
         // 写入数据
@@ -122,8 +126,7 @@ void benchWrapAroundPerformance() {
         buffer.consume(toConsume);
 
         // 检测环绕
-        auto iovecs = buffer.getReadIovecs();
-        if (iovecs.size() == 2) {
+        if (buffer.getReadIovecs(iovecs) == 2) {
             wrapCount++;
         }
     }
@@ -146,12 +149,14 @@ void benchIovecPerformance() {
     buffer.write(data.data(), data.size());
 
     constexpr size_t iterations = 10000000;
+    std::array<struct iovec, 2> writeIovecs{};
+    std::array<struct iovec, 2> readIovecs{};
+    volatile size_t sink = 0;
 
     // 测试 getWriteIovecs
     auto start1 = steady_clock::now();
     for (size_t i = 0; i < iterations; i++) {
-        auto iovecs = buffer.getWriteIovecs();
-        (void)iovecs;  // 防止优化
+        sink += buffer.getWriteIovecs(writeIovecs);
     }
     auto end1 = steady_clock::now();
     double duration1 = duration_cast<nanoseconds>(end1 - start1).count() / (double)iterations;
@@ -159,11 +164,11 @@ void benchIovecPerformance() {
     // 测试 getReadIovecs
     auto start2 = steady_clock::now();
     for (size_t i = 0; i < iterations; i++) {
-        auto iovecs = buffer.getReadIovecs();
-        (void)iovecs;
+        sink += buffer.getReadIovecs(readIovecs);
     }
     auto end2 = steady_clock::now();
     double duration2 = duration_cast<nanoseconds>(end2 - start2).count() / (double)iterations;
+    (void)sink;
 
     LogInfo("getWriteIovecs: {:.2f} ns/call ({:.2f} M calls/s)",
             duration1, 1000.0 / duration1);
@@ -201,11 +206,12 @@ void benchNetworkReceiveSimulation() {
     size_t targetData = 500 * 1024 * 1024;  // 500MB
 
     auto start = steady_clock::now();
+    std::array<struct iovec, 2> writeIovecs{};
 
     while (totalReceived < targetData) {
         // 模拟 readv: 获取可写 iovec
-        auto writeIovecs = buffer.getWriteIovecs();
-        if (writeIovecs.empty()) {
+        size_t writeCount = buffer.getWriteIovecs(writeIovecs);
+        if (writeCount == 0) {
             // 缓冲区满，消费数据
             buffer.consume(buffer.readable());
             continue;
@@ -213,7 +219,8 @@ void benchNetworkReceiveSimulation() {
 
         // 模拟数据到达：直接拷贝到 iovec
         size_t bytesReceived = 0;
-        for (auto& iov : writeIovecs) {
+        for (size_t i = 0; i < writeCount; ++i) {
+            auto& iov = writeIovecs[i];
             size_t toWrite = std::min(iov.iov_len, networkData.size() - bytesReceived);
             std::memcpy(iov.iov_base, networkData.data() + bytesReceived, toWrite);
             bytesReceived += toWrite;
@@ -245,6 +252,7 @@ void benchNetworkSendSimulation() {
     size_t targetData = 500 * 1024 * 1024;  // 500MB
 
     auto start = steady_clock::now();
+    std::array<struct iovec, 2> readIovecs{};
 
     while (totalSent < targetData) {
         // 应用层写入数据
@@ -253,12 +261,13 @@ void benchNetworkSendSimulation() {
         }
 
         // 模拟 writev: 获取可读 iovec
-        auto readIovecs = buffer.getReadIovecs();
-        if (readIovecs.empty()) continue;
+        size_t readCount = buffer.getReadIovecs(readIovecs);
+        if (readCount == 0) continue;
 
         // 模拟发送：从 iovec 拷贝到网络缓冲区
         size_t bytesSent = 0;
-        for (const auto& iov : readIovecs) {
+        for (size_t i = 0; i < readCount; ++i) {
+            const auto& iov = readIovecs[i];
             size_t toSend = std::min(iov.iov_len, networkBuffer.size() - bytesSent);
             std::memcpy(networkBuffer.data() + bytesSent, iov.iov_base, toSend);
             bytesSent += toSend;

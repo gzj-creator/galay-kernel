@@ -1,6 +1,7 @@
 #include <cstring>
 #include <chrono>
 #include <atomic>
+#include <string_view>
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/TimerScheduler.h"
@@ -142,8 +143,9 @@ Coroutine testNoTimeout() {
     auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
 
     if (recvResult) {
+        std::string_view payload(buffer, recvResult.value());
         LogInfo("[Test 2] PASSED: Recv completed in {}ms with data: {}",
-                elapsedMs, recvResult.value().toStringView());
+                elapsedMs, payload);
         g_passedCount++;
         g_resultWriter->addPassed();
     } else {

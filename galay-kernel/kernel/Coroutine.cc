@@ -84,7 +84,7 @@ Coroutine PromiseType::get_return_object() noexcept
 std::suspend_always PromiseType::yield_value(ReSchedulerType flag) noexcept
 {
     if(flag) {
-        m_coroutine.m_task.belongScheduler()->spawnDeferred(m_coroutine);
+        m_coroutine.m_task.belongScheduler()->scheduleDeferred(m_coroutine.taskRef());
     }
     return {};
 }
@@ -167,7 +167,7 @@ void Coroutine::resume()
     auto* state = m_task.state();
     if (state && state->m_handle && state->m_scheduler) {
         if (!state->m_queued.exchange(true, std::memory_order_acq_rel)) {
-            state->m_scheduler->spawn(*this);
+            state->m_scheduler->schedule(m_task);
         }
     }
 }

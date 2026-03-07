@@ -19,6 +19,30 @@
 using namespace galay::async;
 using namespace galay::kernel;
 
+namespace {
+
+constexpr const char* benchmarkBackend() {
+#if defined(USE_KQUEUE)
+    return "kqueue";
+#elif defined(USE_IOURING)
+    return "io_uring";
+#elif defined(USE_EPOLL)
+    return "epoll";
+#else
+    return "unknown";
+#endif
+}
+
+constexpr const char* benchmarkBuildMode() {
+#ifdef NDEBUG
+    return "release-like";
+#else
+    return "debug-like";
+#endif
+}
+
+}  // namespace
+
 std::atomic<uint64_t> g_total_requests{0};
 std::atomic<uint64_t> g_total_bytes{0};
 std::atomic<uint64_t> g_success_count{0};
@@ -64,13 +88,13 @@ Coroutine benchClient(const BenchConfig& config, [[maybe_unused]] int clientId) 
             break;
         }
 
-        auto& bytes = recvResult.value();
-        if (bytes.size() == 0) {
+        size_t bytes = recvResult.value();
+        if (bytes == 0) {
             break;
         }
 
         g_total_requests.fetch_add(1, std::memory_order_relaxed);
-        g_total_bytes.fetch_add(bytes.size() + message.size(), std::memory_order_relaxed);
+        g_total_bytes.fetch_add(bytes + message.size(), std::memory_order_relaxed);
         g_success_count.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -157,6 +181,11 @@ int main(int argc, char* argv[]) {
     std::cout << "Connections: " << config.connections << std::endl;
     std::cout << "Message Size: " << config.messageSize << " bytes" << std::endl;
     std::cout << "Duration: " << config.duration << " seconds" << std::endl;
+    std::cout << "Meta: backend=" << benchmarkBackend()
+              << " | build=" << benchmarkBuildMode()
+              << " | role=client"
+              << " | io_mode=plain"
+              << " | scenario=tcp-echo" << std::endl;
     std::cout << "========================" << std::endl;
 
 #if defined(USE_KQUEUE)

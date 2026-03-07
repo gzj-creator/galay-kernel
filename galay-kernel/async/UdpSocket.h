@@ -166,10 +166,11 @@ public:
      * @param buffer 接收缓冲区指针
      * @param length 缓冲区大小
      * @param from 输出参数，接收发送方地址信息，可为nullptr
-     * @return RecvFromAwaitable 可等待对象，co_await后返回接收到的Bytes
+     * @return RecvFromAwaitable 可等待对象，co_await后返回接收到的字节数
      *
      * @note
      * - UDP是数据报协议，每次接收一个完整的数据报
+     * - 返回值为0表示收到合法的空数据报，不表示连接关闭
      * - 如果数据报大于缓冲区，超出部分会被丢弃
      * - 缓冲区生命周期必须持续到co_await完成
      *
@@ -178,7 +179,7 @@ public:
      * Host from;
      * auto result = co_await socket.recvfrom(buffer, sizeof(buffer), &from);
      * if (result) {
-     *     auto& bytes = result.value();
+     *     size_t bytes = result.value();
      *     // 处理数据，from包含发送方地址
      * }
      * @endcode

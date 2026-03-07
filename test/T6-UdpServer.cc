@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <string_view>
 #include "galay-kernel/async/UdpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/StdoutLog.h"
@@ -85,11 +86,11 @@ Coroutine udpEchoServer() {
             break;
         }
 
-        auto& bytes = recvResult.value();
-        LogInfo("Received from {}:{}: {}", from.ip(), from.port(), bytes.toStringView());
+        size_t bytes = recvResult.value();
+        LogInfo("Received from {}:{}: {}", from.ip(), from.port(), std::string_view(buffer, bytes));
 
         // Echo回发送方
-        auto sendResult = co_await socket.sendto(bytes.c_str(), bytes.size(), from);
+        auto sendResult = co_await socket.sendto(buffer, bytes, from);
         if (!sendResult) {
             LogError("Sendto error: {}", sendResult.error().message());
             g_failed++;

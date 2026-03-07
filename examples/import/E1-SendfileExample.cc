@@ -118,10 +118,10 @@ Coroutine sendfileClient() {
     size_t total = 0;
     while (total < kFileSize) {
         auto recv = co_await socket.recv(buffer, sizeof(buffer));
-        if (!recv || recv.value().size() == 0) {
+        if (!recv || recv.value() == 0) {
             break;
         }
-        total += recv.value().size();
+        total += recv.value();
     }
 
     g_received.store(total, std::memory_order_release);

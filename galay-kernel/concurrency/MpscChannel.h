@@ -39,14 +39,17 @@ public:
     static_assert(MpscValue<T>, "MpscRecvAwaitable requires movable and default initializable T");
     explicit MpscRecvAwaitable(MpscChannel<T>* channel) : m_channel(channel) {}
 
-    bool await_ready() const noexcept;
+    bool await_ready() noexcept;
     bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
     std::expected<T, IOError> await_resume() noexcept;
 
 private:
     friend struct WithTimeout<MpscRecvAwaitable<T>>;
+    bool tryReceiveNow() noexcept;
+
     MpscChannel<T>* m_channel;
-    std::expected<T, IOError> m_result;
+    std::optional<T> m_readyValue;
+    void* m_waiterAddress = nullptr;
 };
 
 /**
@@ -60,15 +63,18 @@ public:
     explicit MpscRecvBatchAwaitable(MpscChannel<T>* channel, size_t max_count)
         : m_channel(channel), m_maxCount(max_count){}
 
-    bool await_ready() const noexcept;
+    bool await_ready() noexcept;
     bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
     std::expected<std::vector<T>, IOError> await_resume() noexcept;
 
 private:
     friend struct WithTimeout<MpscRecvBatchAwaitable<T>>;
+    bool tryReceiveNow() noexcept;
+
     MpscChannel<T>* m_channel;
     size_t m_maxCount;
-    std::expected<std::vector<T>, IOError> m_result;
+    std::optional<std::vector<T>> m_readyValues;
+    void* m_waiterAddress = nullptr;
 };
 
 /**
@@ -94,12 +100,13 @@ public:
      * @brief 发送单条数据（线程安全，支持跨调度器）,保证一定有对端在recv
      */
     bool send(T&& value) {
+        uint32_t prevSize = m_size.fetch_add(1, std::memory_order_acq_rel);
         if (!m_queue.enqueue(std::forward<T>(value))) {
+            m_size.fetch_sub(1, std::memory_order_acq_rel);
             return false;
         }
-        uint32_t prevSize = m_size.fetch_add(1, std::memory_order_acq_rel);
-        if (prevSize == 0 ) {
-            m_waker.wakeUp();
+        if (prevSize == 0 || hasWaiter()) {
+            wakePublishedWaiter();
         }
         return true;
     }
@@ -114,27 +121,28 @@ public:
      */
     bool sendBatch(const std::vector<T>& values) requires std::copy_constructible<T> {
         if (values.empty()) return true;
+        uint32_t count = static_cast<uint32_t>(values.size());
+        uint32_t prevSize = m_size.fetch_add(count, std::memory_order_acq_rel);
         if (!m_queue.enqueue_bulk(values.data(), values.size())) {
+            m_size.fetch_sub(count, std::memory_order_acq_rel);
             return false;
         }
-        uint32_t prevSize = m_size.fetch_add(static_cast<uint32_t>(values.size()),
-                                              std::memory_order_acq_rel);
-        if (prevSize == 0) {
-            m_waker.wakeUp();
+        if (prevSize == 0 || hasWaiter()) {
+            wakePublishedWaiter();
         }
         return true;
     }
 
     bool sendBatch(std::vector<T>&& values) {
         if (values.empty()) return true;
-        size_t count = values.size();
+        uint32_t count = static_cast<uint32_t>(values.size());
+        uint32_t prevSize = m_size.fetch_add(count, std::memory_order_acq_rel);
         if (!m_queue.enqueue_bulk(std::make_move_iterator(values.begin()), count)) {
+            m_size.fetch_sub(count, std::memory_order_acq_rel);
             return false;
         }
-        uint32_t prevSize = m_size.fetch_add(static_cast<uint32_t>(count),
-                                              std::memory_order_acq_rel);
-        if (prevSize == 0) {
-            m_waker.wakeUp();
+        if (prevSize == 0 || hasWaiter()) {
+            wakePublishedWaiter();
         }
         return true;
     }
@@ -148,6 +156,9 @@ public:
     }
 
     std::optional<T> tryRecv() {
+        if (m_size.load(std::memory_order_acquire) == 0) {
+            return std::nullopt;
+        }
         T value;
         if (m_queue.try_dequeue(value)) {
             m_size.fetch_sub(1, std::memory_order_acq_rel);
@@ -157,17 +168,15 @@ public:
     }
 
     std::optional<std::vector<T>> tryRecvBatch(size_t maxCount = DEFAULT_BATCH_SIZE) {
+        if (m_size.load(std::memory_order_acquire) == 0) {
+            return std::nullopt;
+        }
         std::vector<T> values(maxCount);
         size_t count = m_queue.try_dequeue_bulk(values.data(), maxCount);
         if (count == 0) {
             return std::nullopt;
         }
-        uint32_t current = m_size.load(std::memory_order_acquire);
-        if (count >= current) {
-            m_size.store(0, std::memory_order_release);
-        } else {
-            m_size.fetch_sub(static_cast<uint32_t>(count), std::memory_order_acq_rel);
-        }
+        m_size.fetch_sub(static_cast<uint32_t>(count), std::memory_order_acq_rel);
         values.resize(count);
         return values;
     }
@@ -186,10 +195,35 @@ private:
     template <typename U>
     friend class MpscRecvBatchAwaitable;
 
+    using WaiterHandle = std::coroutine_handle<Coroutine::promise_type>;
+
+    bool hasWaiter() const noexcept {
+        return m_waiter.load(std::memory_order_acquire) != nullptr;
+    }
+
+    void publishWaiter(void* waiterAddress) noexcept {
+        m_waiter.store(waiterAddress, std::memory_order_release);
+    }
+
+    bool clearWaiter(void* waiterAddress) noexcept {
+        return m_waiter.compare_exchange_strong(waiterAddress,
+                                                nullptr,
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_acquire);
+    }
+
+    void wakePublishedWaiter() noexcept {
+        void* waiterAddress = m_waiter.exchange(nullptr, std::memory_order_acq_rel);
+        if (!waiterAddress) {
+            return;
+        }
+        Waker(WaiterHandle::from_address(waiterAddress)).wakeUp();
+    }
+
 
     alignas(64) std::atomic<uint32_t> m_size{0};
+    std::atomic<void*> m_waiter{nullptr};
     moodycamel::ConcurrentQueue<T> m_queue;
-    Waker m_waker;
 };
 
 // ============================================================================
@@ -197,32 +231,59 @@ private:
 // ============================================================================
 
 template <typename T>
-inline bool MpscRecvAwaitable<T>::await_ready() const noexcept {
-    return m_channel->m_size.load(std::memory_order_acquire) > 0;
+inline bool MpscRecvAwaitable<T>::tryReceiveNow() noexcept {
+    if (m_readyValue.has_value()) {
+        return true;
+    }
+    if (auto value = m_channel->tryRecv(); value.has_value()) {
+        m_readyValue = std::move(*value);
+        return true;
+    }
+    return false;
+}
+
+template <typename T>
+inline bool MpscRecvAwaitable<T>::await_ready() noexcept {
+    return tryReceiveNow();
 }
 
 template <typename T>
 inline bool MpscRecvAwaitable<T>::await_suspend(
     std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
-    // 设置 waker
-    m_channel->m_waker = Waker(handle);
-
-    // 再次检查队列状态，防止竞态条件
-    // 如果在设置 waker 之前已经有数据入队，需要立即返回
-    if (m_channel->m_size.load(std::memory_order_acquire) > 0) {
-        return false;  // 不挂起，直接返回
+    if (tryReceiveNow()) {
+        return false;
     }
 
-    return true;  // 挂起
+    m_waiterAddress = handle.address();
+    m_channel->publishWaiter(m_waiterAddress);
+
+    if (!tryReceiveNow()) {
+        return true;
+    }
+
+    if (m_channel->clearWaiter(m_waiterAddress)) {
+        return false;
+    }
+
+    return true;
 }
 
 template <typename T>
 inline std::expected<T, IOError> MpscRecvAwaitable<T>::await_resume() noexcept {
-    T value;
-    if (m_channel->m_queue.try_dequeue(value)) {
-        m_channel->m_size.fetch_sub(1, std::memory_order_acq_rel);
-        return value;
+    if (m_waiterAddress != nullptr) {
+        void* waiterAddress = m_waiterAddress;
+        m_channel->clearWaiter(waiterAddress);
+        m_waiterAddress = nullptr;
     }
+
+    if (m_readyValue.has_value()) {
+        return std::move(*m_readyValue);
+    }
+
+    if (auto value = m_channel->tryRecv(); value.has_value()) {
+        return std::move(*value);
+    }
+
     return std::unexpected(IOError(kTimeout, 0));
 }
 
@@ -231,43 +292,59 @@ inline std::expected<T, IOError> MpscRecvAwaitable<T>::await_resume() noexcept {
 // ============================================================================
 
 template <typename T>
-inline bool MpscRecvBatchAwaitable<T>::await_ready() const noexcept {
-    return m_channel->m_size.load(std::memory_order_acquire) > 0;
+inline bool MpscRecvBatchAwaitable<T>::tryReceiveNow() noexcept {
+    if (m_readyValues.has_value()) {
+        return true;
+    }
+    if (auto values = m_channel->tryRecvBatch(m_maxCount); values.has_value()) {
+        m_readyValues = std::move(*values);
+        return true;
+    }
+    return false;
+}
+
+template <typename T>
+inline bool MpscRecvBatchAwaitable<T>::await_ready() noexcept {
+    return tryReceiveNow();
 }
 
 template <typename T>
 inline bool MpscRecvBatchAwaitable<T>::await_suspend(
     std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
-    // 设置 waker
-    m_channel->m_waker = Waker(handle);
-
-    // 再次检查队列状态，防止竞态条件
-    // 如果在设置 waker 之前已经有数据入队，需要立即返回
-    if (m_channel->m_size.load(std::memory_order_acquire) > 0) {
-        return false;  // 不挂起，直接返回
+    if (tryReceiveNow()) {
+        return false;
     }
 
-    return true;  // 挂起
+    m_waiterAddress = handle.address();
+    m_channel->publishWaiter(m_waiterAddress);
+
+    if (!tryReceiveNow()) {
+        return true;
+    }
+
+    if (m_channel->clearWaiter(m_waiterAddress)) {
+        return false;
+    }
+
+    return true;
 }
 
 template <typename T>
 inline std::expected<std::vector<T>, IOError> MpscRecvBatchAwaitable<T>::await_resume() noexcept {
-    std::vector<T> values(m_maxCount);
-    size_t count = m_channel->m_queue.try_dequeue_bulk(values.data(), m_maxCount);
-
-    if (count == 0) {
-        return std::unexpected(IOError(kTimeout, 0));
+    if (m_waiterAddress != nullptr) {
+        void* waiterAddress = m_waiterAddress;
+        m_channel->clearWaiter(waiterAddress);
+        m_waiterAddress = nullptr;
     }
 
-    uint32_t current = m_channel->m_size.load(std::memory_order_acquire);
-    if (count >= current) {
-        m_channel->m_size.store(0, std::memory_order_release);
-    } else {
-        m_channel->m_size.fetch_sub(static_cast<uint32_t>(count), std::memory_order_acq_rel);
+    if (m_readyValues.has_value()) {
+        return std::move(*m_readyValues);
     }
 
-    values.resize(count);
-    return values;
+    if (auto values = m_channel->tryRecvBatch(m_maxCount); values.has_value()) {
+        return std::move(*values);
+    }
+    return std::unexpected(IOError(kTimeout, 0));
 }
 
 } // namespace galay::kernel

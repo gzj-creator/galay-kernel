@@ -300,14 +300,14 @@ Coroutine sendfileClient() {
             break;
         }
 
-        auto& bytes = result.value();
-        if (bytes.size() == 0) {
+        size_t bytes = result.value();
+        if (bytes == 0) {
             LogError("Connection closed by server");
             break;
         }
 
-        ofs.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-        total_received += bytes.size();
+        ofs.write(buffer, bytes);
+        total_received += bytes;
 
         if (total_received % (1024 * 1024) == 0 || total_received == file_size) {
             LogDebug("Received {}/{} bytes", total_received, file_size);

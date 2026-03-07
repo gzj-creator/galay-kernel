@@ -11,6 +11,7 @@
 #include "galay-kernel/common/Host.hpp"
 #include "test/StdoutLog.h"
 #include "test_result_writer.h"
+#include <string_view>
 
 #ifdef USE_IOURING
 #include "galay-kernel/kernel/IOUringScheduler.h"
@@ -113,7 +114,7 @@ Coroutine testServer([[maybe_unused]] IOScheduler* scheduler, int listen_fd, int
     if (total_calls >= reject_count + 1) {
         LogInfo("[Server] PASS: handleComplete was re-invoked after returning false");
         if (result) {
-            LogInfo("[Server] Received data: {}", std::string(reinterpret_cast<const char*>(result->data()), result->size()));
+            LogInfo("[Server] Received data: {}", std::string_view(buffer, result.value()));
         }
         g_passed++;
     } else {

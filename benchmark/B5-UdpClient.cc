@@ -83,9 +83,14 @@ Coroutine udpBenchmarkClient(int client_id) {
         }
 
         // 批量接收
+        // UDP 存在丢包，使用超时避免单个丢包导致客户端协程永久阻塞。
         for (int i = 0; i < PIPELINE_SIZE; ++i) {
+            if (!g_running.load(std::memory_order_relaxed)) {
+                break;
+            }
             Host from;
-            auto recvResult = co_await socket.recvfrom(recv_buffer, sizeof(recv_buffer), &from);
+            auto recvResult = co_await socket.recvfrom(recv_buffer, sizeof(recv_buffer), &from)
+                                    .timeout(std::chrono::milliseconds(50));
             if (recvResult) {
                 local_received++;
             }
