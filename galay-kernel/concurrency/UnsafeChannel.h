@@ -25,6 +25,11 @@ namespace galay::kernel
 template <typename T>
 concept UnsafeChannelValue = std::movable<T>;
 
+enum class UnsafeChannelWakeMode {
+    Inline,
+    Deferred,
+};
+
 template <typename T>
 class UnsafeChannel;
 
@@ -120,7 +125,10 @@ public:
     static_assert(UnsafeChannelValue<T>, "UnsafeChannel requires movable T");
     static constexpr size_t DEFAULT_BATCH_SIZE = 1024;
 
-    UnsafeChannel() = default;
+    explicit UnsafeChannel(UnsafeChannelWakeMode wake_mode = UnsafeChannelWakeMode::Inline)
+        : m_wake_mode(wake_mode)
+    {
+    }
 
     UnsafeChannel(const UnsafeChannel&) = delete;
     UnsafeChannel& operator=(const UnsafeChannel&) = delete;
@@ -263,9 +271,18 @@ private:
         if (m_hasWaiter) {
             m_hasWaiter = false;
             m_wakeThreshold = 1;
-            if (m_waiterHandle) {
-                // 同调度器内，直接恢复协程
-                m_waiterHandle.resume();
+            auto handle = m_waiterHandle;
+            m_waiterHandle = {};
+            if (handle) {
+                if (m_wake_mode == UnsafeChannelWakeMode::Deferred) {
+                    auto waiter = handle.promise().getCoroutine();
+                    if (waiter.belongScheduler()) {
+                        waiter.resume();
+                        return;
+                    }
+                }
+                // 默认保持内联恢复，避免影响现有通道语义
+                handle.resume();
             }
         }
     }
@@ -274,6 +291,7 @@ private:
     size_t m_size = 0;
     size_t m_wakeThreshold = 1;
     bool m_hasWaiter = false;
+    UnsafeChannelWakeMode m_wake_mode = UnsafeChannelWakeMode::Inline;
     std::coroutine_handle<Coroutine::promise_type> m_waiterHandle;
 };
 
