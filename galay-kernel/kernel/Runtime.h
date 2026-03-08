@@ -11,6 +11,8 @@
 namespace galay::kernel
 {
 
+#define GALAY_RUNTIME_SCHEDULER_COUNT_AUTO static_cast<size_t>(-1)
+
 // ─── Affinity config ────────────────────────────────────────────────────────
 
 struct RuntimeAffinityConfig {
@@ -24,8 +26,8 @@ struct RuntimeAffinityConfig {
 // ─── Runtime config ─────────────────────────────────────────────────────────
 
 struct RuntimeConfig {
-    size_t io_scheduler_count     = 0;  ///< 0 = auto (2*CPU)
-    size_t compute_scheduler_count = 0; ///< 0 = auto (CPU)
+    size_t io_scheduler_count     = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;  ///< auto = 2*CPU, 0 = disabled
+    size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO; ///< auto = CPU, 0 = disabled
     RuntimeAffinityConfig affinity;
 };
 

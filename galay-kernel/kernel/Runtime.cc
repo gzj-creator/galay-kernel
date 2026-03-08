@@ -104,8 +104,13 @@ size_t Runtime::getCPUCount()
 void Runtime::createDefaultSchedulers()
 {
     size_t cpu = getCPUCount();
-    size_t io  = m_config.io_scheduler_count      > 0 ? m_config.io_scheduler_count      : cpu * 2;
-    size_t cmp = m_config.compute_scheduler_count > 0 ? m_config.compute_scheduler_count : cpu;
+    const size_t io = m_config.io_scheduler_count == GALAY_RUNTIME_SCHEDULER_COUNT_AUTO
+        ? cpu * 2
+        : m_config.io_scheduler_count;
+    const size_t cmp = m_config.compute_scheduler_count == GALAY_RUNTIME_SCHEDULER_COUNT_AUTO
+        ? cpu
+        : m_config.compute_scheduler_count;
+
     for (size_t i = 0; i < io;  ++i) m_io_schedulers.push_back(std::make_unique<DefaultIOScheduler>());
     for (size_t i = 0; i < cmp; ++i) m_compute_schedulers.push_back(std::make_unique<ComputeScheduler>());
 }
