@@ -1,220 +1,706 @@
-# 01-API文档
+# 02-API参考
 
-`galay-kernel` 是一个基于 **C++23 协程** 的异步内核库，提供网络 IO、文件 IO、调度器、定时器和协程并发原语。
+本页只记录当前公开头文件、导出 target 与真实构建选项中存在的接口；更高层工作流见 `docs/03-使用指南.md`，真实示例清单见 `docs/04-示例代码.md`。
 
-## 推荐阅读顺序
+## 导出 target
 
-### 新手入门
-
-1. [快速开始](00-快速开始.md) - 依赖安装、编译、运行第一个示例
-2. [示例代码](17-示例代码.md) - 常见使用场景的完整示例
-3. [网络 IO](07-网络IO.md) - TCP/UDP 网络编程
-4. [协程与超时](06-协程.md) - 协程基础与超时机制
-
-### 核心概念
-
-5. [架构设计](16-架构设计.md) - 整体架构与设计原理
-6. [Runtime](13-运行时Runtime.md) - 多调度器统一管理
-7. [调度器](05-调度器.md) - IOScheduler 与 Scheduler 基类
-8. [计算调度器](03-计算调度器.md) - CPU 任务调度
-
-### 进阶使用
-
-9. [文件 IO](08-文件IO.md) - 异步文件读写
-10. [并发与通道](09-并发.md) - MpscChannel、UnsafeChannel
-11. [异步同步原语](15-异步同步原语.md) - AsyncMutex、AsyncWaiter
-12. [定时器调度器](10-定时器调度器.md) - 全局定时器与 sleep
-
-### 性能优化
-
-13. [高级主题](19-高级主题.md) - 性能优化、最佳实践、高级用法
-14. [性能测试](02-性能测试.md) - TCP/UDP 性能测试结果
-15. [零拷贝 sendfile](12-零拷贝发送文件.md) - sendfile 专项
-16. [RingBuffer](11-环形缓冲区.md) - 环形缓冲区实现
-
-### 故障排查
-
-17. [常见问题](18-常见问题.md) - FAQ 与故障排查
-18. [UDP 性能测试](04-UDP性能测试.md) - UDP 专项测试
-19. [文件监控](14-文件监控.md) - FileWatcher (inotify/kqueue)
-
-## 模块覆盖清单
-
-| 模块 | 说明 | 文档 |
-|---|---|---|
-| Scheduler | 调度器抽象基类 | [05-调度器.md](05-调度器.md) |
-| IOScheduler | 平台 IO 事件调度 | [05-调度器.md](05-调度器.md) |
-| ComputeScheduler | CPU 任务调度 | [03-计算调度器.md](03-计算调度器.md) |
-| Runtime | 多 IO/Compute 调度器管理 | [13-运行时Runtime.md](13-运行时Runtime.md) |
-| Coroutine / Timeout / Sleep | 协程生命周期与超时 | [06-协程.md](06-协程.md) |
-| TcpSocket / UdpSocket / Host | 网络编程 API | [07-网络IO.md](07-网络IO.md) |
-| AsyncFile / AioFile | 异步文件 IO | [08-文件IO.md](08-文件IO.md) |
-| FileWatcher | 文件监控（inotify / kqueue） | [14-文件监控.md](14-文件监控.md) |
-| MpscChannel / UnsafeChannel / Bytes | 协程并发与数据容器 | [09-并发.md](09-并发.md) |
-| AsyncMutex / AsyncWaiter | 异步同步原语 | [15-异步同步原语.md](15-异步同步原语.md) |
-| TimerScheduler | 全局线程安全定时器 | [10-定时器调度器.md](10-定时器调度器.md) |
-| RingBuffer | scatter-gather 缓冲区 | [11-环形缓冲区.md](11-环形缓冲区.md) |
-| Sendfile | 零拷贝文件发送 | [12-零拷贝发送文件.md](12-零拷贝发送文件.md) |
-
-## 快速开始
-
-### 构建
-
-```bash
-mkdir -p build
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . --parallel
-```
-
-### 最小 Echo 服务（Runtime + TcpSocket）
-
-```cpp
-#include "galay-kernel/kernel/Runtime.h"
-#include "galay-kernel/async/TcpSocket.h"
-
-using namespace galay::kernel;
-using namespace galay::async;
-
-Coroutine handleClient(GHandle handle) {
-    TcpSocket client(handle);
-    client.option().handleNonBlock();
-
-    char buffer[4096];
-    while (true) {
-        auto recvResult = co_await client.recv(buffer, sizeof(buffer));
-        if (!recvResult || recvResult.value() == 0) {
-            break;
-        }
-        if (auto __await_result = co_await client.send(buffer, recvResult.value()); !__await_result) {
-            // 错误处理：记录日志、重试或提前返回
-        }
-    }
-
-    co_await client.close();
-}
-
-Coroutine server(IOScheduler* scheduler) {
-    TcpSocket listener;
-    listener.option().handleReuseAddr();
-    listener.option().handleNonBlock();
-
-    auto bindResult = listener.bind(Host(IPType::IPV4, "0.0.0.0", 8080));
-    if (!bindResult) {
-        co_return;
-    }
-
-    auto listenResult = listener.listen(1024);
-    if (!listenResult) {
-        co_return;
-    }
-
-    while (true) {
-        Host peer;
-        auto acceptResult = co_await listener.accept(&peer);
-        if (!acceptResult) {
-            continue;
-        }
-        scheduler->spawn(handleClient(acceptResult.value()));
-    }
-}
-
-int main() {
-    Runtime runtime = RuntimeBuilder().build(); // 零配置：自动创建 IO/Compute 调度器
-    runtime.start();
-
-    auto* io = runtime.getNextIOScheduler();
-    io->spawn(server(io));
-
-    std::this_thread::sleep_for(std::chrono::hours(24));
-    runtime.stop();
-    return 0;
-}
-```
+- `galay-kernel`
+- `galay-kernel-modules`
+  - 仅在 `ENABLE_CPP23_MODULES=ON`
+  - 且 `GALAY_KERNEL_CPP23_MODULES_EFFECTIVE=TRUE`
+  - 安装后通过 `galay-kernel::galay-kernel`、`galay-kernel::galay-kernel-modules` 消费
 
 ## 构建选项
 
-```cmake
-option(BUILD_TESTS "Build test executables" ON)
-option(BUILD_BENCHMARKS "Build benchmark executables" ON)
-option(BUILD_EXAMPLES "Build example executables" ON)
-option(ENABLE_LOG "Enable logging with spdlog" ON)
-option(DISABLE_IOURING "Disable io_uring and use epoll on Linux" ON)
-option(ENABLE_CPP23_MODULES "Enable experimental C++23 named modules support" OFF)
-```
+- `BUILD_TESTS`
+- `BUILD_BENCHMARKS`
+- `BUILD_EXAMPLES`
+- `ENABLE_CPP23_MODULES`
+- `BUILD_SHARED_LIBS`
+- `DISABLE_IOURING`
 
-## 平台后端
+当前仓库没有 `ENABLE_LOG` 选项，也没有 `spdlog` 依赖链路。
 
-- macOS: `USE_KQUEUE`
-- Linux + `DISABLE_IOURING=ON`（默认）: `USE_EPOLL`
-- Linux + `DISABLE_IOURING=OFF` 且系统有 `liburing`: `USE_IOURING`
+## 安装包头文件边界
 
-## C++23 模块语法（实验性）
+- 稳定 direct-include 入口由包配置变量 `GALAY_KERNEL_SUPPORTED_HEADERS` 给出
+- 仅为内联 / 模板依赖而安装的内部头由 `GALAY_KERNEL_INTERNAL_HEADERS` 给出
+- `Awaitable.h`、`IOController.hpp`、`Timeout.hpp`、`Scheduler.hpp`、`IOScheduler.hpp` 当前属于内部依赖层；除非在做底层扩展或排障，不要把它们当业务入口头
+- 仓库内最小消费夹具位于 `test/package-consumer/`，安装后同样可通过 `GALAY_KERNEL_PACKAGE_CONSUMER_FIXTURE_DIR` 定位
 
-已提供模块门面 `galay.kernel`，支持 `import` / `export`。
+## 稳定公开头快速索引
 
-```bash
-cmake .. -DENABLE_CPP23_MODULES=ON
-cmake --build . --parallel
-```
+按模块归类的公开安装面：
 
-模块能力生效规则（参考 `galay-rpc`）：
+- Runtime / 调度：
+  - `galay-kernel/kernel/Runtime.h`
+  - `galay-kernel/kernel/ComputeScheduler.h`
+  - `galay-kernel/kernel/EpollScheduler.h`
+  - `galay-kernel/kernel/KqueueScheduler.h`
+  - `galay-kernel/kernel/IOUringScheduler.h`
+  - `galay-kernel/kernel/TimerScheduler.h`
+  - `galay-kernel/kernel/Coroutine.h`
+- 网络与文件：
+  - `galay-kernel/async/TcpSocket.h`
+  - `galay-kernel/async/UdpSocket.h`
+  - `galay-kernel/async/AsyncFile.h`
+  - `galay-kernel/async/AioFile.h`
+  - `galay-kernel/async/FileWatcher.h`
+- 通用辅助：
+  - `galay-kernel/common/HandleOption.h`
+  - `galay-kernel/common/Host.hpp`
+  - `galay-kernel/common/Sleep.hpp`
+  - `galay-kernel/common/Bytes.h`
+  - `galay-kernel/common/Buffer.h`
+  - `galay-kernel/common/Error.h`
+- 并发：
+  - `galay-kernel/concurrency/AsyncMutex.h`
+  - `galay-kernel/concurrency/AsyncWaiter.h`
+  - `galay-kernel/concurrency/MpscChannel.h`
+  - `galay-kernel/concurrency/UnsafeChannel.h`
+- 模块：
+  - `galay-kernel/module/ModulePrelude.hpp`
+  - `galay-kernel/module/galay.kernel.cppm`
 
-- CMake 版本需 `>= 3.28`
-- Generator 需支持模块依赖扫描（推荐 `Ninja` / `Visual Studio`）
-- 当前项目不支持 `AppleClang` 的模块构建路径
-- 仅当以上条件满足时，`ENABLE_CPP23_MODULES=ON` 才会实际生效（`GALAY_KERNEL_CPP23_MODULES_EFFECTIVE=ON`）
+## 命名空间与头文件范围
 
-```cpp
-import galay.kernel;
+- `galay::kernel`
+  - `Runtime` / `RuntimeBuilder` / `RuntimeConfig`
+  - `ComputeScheduler` / `IOScheduler`
+  - `Coroutine` / `spawn(...)` / `sleep(...)`
+  - `TimerScheduler`
+  - `HandleOption`
+  - `AsyncMutex` / `MpscChannel<T>` / `UnsafeChannel<T>` / `AsyncWaiter<T>`
+  - `FileWatchEvent` / `FileWatchResult`
+- `galay::async`
+  - `TcpSocket`
+  - `UdpSocket`
+  - `AsyncFile`
+  - `AioFile`
+  - `FileWatcher`
 
-int main() {
-    galay::kernel::Runtime runtime = galay::kernel::RuntimeBuilder().build();
-    return 0;
-}
-```
+## 模块门面 `galay.kernel`
 
-模块示例目标（启用 `ENABLE_CPP23_MODULES` 后可构建）：
+头文件 / 模块入口：
 
-- `E1-SendfileExampleImport`
-- `E2-TcpEchoServerImport`
-- `E3-TcpClientImport`
-- `E4-CoroutineBasicImport`
-- `E5-UdpEchoImport`
-- `E6-MpscChannelImport`
-- `E7-UnsafeChannelImport`
-- `E8-AsyncSyncImport`
-- `E9-TimerSleepImport`
+- `galay-kernel/module/ModulePrelude.hpp`
+- `galay-kernel/module/galay.kernel.cppm`
 
-示例目录结构（参考 `galay-mysql`）：
+模块生效条件：
 
-```text
-examples/
-├── common/   # 示例共享配置
-├── include/  # 传统头文件版本
-└── import/   # C++23 模块 import 版本
-```
+- `ENABLE_CPP23_MODULES=ON`
+- `GALAY_KERNEL_CPP23_MODULES_EFFECTIVE=TRUE`
+- 当前 AppleClang / 不支持模块的生成器下，源码文件会保留，但不会生成可消费的 import target
 
-include 示例目标（默认可构建）：
+`import galay.kernel;` 当前导出面：
 
-- `E1-SendfileExample` -> `examples/include/E1-SendfileExample.cc`
-- `E2-TcpEchoServer` -> `examples/include/E2-TcpEchoServer.cc`
-- `E3-TcpClient` -> `examples/include/E3-TcpClient.cc`
-- `E4-CoroutineBasic` -> `examples/include/E4-CoroutineBasic.cc`
-- `E5-UdpEcho` -> `examples/include/E5-UdpEcho.cc`
+- 通用类型：`Defn.hpp`、`Error.h`、`Host.hpp`、`HandleOption.h`、`Bytes.h`、`Buffer.h`、`Sleep.hpp`
+- Runtime：`Coroutine.h`、`Scheduler.hpp`、`IOScheduler.hpp`、`ComputeScheduler.h`、`Runtime.h`、`TimerScheduler.h`
+- 并发：`MpscChannel.h`、`UnsafeChannel.h`、`AsyncMutex.h`、`AsyncWaiter.h`
+- IO：`TcpSocket.h`、`UdpSocket.h`、`FileWatcher.h`
+- 平台裁剪：
+  - `AsyncFile.h` 仅在 `USE_KQUEUE` 或 `USE_IOURING`
+  - `AioFile.h` 仅在 `USE_EPOLL`
 
-示例构建命令：
+注意：
 
-```bash
-# include 示例（默认）
-cmake --build . --target E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-CoroutineBasic E5-UdpEcho --parallel
+- `galay.kernel` 是聚合导出入口，适合模块消费；direct-include 仍以 `GALAY_KERNEL_SUPPORTED_HEADERS` / `GALAY_KERNEL_INTERNAL_HEADERS` 为准
+- `Scheduler.hpp`、`IOScheduler.hpp` 会进入模块可见面，但当前仍不应把它们当成稳定的 direct-include 业务入口头
 
-# import 示例（需先 cmake .. -DENABLE_CPP23_MODULES=ON）
-cmake --build . --target E1-SendfileExampleImport E2-TcpEchoServerImport E3-TcpClientImport E4-CoroutineBasicImport E5-UdpEchoImport E6-MpscChannelImport E7-UnsafeChannelImport E8-AsyncSyncImport E9-TimerSleepImport --parallel
-```
+## 地址、错误与字节缓冲工具
 
-说明：
+头文件：
 
-- 需要 CMake 3.28+
-- 推荐使用 Ninja/Visual Studio 生成器构建模块
-- 当前不支持 AppleClang 模块构建路径
+- `galay-kernel/common/Host.hpp`
+- `galay-kernel/common/Error.h`
+- `galay-kernel/common/Bytes.h`
+- `galay-kernel/common/Buffer.h`
+
+`IPType` / `Host`：
+
+- `enum class IPType : uint8_t { IPV4, IPV6 }`
+- `Host()`
+- `Host(IPType proto, const std::string& ip, uint16_t port)`
+- `Host(const sockaddr_in& addr)`
+- `Host(const sockaddr_in6& addr)`
+- `static Host fromSockAddr(const sockaddr_storage& addr)`
+- `bool isIPv4() const`
+- `bool isIPv6() const`
+- `std::string ip() const`
+- `uint16_t port() const`
+- `sockaddr* sockAddr()`
+- `const sockaddr* sockAddr() const`
+- `socklen_t* addrLen()`
+- `socklen_t addrLen() const`
+
+语义说明：
+
+- `Host()` 默认构造一个清零后的 IPv4 地址槽位：`ss_family=AF_INET`，`addrLen()==sizeof(sockaddr_in)`
+- `Host(IPType, ip, port)` 直接调用 `inet_pton(...)` 写入底层地址，但当前构造函数本身不返回解析错误；文本地址是否合法，最终由后续系统调用通过 `IOError` 暴露
+- `fromSockAddr(...)` 会按 `ss_family` 自动选择 `sockaddr_in` / `sockaddr_in6` 的有效长度
+
+`IOErrorCode` / `IOError` / `Infallible`：
+
+- `enum IOErrorCode : uint32_t`
+  - `kDisconnectError`
+  - `kNotReady`
+  - `kParamInvalid`
+  - `kRecvFailed`
+  - `kSendFailed`
+  - `kAcceptFailed`
+  - `kConnectFailed`
+  - `kBindFailed`
+  - `kListenFailed`
+  - `kOpenFailed`
+  - `kReadFailed`
+  - `kWriteFailed`
+  - `kStatFailed`
+  - `kSyncFailed`
+  - `kSeekFailed`
+  - `kTimeout`
+  - `kNotRunningOnIOScheduler`
+- `static bool IOError::contains(uint64_t error, IOErrorCode code)`
+- `IOError(IOErrorCode io_error_code, uint32_t system_code)`
+- `uint64_t code() const`
+- `std::string message() const`
+- `void reset()`
+- `class Infallible`
+
+语义说明：
+
+- `IOError::code()` 把系统错误码放在高 32 位、`IOErrorCode` 放在低 32 位
+- `IOError::contains(...)` 只检查组合码里的低 32 位逻辑错误码
+- `IOError::message()` 会拼接逻辑错误文案与 `strerror(system_code)`；当 `system_code==0` 时文本尾部会是 `(sys: no error)`
+- `Infallible` 是空标记类型，用在逻辑上不会失败的路径或模板特化里
+
+`Bytes`：
+
+- `Bytes()`
+- `Bytes(std::string& str)`
+- `Bytes(std::string&& str)`
+- `Bytes(const char* str)`
+- `Bytes(const uint8_t* str)`
+- `Bytes(const char* str, size_t length)`
+- `Bytes(const uint8_t* str, size_t length)`
+- `Bytes(size_t capacity)`
+- `Bytes(Bytes&& other) noexcept`
+- `Bytes& operator=(Bytes&& other) noexcept`
+- `static Bytes fromString(std::string& str)`
+- `static Bytes fromString(const std::string_view& str)`
+- `static Bytes fromCString(const char* str, size_t length, size_t capacity)`
+- `const uint8_t* data() const noexcept`
+- `const char* c_str() const noexcept`
+- `size_t size() const noexcept`
+- `size_t capacity() const noexcept`
+- `bool empty() const noexcept`
+- `void clear() noexcept`
+- `std::string toString() const`
+- `std::string_view toStringView() const`
+- `bool operator==(const Bytes& other) const`
+- `bool operator!=(const Bytes& other) const`
+
+语义说明：
+
+- 构造函数族会分配并深拷贝数据，`Bytes` 本身是 move-only；没有公开拷贝构造 / 拷贝赋值
+- `fromString(std::string&)`、`fromString(std::string_view)`、`fromCString(...)` 生成的是 non-owning 视图，底层存储必须由调用方继续持有
+- `clear()` 会释放 owning 存储并把对象重置为空视图
+- `toString()` 返回副本；`toStringView()` 返回零拷贝视图
+- `c_str()` 当前实现会在末尾不是 `\0` 时尝试原地补终止符，因此更适合本身可写、并且为终止符预留了容量的文本缓冲；对二进制数据或精确容量缓冲，更稳妥的读取方式是 `toString()` / `toStringView()`
+
+`StringMetaData` 与辅助函数：
+
+- `struct StringMetaData { uint8_t* data; size_t size; size_t capacity; }`
+- `StringMetaData(std::string& str)`
+- `StringMetaData(const std::string_view& str)`
+- `StringMetaData(const char* str)`
+- `StringMetaData(const uint8_t* str)`
+- `StringMetaData(const char* str, size_t length)`
+- `StringMetaData(const uint8_t* str, size_t length)`
+- `StringMetaData(StringMetaData&& other)`
+- `StringMetaData& operator=(StringMetaData&& other)`
+- `StringMetaData mallocString(size_t length)`
+- `StringMetaData deepCopyString(const StringMetaData& meta)`
+- `void reallocString(StringMetaData& meta, size_t length)`
+- `void clearString(StringMetaData& meta)`
+- `void freeString(StringMetaData& meta)`
+
+语义说明：
+
+- `StringMetaData` 是公开可见但偏底层的原始缓冲描述结构；业务代码更推荐优先使用 `Bytes` / `Buffer`
+- `mallocString(...)` 分配容量并把 `size` 初始化为 `0`
+- `deepCopyString(...)` 会按源对象的 `capacity` 分配并复制已有 `size`
+- `reallocString(...)` 在缩容时会同步截断 `size`；若重新分配失败会抛 `std::bad_alloc`
+- `clearString(...)` 只清空内容并保留容量；`freeString(...)` 才真正释放内存
+
+`Buffer` / `RingBuffer`：
+
+- `Buffer()`
+- `Buffer(size_t capacity)`
+- `Buffer(const void* data, size_t size)`
+- `Buffer(const std::string& str)`
+- `void clear()`
+- `char* data()`
+- `const char* data() const`
+- `size_t length() const`
+- `size_t capacity() const`
+- `void resize(size_t capacity)`
+- `std::string toString() const`
+- `std::string_view toStringView() const`
+- `Buffer& operator=(Buffer&& other)`
+- `explicit RingBuffer(size_t capacity = kDefaultCapacity)`
+- `size_t readable() const`
+- `size_t writable() const`
+- `size_t capacity() const`
+- `bool empty() const`
+- `bool full() const`
+- `size_t getWriteIovecs(struct iovec* out, size_t max_iovecs = 2) const`
+- `size_t getReadIovecs(struct iovec* out, size_t max_iovecs = 2) const`
+- `void produce(size_t len)`
+- `void consume(size_t len)`
+- `void clear()`
+- `size_t write(const void* data, size_t len)`
+- `size_t write(const std::string_view& str)`
+
+语义说明：
+
+- `Buffer` 是 owning 动态缓冲区；`resize(...)` 最终调用 `reallocString(...)`，缩容时可能截断已有 `length()`
+- `Buffer::clear()` 会把已有容量区间清零，但保留已分配容量，适合重复复用
+- `RingBuffer` 是固定容量、不会自动扩容的环形缓冲；写满后 `write(...)` / `produce(...)` 只会推进可容纳的那部分字节
+- `getWriteIovecs(...)` / `getReadIovecs(...)` 最多返回两段连续内存，专门服务 `readv` / `writev`
+- `consume(...)` 在把可读数据完全耗尽后，会把读写指针都重置到 `0`
+
+## Runtime / Scheduler / Coroutine / Timer
+
+头文件：
+
+- `galay-kernel/kernel/Runtime.h`
+- `galay-kernel/kernel/ComputeScheduler.h`
+- `galay-kernel/kernel/EpollScheduler.h`
+- `galay-kernel/kernel/KqueueScheduler.h`
+- `galay-kernel/kernel/IOUringScheduler.h`
+- `galay-kernel/kernel/Coroutine.h`
+- `galay-kernel/kernel/TimerScheduler.h`
+- `galay-kernel/common/Timer.hpp`
+- `galay-kernel/common/Sleep.hpp`
+
+关键类型：
+
+- `struct RuntimeAffinityConfig`
+- `struct RuntimeConfig`
+- `class Runtime`
+- `class RuntimeBuilder`
+- `class ComputeScheduler`
+- `class EpollScheduler`
+- `class KqueueScheduler`
+- `class IOUringScheduler`
+- `class TaskRef`
+- `class Coroutine`
+- `struct WaitResult`
+- `struct SpawnAwaitable`
+- `struct ComputeTask`
+- `class Timer`
+- `class CBTimer`
+- `class TimerScheduler`
+
+`RuntimeAffinityConfig` 字段：
+
+- `enum class Mode { None, Sequential, Custom } mode`
+- `size_t seq_io_count`
+- `size_t seq_compute_count`
+- `std::vector<uint32_t> custom_io_cpus`
+- `std::vector<uint32_t> custom_compute_cpus`
+
+`RuntimeConfig` 字段：
+
+- `size_t io_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO`
+- `size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO`
+- `RuntimeAffinityConfig affinity`
+
+`Runtime` 关键接口：
+
+- `explicit Runtime(const RuntimeConfig& config = RuntimeConfig{})`
+- `bool addIOScheduler(std::unique_ptr<IOScheduler> scheduler)`
+- `bool addComputeScheduler(std::unique_ptr<ComputeScheduler> scheduler)`
+- `void start()`
+- `void stop()`
+- `bool isRunning() const`
+- `size_t getIOSchedulerCount() const`
+- `size_t getComputeSchedulerCount() const`
+- `IOScheduler* getIOScheduler(size_t index)`
+- `ComputeScheduler* getComputeScheduler(size_t index)`
+- `IOScheduler* getNextIOScheduler()`
+- `ComputeScheduler* getNextComputeScheduler()`
+
+`RuntimeBuilder` 关键接口：
+
+- `RuntimeBuilder& ioSchedulerCount(size_t n)`
+- `RuntimeBuilder& computeSchedulerCount(size_t n)`
+- `RuntimeBuilder& sequentialAffinity(size_t io_count, size_t compute_count)`
+- `bool customAffinity(std::vector<uint32_t> io_cpus, std::vector<uint32_t> compute_cpus)`
+- `RuntimeBuilder& applyAffinity(const RuntimeAffinityConfig& aff)`
+- `Runtime build() const`
+- `RuntimeConfig buildConfig() const`
+
+注意：
+
+- `Runtime::start()` 只有在 IO / Compute 两类调度器都还为空时才会自动创建默认调度器；如果你手工只添加了其中一类，另一类不会被自动补齐
+- `Runtime::start()` 会先启动全局 `TimerScheduler`，再启动 IO / 计算调度器
+- `Runtime::stop()` 会按相反顺序停止并回收
+- 文档与示例应使用 `getIOScheduler(size_t)`、`getComputeScheduler(size_t)` 或 `getNext*()`；当前没有 `getIOSchedulers()` / `getComputeSchedulers()`
+- `GALAY_RUNTIME_SCHEDULER_COUNT_AUTO` 表示自动数量；默认规则是 `io=2*CPU`、`compute=CPU`；`0` 表示禁用对应默认调度器
+- 默认 IO 后端由平台和宏决定：macOS / FreeBSD 为 `KqueueScheduler`，Linux + `USE_IOURING` 为 `IOUringScheduler`，否则为 `EpollScheduler`
+- `addIOScheduler(...)` / `addComputeScheduler(...)` 只允许在运行前调用；运行中会返回 `false`
+- `getNextIOScheduler()` / `getNextComputeScheduler()` 采用 round-robin 轮询；对应容器为空时返回 `nullptr`
+- `RuntimeBuilder::sequentialAffinity(io_count, compute_count)` 会从 CPU 0 开始顺序绑定，超出 CPU 数量后回绕
+- `RuntimeBuilder::customAffinity(...)` 要求两个向量长度与当前配置的调度器数量严格一致，否则返回 `false` 且不修改配置；因此通常要先调用 `ioSchedulerCount(...)` / `computeSchedulerCount(...)`
+- `Runtime::applyAffinityConfig()` 在 custom 向量和最终调度器数量不一致时会整体跳过 custom affinity 应用
+
+`ComputeScheduler` 关键接口：
+
+- `ComputeScheduler()`
+- `void start()`
+- `void stop()`
+- `bool spawn(Coroutine coro)`
+- `bool spawnImmidiately(Coroutine co)`
+- `bool isRunning() const`
+- `bool addTimer(Timer::ptr timer)`
+
+语义说明：
+
+- `ComputeScheduler` 是单工作线程调度器，底层队列是 `moodycamel::BlockingConcurrentQueue<ComputeTask>`
+- `spawn(...)` 会把尚未绑定调度器的协程绑定到当前 `ComputeScheduler`；如果协程已绑定到其他调度器，则返回 `false`
+- `spawnImmidiately(...)` 只接受未绑定调度器的协程；它会在当前线程立即 `resume`，不会先入队
+- `addTimer(...)` 只是转发到全局 `TimerScheduler::getInstance()->addTimer(...)`
+
+具体 IO 调度器：
+
+- `EpollScheduler(int max_events = GALAY_SCHEDULER_MAX_EVENTS, int batch_size = GALAY_SCHEDULER_BATCH_SIZE, int check_interval_ms = GALAY_SCHEDULER_CHECK_INTERVAL_MS)`
+- `KqueueScheduler(int max_events = GALAY_SCHEDULER_MAX_EVENTS, int batch_size = GALAY_SCHEDULER_BATCH_SIZE, int check_interval_ms = GALAY_SCHEDULER_CHECK_INTERVAL_MS)`
+- `IOUringScheduler(int queue_depth = GALAY_SCHEDULER_QUEUE_DEPTH, int batch_size = GALAY_SCHEDULER_BATCH_SIZE)`
+
+这些后端当前共同公开：
+
+- 生命周期：`start()`、`stop()`、`notify()`
+- 事件注册：`addAccept(...)`、`addConnect(...)`、`addRecv(...)`、`addSend(...)`、`addReadv(...)`、`addWritev(...)`、`addClose(...)`
+- 文件 / UDP / 监控 / 零拷贝：`addFileRead(...)`、`addFileWrite(...)`、`addRecvFrom(...)`、`addSendTo(...)`、`addFileWatch(...)`、`addSendFile(...)`、`addCustom(...)`
+- 调度：`spawn(...)`、`schedule(...)`、`spawnDeferred(...)`、`scheduleDeferred(...)`、`spawnImmidiately(...)`
+- 诊断：`int remove(IOController* controller)`、`std::optional<IOError> lastError() const`
+
+平台边界：
+
+- `EpollScheduler` 只在 `USE_EPOLL`
+- `KqueueScheduler` 只在 `USE_KQUEUE`
+- `IOUringScheduler` 只在 `USE_IOURING`
+- 业务代码通常优先通过 `Runtime` 获取默认后端；只有在需要显式控制队列深度、批量参数或平台后端时才直接实例化这些类
+
+协程辅助：
+
+- `TaskRef`
+- `Coroutine`
+- `WaitResult Coroutine::wait()`
+- `SpawnAwaitable spawn(Coroutine co)`
+- `template<concepts::ChronoDuration Duration> SleepAwaitable sleep(Duration duration)`
+
+`TaskRef` / `Coroutine` / `WaitResult` / `SpawnAwaitable` / `ComputeTask`：
+
+- `TaskRef() noexcept`
+- `TaskRef(const TaskRef& other) noexcept`
+- `TaskRef(TaskRef&& other) noexcept`
+- `TaskRef& operator=(const TaskRef& other) noexcept`
+- `TaskRef& operator=(TaskRef&& other) noexcept`
+- `bool isValid() const noexcept`
+- `TaskState* state() const noexcept`
+- `Scheduler* belongScheduler() const noexcept`
+- `Coroutine() noexcept`
+- `explicit Coroutine(std::coroutine_handle<promise_type> handle) noexcept`
+- `Coroutine(Coroutine&& other) noexcept`
+- `Coroutine(const Coroutine& other) noexcept`
+- `Coroutine& operator=(Coroutine&& other) noexcept`
+- `Coroutine& operator=(const Coroutine& other) noexcept`
+- `bool isValid() const`
+- `bool done() const`
+- `WaitResult wait()`
+- `Scheduler* belongScheduler() const`
+- `TaskRef taskRef() const noexcept`
+- `TaskRef detachTask() && noexcept`
+- `void belongScheduler(Scheduler* scheduler)`
+- `std::thread::id threadId() const`
+- `void resume()`
+- `struct ComputeTask { Coroutine coro; bool is_stop_signal = false; }`
+
+语义说明：
+
+- `TaskRef` 是轻量、可拷贝的 intrusive 任务引用，内部只保存 `TaskState*`
+- `Coroutine` 拷贝后仍共享同一任务状态；`done()` 读取的是共享的原子完成位
+- `Coroutine::resume()` 不会直接在当前线程执行句柄，而是把任务通过 `schedule(...)` 路径重新投递到所属调度器
+- `co_await coro.wait()` 会先尝试把被等待协程 `spawnImmidiately(...)` 到当前等待者所属调度器；若目标协程尚未完成，则把等待者挂到目标协程的 `m_next`
+- `co_await spawn(child)` 只负责把 `child` 提交到当前协程所属调度器；`await_suspend(...)` 返回 `false`，因此当前协程不会因为这个 awaitable 被挂起
+- `ComputeTask` 是 `ComputeScheduler` 队列里传递的最小单元；`is_stop_signal=true` 表示唤醒工作线程并结束循环
+
+`Timer` / `CBTimer` / `TimerScheduler`：
+
+- `template<concepts::ChronoDuration Duration> Timer(Duration duration)`
+- `virtual void handleTimeout()`
+- `bool done()`
+- `void cancel()`
+- `bool cancelled()`
+- `uint64_t getDelay() const`
+- `uint64_t getExpireTime() const`
+- `template<concepts::ChronoDuration Duration> CBTimer(Duration duration, std::function<void()>&& callback)`
+- `static TimerScheduler* getInstance()`
+- `void start()`
+- `void stop()`
+- `bool addTimer(Timer::ptr timer)`
+- `size_t addTimerBatch(const std::vector<Timer::ptr>& timers)`
+- `bool isRunning() const`
+- `uint64_t tickDuration() const`
+- `size_t size() const`
+
+注意：
+
+- `Timer` 把原始 duration 统一保存成纳秒延迟；绝对过期时间在第一次调用 `getExpireTime()` 时才懒计算并缓存
+- `CBTimer::handleTimeout()` 只会在未取消且尚未完成时执行回调，随后再把自身标记为完成
+- `sleep(...)` 最终调用 `TimerScheduler::getInstance()->addTimer(...)`
+- 若全局 `TimerScheduler` 未启动，`sleep(...)` 所依赖的 `addTimer(...)` 会返回 `false`
+- `tickDuration()` 是只读观测接口；当前没有公开 setter 来修改时间轮 tick
+- `TimerScheduler` 是单例；`addTimerBatch(...)` 返回本次成功入队的定时器数量
+
+## HandleOption / 网络 IO
+
+头文件：
+
+- `galay-kernel/common/HandleOption.h`
+- `galay-kernel/async/TcpSocket.h`
+- `galay-kernel/async/UdpSocket.h`
+
+`HandleOption` 公开方法：
+
+- `explicit HandleOption(GHandle handle)`
+- `std::expected<void, IOError> handleBlock()`
+- `std::expected<void, IOError> handleNonBlock()`
+- `std::expected<void, IOError> handleReuseAddr()`
+- `std::expected<void, IOError> handleReusePort()`
+
+当前没有 `handleTcpNoDelay()`。
+
+`TcpSocket` 关键接口：
+
+- `explicit TcpSocket(IPType type = IPType::IPV4)`
+- `explicit TcpSocket(GHandle handle)`
+- `GHandle handle() const`
+- `IOController* controller()`
+- `HandleOption option()`
+- `std::expected<void, IOError> bind(const Host& host)`
+- `std::expected<void, IOError> listen(int backlog = 128)`
+- `AcceptAwaitable accept(Host* clientHost)`
+- `ConnectAwaitable connect(const Host& host)`
+- `RecvAwaitable recv(char* buffer, size_t length)`
+- `SendAwaitable send(const char* buffer, size_t length)`
+- `template<size_t N> ReadvAwaitable readv(std::array<struct iovec, N>& iovecs, size_t count = N)`
+- `template<size_t N> ReadvAwaitable readv(struct iovec (&iovecs)[N], size_t count = N)`
+- `template<size_t N> WritevAwaitable writev(std::array<struct iovec, N>& iovecs, size_t count = N)`
+- `template<size_t N> WritevAwaitable writev(struct iovec (&iovecs)[N], size_t count = N)`
+- `SendFileAwaitable sendfile(int file_fd, off_t offset, size_t count)`
+- `CloseAwaitable close()`
+
+`UdpSocket` 关键接口：
+
+- `explicit UdpSocket(IPType type = IPType::IPV4)`
+- `explicit UdpSocket(GHandle handle)`
+- `GHandle handle() const`
+- `IOController* controller()`
+- `HandleOption option()`
+- `std::expected<void, IOError> bind(const Host& host)`
+- `RecvFromAwaitable recvfrom(char* buffer, size_t length, Host* from)`
+- `SendToAwaitable sendto(const char* buffer, size_t length, const Host& to)`
+- `CloseAwaitable close()`
+
+## 文件 IO 与文件监控
+
+头文件：
+
+- `galay-kernel/async/AsyncFile.h`
+- `galay-kernel/async/AioFile.h`
+- `galay-kernel/async/FileWatcher.h`
+- `galay-kernel/kernel/FileWatchDefs.hpp`
+
+`AsyncFile`：
+
+- 仅在 `USE_KQUEUE` 或 `USE_IOURING` 下公开
+- `AsyncFile()`
+- `std::expected<void, IOError> open(const std::string& path, FileOpenMode mode, int permissions = 0644)`
+- `FileReadAwaitable read(char* buffer, size_t length, off_t offset = 0)`
+- `FileWriteAwaitable write(const char* buffer, size_t length, off_t offset = 0)`
+- `CloseAwaitable close()`
+- `GHandle handle() const`
+- `std::expected<size_t, IOError> size() const`
+- `std::expected<void, IOError> sync()`
+
+`AioFile`：
+
+- 仅在 `USE_EPOLL` 下公开
+- `AioFile(int max_events = 64)`
+- `std::expected<void, IOError> open(const std::string& path, AioOpenMode mode, int permissions = 0644)`
+- `void preRead(char* buffer, size_t length, off_t offset)`
+- `void preWrite(const char* buffer, size_t length, off_t offset)`
+- `void preReadBatch(const std::vector<std::tuple<char*, size_t, off_t>>& reads)`
+- `void preWriteBatch(const std::vector<std::tuple<const char*, size_t, off_t>>& writes)`
+- `AioCommitAwaitable commit()`
+- `void clear()`
+- `void close()`
+- `GHandle handle() const`
+- `bool isValid() const`
+- `std::expected<size_t, IOError> size() const`
+- `std::expected<void, IOError> sync()`
+- `static char* allocAlignedBuffer(size_t size, size_t alignment = 512)`
+- `static void freeAlignedBuffer(char* buffer)`
+
+`FileWatcher`：
+
+- `FileWatcher()`
+- `std::expected<int, IOError> addWatch(const std::string& path, FileWatchEvent events = FileWatchEvent::All)`
+- `std::expected<void, IOError> removeWatch(int wd)`
+- `FileWatchAwaitable watch()`
+- `bool isValid() const`
+- `int fd() const`
+- `std::string getPath(int wd) const`
+
+`FileWatchEvent` / `FileWatchResult`：
+
+- `enum class FileWatchEvent : uint32_t`
+- `FileWatchEvent operator|(FileWatchEvent a, FileWatchEvent b)`
+- `FileWatchEvent operator&(FileWatchEvent a, FileWatchEvent b)`
+- `struct FileWatchResult { FileWatchEvent event; std::string name; bool isDir; bool has(FileWatchEvent check) const; }`
+
+## 并发原语
+
+头文件：
+
+- `galay-kernel/concurrency/AsyncMutex.h`
+- `galay-kernel/concurrency/MpscChannel.h`
+- `galay-kernel/concurrency/UnsafeChannel.h`
+- `galay-kernel/concurrency/AsyncWaiter.h`
+
+`AsyncMutex`：
+
+- `explicit AsyncMutex(size_t initial_capacity = 32)`
+- `AsyncMutexAwaitable lock()`
+- `void unlock()`
+- `bool isLocked() const`
+
+`MpscChannel<T>`：
+
+- `bool send(T&& value)`
+- `bool send(const T& value)`
+- `bool sendBatch(const std::vector<T>& values)`
+- `bool sendBatch(std::vector<T>&& values)`
+- `MpscRecvAwaitable<T> recv()`
+- `MpscRecvBatchAwaitable<T> recvBatch(size_t maxCount = DEFAULT_BATCH_SIZE)`
+- `std::optional<T> tryRecv()`
+- `std::optional<std::vector<T>> tryRecvBatch(size_t maxCount = DEFAULT_BATCH_SIZE)`
+- `size_t size() const`
+- `bool empty() const`
+
+注意：当前没有 `close()`，发送端也是同步 `bool send(...)`，不是 `co_await channel.send(...)`。
+
+`UnsafeChannelWakeMode` / `UnsafeChannel<T>`：
+
+- `enum class UnsafeChannelWakeMode { Inline, Deferred }`
+- `explicit UnsafeChannel(UnsafeChannelWakeMode wake_mode = UnsafeChannelWakeMode::Inline)`
+- `bool send(T&& value, bool immediately = false)`
+- `bool send(const T& value, bool immediately = false)`
+- `bool sendBatch(const std::vector<T>& values, bool immediately = false)`
+- `bool sendBatch(std::vector<T>&& values, bool immediately = false)`
+- `UnsafeRecvAwaitable<T> recv()`
+- `UnsafeRecvBatchAwaitable<T> recvBatch(size_t maxCount = DEFAULT_BATCH_SIZE)`
+- `UnsafeRecvBatchedAwaitable<T> recvBatched(size_t limit)`
+- `std::optional<T> tryRecv()`
+- `std::optional<std::vector<T>> tryRecvBatch(size_t maxCount = DEFAULT_BATCH_SIZE)`
+- `size_t size() const`
+- `bool empty() const`
+
+语义说明：
+
+- `UnsafeChannel<T>` 只允许同一调度器 / 同一线程上下文内使用；它不是线程安全容器
+- `UnsafeChannelWakeMode::Inline` 会在生产者路径上直接 `handle.resume()` 唤醒 waiter
+- `UnsafeChannelWakeMode::Deferred` 在 waiter 已绑定调度器时会走 `waiter.resume()` 的调度路径；如果 waiter 没有关联调度器，当前实现会回退为内联恢复
+- `recvBatched(limit)` 只有在队列累计到 `limit` 条或发送端使用 `immediately=true` 时才会唤醒等待者
+- `recv()` / `recvBatch()` / `recvBatched(...).timeout(...)` 超时后都会返回 `unexpected(IOError(kTimeout, 0))`
+- `recvBatched(limit).timeout(...)` 当前不会自动把“未达到 limit 的部分数据”作为成功结果返回；部分数据会继续留在队列中，调用方可再用 `tryRecvBatch()` 或后续 `recv*()` 取出
+
+`AsyncWaiter<T>`：
+
+- `AsyncWaiterAwaitable<T> wait()`
+- `bool notify(T result)`
+- `bool isWaiting() const`
+- `bool isReady() const`
+
+`AsyncWaiter<void>`：
+
+- `AsyncWaiterAwaitable<void> wait()`
+- `bool notify()`
+- `bool isWaiting() const`
+- `bool isReady() const`
+
+## 统一返回、所有权与并发语义
+
+返回与错误语义：
+
+- `bind/open/listen/sync` 这类立即执行接口通常直接返回 `std::expected<..., IOError>`
+- `connect/accept/recv/send/read/write/sleep/lock/wait` 这类异步入口统一返回 awaitable，业务代码应直接 `co_await`
+- 失败原因统一通过 `IOError` 或对应 awaitable 的 `await_resume()` 结果暴露，不应依赖日志文本推断
+- 平台相关能力按头文件和编译宏裁剪：`AsyncFile` 只在 `USE_KQUEUE` / `USE_IOURING` 下可用，`AioFile` 只在 `USE_EPOLL` 下可用
+
+所有权与生命周期：
+
+- `Runtime::addIOScheduler(std::unique_ptr<IOScheduler>)` / `addComputeScheduler(std::unique_ptr<ComputeScheduler>)` 会转移调度器所有权给 `Runtime`
+- `Bytes` 的构造函数族是 owning 深拷贝；`Bytes::fromString(...)` / `fromCString(...)` 是 non-owning 视图，底层存储必须由调用方保活
+- `Buffer` 持有自己的动态缓冲；`RingBuffer` 也是 owning 固定容量缓冲，但不会自动扩容
+- `sleep(...)` 依赖全局 `TimerScheduler`；如果运行时还没启动计时器，`sleep` 对应的底层定时器注册不会成功
+- `TcpSocket` / `UdpSocket` / `AsyncFile` / `AioFile` / `FileWatcher` 都围绕底层句柄工作，关闭后不应继续复用旧句柄语义
+
+并发边界：
+
+- `MpscChannel<T>` 的发送端是同步 `bool send(...)`，不是 awaitable；不要写成 `co_await channel.send(...)`
+- `UnsafeChannel<T>` 是显式的非线程安全通道，只适合同线程 / 受控调度上下文
+- `UnsafeChannelWakeMode::Deferred` 只是把唤醒动作切到调度器排队路径，不会把 `UnsafeChannel<T>` 变成跨线程安全 channel
+- `AsyncWaiter<T>` / `AsyncMutex` 用于协程同步，不是跨进程或跨机器同步原语
+
+## 交叉验证入口
+
+- package consumer：`test/package-consumer/`
+- 测试入口统一通过 `test/` 与 package consumer 夹具交叉验证公开 API 面
+- 调度 / 运行时：`test/T11-compute_scheduler.cc`、`test/T12-mixed_scheduler.cc`
+- 协程 / sleep：`test/T1-coroutine_chain.cc`
+- 并发：`test/T13-async_mutex.cc`、`test/T14-mpsc_channel.cc`、`test/T17-unsafe_channel.cc`
+- 定时器：`test/T15-timing_wheel.cc`、`test/T18-timer_scheduler.cc`
+- 真实示例总览：`docs/04-示例代码.md`
+
+## 专题问题优先落点
+
+- `galay.kernel` / `Runtime` / `RuntimeBuilder` / `IOScheduler` / `ComputeScheduler` / `Coroutine` / `TimerScheduler`：
+  - 先看本页 `模块门面 galay.kernel`、`Runtime / Scheduler / Coroutine / Timer`
+  - 再看 `docs/01-架构设计.md` 与 `docs/03-使用指南.md`
+- `Bytes` / `StringMetaData` / `Buffer` / `RingBuffer` / `IOError` / `Host` / `IPType`：
+  - 先看本页 `地址、错误与字节缓冲工具`
+  - 再看 `docs/03-使用指南.md`、`docs/07-常见问题.md`
+- `TcpSocket` / `UdpSocket` / `HandleOption`：
+  - 先看本页 `HandleOption / 网络 IO`
+  - 再看 `docs/03-使用指南.md` 与 `docs/06-高级主题.md`
+- `AsyncFile` / `AioFile` / `FileWatcher`：
+  - 先看本页 `文件 IO 与文件监控`
+  - 再看 `docs/03-使用指南.md`、`docs/06-高级主题.md`
+- `AsyncMutex` / `MpscChannel<T>` / `UnsafeChannel<T>` / `AsyncWaiter<T>`：
+  - 先看本页 `并发原语`
+  - 再看 `docs/03-使用指南.md` 与 `docs/07-常见问题.md`
+- `find_package(galay-kernel)` / 已安装头文件边界：
+  - 先看本页 `导出 target`、`安装包头文件边界`
+  - 再看 `docs/00-快速开始.md` 与 `docs/07-常见问题.md`
+
+## 进一步阅读
+
+- 工作流示例：`docs/03-使用指南.md`
+- 真实示例矩阵：`docs/04-示例代码.md`
+- 当前性能事实：`docs/05-性能测试.md`
+- 平台差异、绑核、零拷贝、文件监控：`docs/06-高级主题.md`
+- 补充专题落地页：`docs/08-计算调度器.md` 到 `docs/21-企业接入与验证.md`

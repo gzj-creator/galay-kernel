@@ -1,271 +1,194 @@
 # Galay-Kernel
 
-高性能 **C++23** 协程异步内核库，支持 `kqueue` / `epoll` / `io_uring`。
+`galay-kernel` 是一个以 C++23 协程为核心的异步运行时与基础设施库。当前文档把 `galay-kernel/` 公开头文件、CMake 导出 target、`examples/`、`test/` 与 `benchmark/` 作为唯一真相来源，并把文档页降级为说明层。
 
-## 特性
+## 当前真相源
 
-- 协程友好：统一 `co_await` 异步 API
-- 多后端 IO：macOS `kqueue`，Linux `epoll` / `io_uring`
-- 文件 IO：`AsyncFile`（kqueue/io_uring）与 `AioFile`（epoll+libaio）
-- 并发原语：`MpscChannel`、`UnsafeChannel`、`AsyncMutex`、`AsyncWaiter`
-- 运行时管理：`Runtime` 管理多 IO/Compute 调度器
-- 全局定时器：`TimerScheduler` + `sleep()`
+当仓库内容冲突时，本仓库按以下顺序判断真相：
+
+1. `galay-kernel/` 下的公开头文件与导出 target
+2. `galay-kernel/` 下的实现
+3. `examples/`
+4. `test/`
+5. `benchmark/`
+6. `README.md` 与 `docs/*.md`
+
+## 能力概览
+
+- IO 调度：`EpollScheduler` / `IOUringScheduler` / `KqueueScheduler` / `IOCP`
+- 计算调度：`ComputeScheduler`
+- 运行时编排：`Runtime`、`RuntimeBuilder`
+- 协程与等待：`Coroutine`、`spawn()`、`sleep(...)`
+- 网络 IO：`galay::async::TcpSocket`、`galay::async::UdpSocket`
+- 文件 IO：`galay::async::AsyncFile`；Linux epoll 下额外提供 `galay::async::AioFile`
+- 并发原语：`AsyncMutex`、`MpscChannel<T>`、`UnsafeChannel<T>`、`AsyncWaiter<T>`
+- 定时器：`TimerScheduler` + 线程安全分层时间轮
+- 文件监控：`galay::async::FileWatcher`
+- 向量 IO / 零拷贝：`readv` / `writev` / `sendfile`
+
+## 构建前提
+
+- 编译器：支持 C++23
+- CMake：`>= 3.16`
+- 命名模块：`ENABLE_CPP23_MODULES=ON` 只在 `CMake >= 3.28`、生成器支持模块、编译器不是 AppleClang 时才会真正生效
+- 头文件依赖：编译器需要能找到 `<concurrentqueue/moodycamel/*.h>`；仓库当前不会自动下载该依赖
+- Linux：
+  - `DISABLE_IOURING=ON` 时使用 epoll；异步文件 IO 依赖 `libaio`
+  - `DISABLE_IOURING=OFF` 且系统存在 `liburing` 时使用 io_uring
+- macOS：当前自动选择 kqueue
+- Windows：当前自动选择 IOCP
+
+## 快速构建
+
+```bash
+cmake -S . -B build -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON -DBUILD_BENCHMARKS=ON
+cmake --build build --parallel
+```
+
+## 安装与消费
+
+导出 target：
+
+- `galay-kernel`
+- `galay-kernel-modules`
+  - 仅当 `ENABLE_CPP23_MODULES=ON`
+  - 且 `GALAY_KERNEL_CPP23_MODULES_EFFECTIVE=TRUE`
+
+安装命令：
+
+```bash
+cmake --install build --prefix /tmp/galay-kernel-install
+```
+
+安装后的包元数据会显式区分两类头文件：
+
+- `GALAY_KERNEL_SUPPORTED_HEADERS`：受当前文档与兼容性承诺约束的 direct-include 入口头
+- `GALAY_KERNEL_INTERNAL_HEADERS`：仅因内联 / 模板依赖而随包安装的内部头，避免直接 `#include`
+- `GALAY_KERNEL_PACKAGE_CONSUMER_FIXTURE_DIR`：安装树中的最小 `find_package` consumer fixture
+
+消费方式：
+
+```cmake
+find_package(galay-kernel CONFIG REQUIRED)
+target_link_libraries(your_app PRIVATE galay-kernel::galay-kernel)
+```
+
+仓库内的 source-controlled consumer fixture 位于 `test/package-consumer/`。
+
+更完整的企业接入说明见 `docs/21-企业接入与验证.md`。
+
+## 示例 / 测试 / benchmark 生成规则
+
+- 示例：
+  - `E1-SendfileExample` ~ `E5-UdpEcho` 始终由 `examples/include/*.cc` 生成
+  - `E1-SendfileExampleImport` ~ `E9-TimerSleepImport` 仅在模块 target 生效时生成
+- 测试：`test/T*.cc` 会按文件名直接生成同名 target，例如 `test/T13-async_mutex.cc` -> `T13-async_mutex`
+- benchmark：`benchmark/CMakeLists.txt` 明确定义 `B1-ComputeScheduler` 到 `B13-Sendfile`
+
+## 当前已验证的命令（2026-03-10）
+
+验证环境：macOS、AppleClang 17、CMake 默认 Release、后端为 kqueue。
+
+```bash
+cmake -S . -B build-docverify -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON -DBUILD_BENCHMARKS=ON
+cmake --build build-docverify --target \
+  T9-file_watcher T13-async_mutex T14-mpsc_channel T18-timer_scheduler \
+  T19-readv_writev T23-sendfile_basic T27-runtime_stress T42-runtime_strict_scheduler_counts \
+  E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-CoroutineBasic E5-UdpEcho \
+  B8-MpscChannel B10-Ringbuffer B13-Sendfile --parallel
+
+python3 scripts/check-doc-links.py
+cmake --install build-docverify --prefix "$PWD/build-docverify/install"
+cmake -S test/package-consumer -B build-docverify/package-consumer \
+  -DCMAKE_PREFIX_PATH="$PWD/build-docverify/install"
+cmake --build build-docverify/package-consumer --parallel
+./build-docverify/package-consumer/galay_consumer
+```
+
+实际结果：
+
+- 文档：`scripts/check-doc-links.py` 通过，输出 `doc check passed: 24 markdown files`
+- 测试：
+  - `T9-file_watcher`：`3/3` 通过
+  - `T13-async_mutex`：`11/11` 通过
+  - `T14-mpsc_channel`：`13/13` 通过
+  - `T18-timer_scheduler`：`8/8` 通过
+  - `T19-readv_writev`：PASS
+  - `T23-sendfile_basic`：`4/4` 通过
+  - `T27-runtime_stress`：`5/5` 通过
+  - `T42-runtime_strict_scheduler_counts`：PASS
+- 示例：
+  - `E1-SendfileExample`：PASS
+  - `E2-TcpEchoServer`：PASS
+  - `E3-TcpClient`：PASS
+  - `E4-CoroutineBasic`：PASS
+  - `E5-UdpEcho`：PASS
+- benchmark：
+  - `B8-MpscChannel`：已运行并输出当前吞吐 / 延迟数据
+  - `B10-Ringbuffer`：已运行并输出当前吞吐 / iovec 指标
+  - `B13-Sendfile`：已运行并输出当前 sendfile / read+send 对比数据
+- 安装与消费：
+  - `cmake --install` 成功
+  - `find_package(galay-kernel CONFIG REQUIRED)` 烟雾测试成功
+  - `GALAY_KERNEL_SUPPORTED_HEADERS` / `GALAY_KERNEL_INTERNAL_HEADERS` 元数据存在
+  - 运行安装后的最小 consumer：`consumer exit=0`
+
+模块配置额外验证：
+
+```bash
+cmake -S . -B build-docverify-modules -DENABLE_CPP23_MODULES=ON
+cmake --build build-docverify-modules --target E6-MpscChannelImport
+```
+
+当前真实结果：
+
+- CMake 警告生成器 `Unix Makefiles` 不支持模块
+- CMake 警告 `AppleClang` 不支持该项目的模块配置
+- 因而 `E6-MpscChannelImport` 当前环境下不存在，`make` 报 `No rule to make target`
+
+## 当前限制
+
+- 仓库当前没有 `ENABLE_LOG` 选项，也没有 `spdlog` 依赖链路
+- `MpscChannel<T>` 没有 `close()`；发送端是同步 `bool send(...)`
+- `HandleOption` 当前只公开 `handleBlock()`、`handleNonBlock()`、`handleReuseAddr()`、`handleReusePort()`
+- benchmark 数字是当前机器单次运行结果，不是跨平台性能承诺
 
 ## 文档导航
 
-### 入门文档
-
-0. [快速开始](docs/00-快速开始.md) - 依赖安装、编译、运行示例
-1. [API 文档导航](docs/01-API文档.md) - 模块清单与推荐阅读顺序
-2. [架构设计](docs/16-架构设计.md) - 整体架构与设计原理
-3. [示例代码](docs/17-示例代码.md) - 常见使用场景示例
-
-### 核心模块文档
-
-4. [调度器 API](docs/05-调度器.md) - IOScheduler 与 Scheduler 基类
-5. [计算调度器](docs/03-计算调度器.md) - ComputeScheduler CPU 任务调度
-6. [Runtime](docs/13-运行时Runtime.md) - 多调度器统一管理
-7. [协程与超时](docs/06-协程.md) - Coroutine、spawn、wait、timeout
-8. [定时器调度器](docs/10-定时器调度器.md) - TimerScheduler 与 sleep
-
-### 网络与文件 IO
-
-9. [网络 IO](docs/07-网络IO.md) - TcpSocket、UdpSocket、Host
-10. [文件 IO](docs/08-文件IO.md) - AsyncFile、AioFile
-11. [文件监控](docs/14-文件监控.md) - FileWatcher (inotify/kqueue)
-12. [零拷贝 sendfile](docs/12-零拷贝发送文件.md) - sendfile 系统调用
-
-### 并发与同步
-
-13. [并发与通道](docs/09-并发.md) - MpscChannel、UnsafeChannel、Bytes
-14. [异步同步原语](docs/15-异步同步原语.md) - AsyncMutex、AsyncWaiter
-15. [RingBuffer](docs/11-环形缓冲区.md) - 环形缓冲区实现
-
-### 性能与进阶
-
-16. [性能测试汇总](docs/02-性能测试.md) - TCP/UDP 性能测试结果
-17. [UDP 性能测试](docs/04-UDP性能测试.md) - UDP 专项测试
-18. [高级主题](docs/19-高级主题.md) - 性能优化、最佳实践、高级用法
-19. [常见问题](docs/18-常见问题.md) - FAQ 与故障排查
-
-## 构建要求
-
-- CMake 3.16+
-- C++23 编译器（GCC 11+ / Clang 14+）
-- `spdlog`（默认 `ENABLE_LOG=ON` 时需要）
-- Linux:
-  - `libaio`（epoll 文件 IO）
-  - `liburing`（可选，启用 io_uring 时）
-
-## 依赖安装（macOS / Homebrew）
-
-```bash
-brew install cmake spdlog
-```
-
-## 依赖安装（Ubuntu / Debian）
-
-```bash
-sudo apt-get update
-sudo apt-get install -y cmake g++ libspdlog-dev libaio-dev liburing-dev
-```
-
-## 拉取源码
-
-```bash
-git clone https://github.com/gzj-creator/galay-kernel.git
-cd galay-kernel
-```
-
-## 构建
-
-```bash
-mkdir -p build
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . --parallel
-```
-
-可执行文件默认输出到 `build/bin/`。
-
-## 常用 CMake 选项
-
-```cmake
-option(BUILD_TESTS "Build test executables" ON)
-option(BUILD_BENCHMARKS "Build benchmark executables" ON)
-option(BUILD_EXAMPLES "Build example executables" ON)
-option(ENABLE_LOG "Enable logging with spdlog" ON)
-option(DISABLE_IOURING "Disable io_uring and use epoll on Linux" ON)
-option(ENABLE_CPP23_MODULES "Enable experimental C++23 named modules support" OFF)
-```
-
-Linux 下默认 `DISABLE_IOURING=ON`，即优先走 `epoll`。如需 io_uring：
-
-```bash
-cmake .. -DDISABLE_IOURING=OFF
-```
-
-## C++23 模块（实验性）
-
-项目新增模块门面 `galay.kernel`，支持 `import`/`export` 语法（实验性）。
-
-启用方式：
-
-```bash
-cmake .. -DENABLE_CPP23_MODULES=ON
-cmake --build . --parallel
-```
-
-模块能力生效规则（参考 `galay-rpc`）：
-
-- CMake 版本需 `>= 3.28`
-- Generator 需支持模块依赖扫描（推荐 `Ninja` / `Visual Studio`）
-- 当前项目不支持 `AppleClang` 的模块构建路径
-- 仅当以上条件满足时，`ENABLE_CPP23_MODULES=ON` 才会实际生效（`GALAY_KERNEL_CPP23_MODULES_EFFECTIVE=ON`）
-
-示例：
-
-```cpp
-import galay.kernel;
-
-int main() {
-    galay::kernel::Runtime runtime = galay::kernel::RuntimeBuilder().build();
-    return 0;
-}
-```
-
-模块示例目标（启用 `ENABLE_CPP23_MODULES` 后可构建）：
-
-- `E1-SendfileExampleImport`
-- `E2-TcpEchoServerImport`
-- `E3-TcpClientImport`
-- `E4-CoroutineBasicImport`
-- `E5-UdpEchoImport`
-- `E6-MpscChannelImport`
-- `E7-UnsafeChannelImport`
-- `E8-AsyncSyncImport`
-- `E9-TimerSleepImport`
-
-示例目录结构（参考 `galay-mysql`）：
-
-```text
-examples/
-├── common/   # 示例共享配置
-├── include/  # 传统头文件版本
-└── import/   # C++23 模块 import 版本
-```
-
-include 示例目标（默认可构建）：
-
-- `E1-SendfileExample` -> `examples/include/E1-SendfileExample.cc`
-- `E2-TcpEchoServer` -> `examples/include/E2-TcpEchoServer.cc`
-- `E3-TcpClient` -> `examples/include/E3-TcpClient.cc`
-- `E4-CoroutineBasic` -> `examples/include/E4-CoroutineBasic.cc`
-- `E5-UdpEcho` -> `examples/include/E5-UdpEcho.cc`
-
-示例构建命令：
-
-```bash
-# include 示例（默认）
-cmake --build . --target E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-CoroutineBasic E5-UdpEcho --parallel
-
-# import 示例（需先 cmake .. -DENABLE_CPP23_MODULES=ON）
-cmake --build . --target E1-SendfileExampleImport E2-TcpEchoServerImport E3-TcpClientImport E4-CoroutineBasicImport E5-UdpEchoImport E6-MpscChannelImport E7-UnsafeChannelImport E8-AsyncSyncImport E9-TimerSleepImport --parallel
-```
-
-限制：
-
-- 需要 CMake 3.28+（`FILE_SET CXX_MODULES`）
-- 推荐使用 Ninja/Visual Studio 生成器构建模块
-- 当前项目暂不支持 AppleClang 的模块构建路径
-
-### 模块支持更新（2026-02）
-
-本次模块接口已统一为：
-
-- `module;`
-- `#include "galay-kernel/module/ModulePrelude.hpp"`
-- `export module galay.kernel;`
-- `export { #include ... }`
-
-对应文件：
-
-- `galay-kernel/module/galay.kernel.cppm`
-- `galay-kernel/module/ModulePrelude.hpp`
-
-推荐构建（Clang 20 + Ninja）：
-
-```bash
-cmake -S . -B build-mod -G Ninja \
-  -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm@20/bin/clang++ \
-  -DENABLE_CPP23_MODULES=ON
-cmake --build build-mod --target galay-kernel-modules --parallel
-```
-
-## 快速示例
-
-```cpp
-#include "galay-kernel/kernel/Runtime.h"
-#include "galay-kernel/async/TcpSocket.h"
-
-using namespace galay::kernel;
-using namespace galay::async;
-
-Coroutine echoSession(GHandle h) {
-    TcpSocket client(h);
-    client.option().handleNonBlock();
-
-    char buf[4096];
-    while (true) {
-        auto r = co_await client.recv(buf, sizeof(buf));
-        if (!r || r.value().size() == 0) {
-            break;
-        }
-        auto& bytes = r.value();
-        if (auto __await_result = co_await client.send(bytes.c_str(), bytes.size()); !__await_result) {
-            // 错误处理：记录日志、重试或提前返回
-        }
-    }
-
-    co_await client.close();
-}
-
-Coroutine echoServer(IOScheduler* io) {
-    TcpSocket listener;
-    listener.option().handleReuseAddr();
-    listener.option().handleNonBlock();
-
-    if (!listener.bind(Host(IPType::IPV4, "0.0.0.0", 8080))) co_return;
-    if (!listener.listen(1024)) co_return;
-
-    while (true) {
-        Host peer;
-        auto a = co_await listener.accept(&peer);
-        if (a) {
-            io->spawn(echoSession(a.value()));
-        }
-    }
-}
-
-int main() {
-    Runtime runtime = RuntimeBuilder().build();
-    runtime.start();
-
-    auto* io = runtime.getNextIOScheduler();
-    io->spawn(echoServer(io));
-
-    std::this_thread::sleep_for(std::chrono::hours(24));
-    runtime.stop();
-    return 0;
-}
-```
-
-## 运行测试与基准
-
-```bash
-# 示例：运行若干目标
-./build/bin/T21-Runtime
-./build/bin/T13-AsyncMutex
-./build/bin/B2-TcpServer 8080
-./build/bin/B3-TcpClient -h 127.0.0.1 -p 8080 -c 100 -s 256 -d 10
-```
+- 主干层：优先使用 `docs/00-快速开始.md` 到 `docs/07-常见问题.md`
+- 补充层：`docs/08-计算调度器.md` 到 `docs/21-企业接入与验证.md` 现在只保留专题摘要、关键词、源码锚点与验证入口，不再承担完整主体叙述
+- 总览：`docs/README.md`
+- 快速开始：`docs/00-快速开始.md`
+- 架构设计：`docs/01-架构设计.md`
+- API 参考：`docs/02-API参考.md`
+- 使用指南：`docs/03-使用指南.md`
+- 示例代码：`docs/04-示例代码.md`
+- 性能测试：`docs/05-性能测试.md`
+- 高级主题：`docs/06-高级主题.md`
+- 常见问题：`docs/07-常见问题.md`
+
+优先落到主干页的查询类型：
+
+- `galay.kernel` / Runtime / Scheduler / Coroutine / TimerScheduler：先看 `docs/01-架构设计.md`、`docs/02-API参考.md`、`docs/03-使用指南.md`
+- `Bytes` / `StringMetaData` / `Buffer` / `RingBuffer` / `Host` / `IOError`：先看 `docs/02-API参考.md`、`docs/07-常见问题.md`
+- TcpSocket / UdpSocket / AsyncFile / FileWatcher：先看 `docs/02-API参考.md`、`docs/03-使用指南.md`
+- MpscChannel / UnsafeChannel / AsyncMutex / AsyncWaiter：先看 `docs/02-API参考.md`、`docs/03-使用指南.md`、`docs/07-常见问题.md`
+- benchmark / 当前性能事实：先看 `docs/05-性能测试.md`
+- `find_package` / 安装消费 / 企业接入：先看 `docs/00-快速开始.md`、`docs/02-API参考.md`、`docs/07-常见问题.md`
+
+补充专题落地页：
+
+- `docs/08-计算调度器.md`
+- `docs/09-UDP性能测试.md`
+- `docs/10-调度器.md`
+- `docs/11-协程.md`
+- `docs/12-网络IO.md`
+- `docs/13-文件IO.md`
+- `docs/14-并发.md`
+- `docs/15-定时器调度器.md`
+- `docs/16-环形缓冲区.md`
+- `docs/17-零拷贝发送文件.md`
+- `docs/18-运行时Runtime.md`
+- `docs/19-文件监控.md`
+- `docs/20-异步同步原语.md`
+- `docs/21-企业接入与验证.md`
