@@ -210,7 +210,7 @@ class RunBenchmarkTripletTest(unittest.TestCase):
             )
             self.assertIn("-DUSE_IOURING", compat_lines)
 
-    def test_io_uring_dry_run_skips_historical_udp_crash_paths(self) -> None:
+    def test_io_uring_dry_run_keeps_b6_udp_baseline_compat_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp) / "triplet-output"
             result = subprocess.run(
@@ -258,7 +258,7 @@ class RunBenchmarkTripletTest(unittest.TestCase):
                 if "env " in line and "B6-Udp-Compat" in line
             )
             self.assertIn("compat-b6/refactored/B6-Udp-Compat", compat_run_lines)
-            self.assertNotIn("compat-b6/baseline/B6-Udp-Compat", compat_run_lines)
+            self.assertIn("compat-b6/baseline/B6-Udp-Compat", compat_run_lines)
 
     def test_dry_run_prints_worktree_build_matrix_and_compat_steps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

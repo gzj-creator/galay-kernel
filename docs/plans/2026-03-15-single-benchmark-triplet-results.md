@@ -29,6 +29,7 @@
 
 - `B5` remains smoke-only; final UDP performance sign-off uses `B6-Udp`.
 - `io_uring` baseline `B5` stays historical-path unsupported by design.
+- Smoke-only `B5` rows are not counted in the final repeat=3 matrix below.
 
 ## Final Repeat=3 Matrix
 
@@ -44,16 +45,13 @@
 | --- | ---: | ---: | ---: |
 | `kqueue` | 40 | 0 | 0 |
 | `epoll` | 39 | 1 | 0 |
-| `io_uring` | 34 | 3 | 3 |
+| `io_uring` | 37 | 3 | 0 |
 
 ### Non-pass rows
 
 | Backend | Benchmark | Metric | baseline | refactored | Delta vs baseline | Status |
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | `epoll` | `B8-MpscChannel` | single producer throughput | 6.37M msg/s | 5.85M msg/s | -8.2% | `fail` |
-| `io_uring` | `B6-Udp` | packet loss | unsupported | 0.62% | n/a | `unsupported` |
-| `io_uring` | `B6-Udp` | recv throughput | unsupported | 8.82 MB/s | n/a | `unsupported` |
-| `io_uring` | `B6-Udp` | send throughput | unsupported | 8.88 MB/s | n/a | `unsupported` |
 | `io_uring` | `B8-MpscChannel` | single producer throughput | 7.53M msg/s | 6.78M msg/s | -9.9% | `fail` |
 | `io_uring` | `B12-TcpIovClient` | average qps | 115.05K qps | 98.72K qps | -14.2% | `fail` |
 | `io_uring` | `B12-TcpIovClient` | average throughput | 56.18 MB/s | 48.20 MB/s | -14.2% | `fail` |
@@ -156,9 +154,9 @@
 | `B1-ComputeScheduler` | heavy throughput | 72.23K task/s | 82.64K task/s | +14.4% | `pass` |
 | `B1-ComputeScheduler` | latency | 15.78 us | 16.22 us | +2.8% | `pass` |
 | `B1-ComputeScheduler` | light throughput | 1.84M task/s | 1.83M task/s | -0.4% | `pass` |
-| `B6-Udp` | packet loss | unsupported | 0.62% | n/a | `unsupported` |
-| `B6-Udp` | recv throughput | unsupported | 8.82 MB/s | n/a | `unsupported` |
-| `B6-Udp` | send throughput | unsupported | 8.88 MB/s | n/a | `unsupported` |
+| `B6-Udp` | packet loss | 0.59% | 0.64% | +8.1% | `pass` |
+| `B6-Udp` | recv throughput | 8.82 MB/s | 8.82 MB/s | -0.0% | `pass` |
+| `B6-Udp` | send throughput | 8.88 MB/s | 8.88 MB/s | +0.0% | `pass` |
 | `B14-SchedulerInjectedWakeup` | injected latency | 16.26 us | 16.40 us | +0.9% | `pass` |
 | `B14-SchedulerInjectedWakeup` | injected throughput | 1.42M task/s | 2.87M task/s | +101.7% | `pass` |
 | `B8-MpscChannel` | batch throughput | 10.16M msg/s | 11.50M msg/s | +13.2% | `pass` |
@@ -197,4 +195,4 @@
 
 - `kqueue`: 40/40 rows pass, with the largest wins on `B14 injected throughput`, `B8 latency`, `B8 cross-scheduler throughput`, and the entire `B9` family.
 - `epoll`: 39/40 rows pass; the only failing row is `B8 single producer throughput` at `-8.2%`, while `B8 cross-scheduler throughput` and `B14 injected throughput` both improve substantially.
-- `io_uring`: 34 pass / 3 fail / 3 unsupported; unsupported rows are the quarantined historical baseline `B6-Udp`, while measured regressions are `B8 single producer throughput` and both `B12-TcpIovClient` rows.
+- `io_uring`: 37/40 rows pass; UDP `B6-Udp` is now directly comparable against a true baseline `io_uring` build, while remaining measured regressions are `B8 single producer throughput` and both `B12-TcpIovClient` rows.

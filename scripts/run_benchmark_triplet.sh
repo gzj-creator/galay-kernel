@@ -89,11 +89,7 @@ main_matrix_extra_skips_for_label() {
 compat_unsupported_reason() {
   local label="$1"
   local benchmark_name="$2"
-
-  if [[ "$BACKEND" == "io_uring" && "$label" == "baseline" && "$benchmark_name" == "B6-Udp" ]]; then
-    printf '%s\n' "historical io_uring UDP timeout lifetime path unsupported for $label"
-    return 0
-  fi
+  : "$label" "$benchmark_name"
 
   return 1
 }
