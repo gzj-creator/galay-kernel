@@ -83,48 +83,46 @@ target_link_libraries(your_app PRIVATE galay-kernel::galay-kernel)
   - `E1-SendfileExample` ~ `E5-UdpEcho` 始终由 `examples/include/*.cc` 生成
   - `E1-SendfileExampleImport` ~ `E9-TimerSleepImport` 仅在模块 target 生效时生成
 - 测试：`test/T*.cc` 会按文件名直接生成同名 target，例如 `test/T13-async_mutex.cc` -> `T13-async_mutex`
-- benchmark：`benchmark/CMakeLists.txt` 明确定义 `B1-ComputeScheduler` 到 `B13-Sendfile`
+- benchmark：`benchmark/CMakeLists.txt` 明确定义 `B1-ComputeScheduler` 到 `B14-SchedulerInjectedWakeup`
 
 ## 性能验证口径（2026-03-15）
 
-- 当前有效对比只保留两组：`baseline=cde3da1` 与 `refactored=current .worktrees/v3`
+- 当前有效对比只保留两组：`baseline=cde3da1` 与 `refactored=current main / v3.0.1`
 - 单 benchmark 的标准入口是 `scripts/run_single_benchmark_triplet.sh`
 - 后端顺序固定为 `kqueue -> epoll -> io_uring`
 - `scripts/run_benchmark_triplet.sh` 是单 backend 低层 orchestrator，`scripts/parse_benchmark_triplet.py` 只输出 `baseline | refactored`
 - `B5-UdpClient` 只做 smoke/stability 检查，最终 UDP 性能结论以 `B6-Udp` 为准
 
-## 当前已验证的命令（2026-03-10）
+## 当前已验证的命令（2026-03-15）
 
 验证环境：macOS、AppleClang 17、CMake 默认 Release、后端为 kqueue。
 
 ```bash
-cmake -S . -B build-docverify -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON -DBUILD_BENCHMARKS=ON
-cmake --build build-docverify --target \
-  T9-file_watcher T13-async_mutex T14-mpsc_channel T18-timer_scheduler \
-  T19-readv_writev T23-sendfile_basic T27-runtime_stress T42-runtime_strict_scheduler_counts \
-  E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-CoroutineBasic E5-UdpEcho \
-  B8-MpscChannel B10-Ringbuffer B13-Sendfile --parallel
+python3 -m unittest \
+  scripts.tests.test_run_test_matrix \
+  scripts.tests.test_run_benchmark_matrix \
+  scripts.tests.test_run_benchmark_triplet \
+  scripts.tests.test_run_single_benchmark_triplet \
+  scripts.tests.test_parse_benchmark_triplet
 
-python3 scripts/check-doc-links.py
-cmake --install build-docverify --prefix "$PWD/build-docverify/install"
-cmake -S test/package-consumer -B build-docverify/package-consumer \
-  -DCMAKE_PREFIX_PATH="$PWD/build-docverify/install"
-cmake --build build-docverify/package-consumer --parallel
-./build-docverify/package-consumer/galay_consumer
+cmake -S . -B build -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON -DBUILD_BENCHMARKS=ON
+cmake --build build --parallel
+
+bash scripts/run_test_matrix.sh "$PWD/build" "$PWD/build/test_matrix_logs_2026_03_15_v301_final"
+
+for name in E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-CoroutineBasic E5-UdpEcho; do
+  ./build/bin/$name
+done
+
+bash scripts/run_benchmark_matrix.sh \
+  --build-dir "$PWD/build" \
+  --log-root "$PWD/build/benchmark_matrix_logs_2026_03_15_v301_final"
 ```
 
 实际结果：
 
-- 文档：`scripts/check-doc-links.py` 通过，输出 `doc check passed: 24 markdown files`
-- 测试：
-  - `T9-file_watcher`：`3/3` 通过
-  - `T13-async_mutex`：`11/11` 通过
-  - `T14-mpsc_channel`：`13/13` 通过
-  - `T18-timer_scheduler`：`8/8` 通过
-  - `T19-readv_writev`：PASS
-  - `T23-sendfile_basic`：`4/4` 通过
-  - `T27-runtime_stress`：`5/5` 通过
-  - `T42-runtime_strict_scheduler_counts`：PASS
+- 脚本单测：`24/24` 通过
+- 测试：全量 `test matrix` fresh 跑完，`71` 个日志全部生成，未出现新的 `FAILED` / `Segmentation fault` / `terminate called`
 - 示例：
   - `E1-SendfileExample`：PASS
   - `E2-TcpEchoServer`：PASS
@@ -132,27 +130,11 @@ cmake --build build-docverify/package-consumer --parallel
   - `E4-CoroutineBasic`：PASS
   - `E5-UdpEcho`：PASS
 - benchmark：
-  - `B8-MpscChannel`：已运行并输出当前吞吐 / 延迟数据
-  - `B10-Ringbuffer`：已运行并输出当前吞吐 / iovec 指标
-  - `B13-Sendfile`：已运行并输出当前 sendfile / read+send 对比数据
-- 安装与消费：
-  - `cmake --install` 成功
-  - `find_package(galay-kernel CONFIG REQUIRED)` 烟雾测试成功
-  - `GALAY_KERNEL_SUPPORTED_HEADERS` / `GALAY_KERNEL_INTERNAL_HEADERS` 元数据存在
-  - 运行安装后的最小 consumer：`consumer exit=0`
-
-模块配置额外验证：
-
-```bash
-cmake -S . -B build-docverify-modules -DENABLE_CPP23_MODULES=ON
-cmake --build build-docverify-modules --target E6-MpscChannelImport
-```
-
-当前真实结果：
-
-- CMake 警告生成器 `Unix Makefiles` 不支持模块
-- CMake 警告 `AppleClang` 不支持该项目的模块配置
-- 因而 `E6-MpscChannelImport` 当前环境下不存在，`make` 报 `No rule to make target`
+  - `B1` ~ `B14` fresh 跑完并生成当前机器日志
+  - `B4/B5-Udp` 已恢复有效收发；`B5` 仍只作为 smoke / stability 检查
+  - `B6-Udp` 本地 kqueue fresh 结果为 `200000/200000`、loss `0.00%`
+- 模块 import 示例：当前环境 `ENABLE_CPP23_MODULES=OFF`，未生成 import target；最近一次专门的模块构建结论仍是 `Unix Makefiles + AppleClang` 下不会生成模块 target
+- 安装与消费：最近一次专门 smoke 验证仍是 `2026-03-10`，细节见 `docs/00-快速开始.md`
 
 ## 当前限制
 

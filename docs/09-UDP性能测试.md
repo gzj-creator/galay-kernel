@@ -11,8 +11,12 @@
 ## 当前稳定事实
 
 - `UdpSocket` 是公开 API，接口与边界以 `docs/02-API参考.md` 为准
-- 2026-03-10 这一轮没有重新采样 UDP benchmark 数字
-- UDP 相关 benchmark / test / example 仍是仓库中的真实资产，但当前主干只把它们当作入口与验证锚点，不把旧数字当作现时承诺
+- 2026-03-15 已重新执行本地 kqueue fresh UDP 验证
+- `T5-udp_socket`、`T6-udp_server`、`T7-udp_client` 已纳入全量 `test matrix` 并通过
+- `E5-UdpEcho` 已 fresh 运行通过
+- `B4/B5-Udp` 已恢复有效收发；当前本地 fresh 结果为 `100000 sent / 99505 received`，loss `0.495%`
+- `B5-UdpClient` 仍只作为 smoke / stability 检查，最终 UDP 性能签收以 `B6-Udp` 为准
+- `B6-Udp` 当前本地 fresh 结果为 `200000/200000`、loss `0.00%`、recv throughput `8.85691 MB/s`
 
 ## 先看主干页
 
@@ -32,6 +36,8 @@
 
 - `UdpSocket`
 - `UDP echo`
+- `B4-UdpServer`
+- `B5-UdpClient`
 - `B6-Udp`
 - `T5-udp_socket`
 - `E5-UdpEcho`
