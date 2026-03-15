@@ -411,19 +411,22 @@ int IOUringReactor::addFileWatch(IOController* controller) {
     return 0;
 }
 
-int IOUringReactor::addCustom(IOController* controller) {
-    auto* custom = controller->getAwaitable<CustomAwaitable>();
-    if (custom == nullptr) return -1;
-    auto* task = custom->front();
+int IOUringReactor::addSequence(IOController* controller) {
+    auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
+    if (sequence == nullptr) return -1;
+    if (sequence->prepareForSubmit() == SequenceProgress::kCompleted) {
+        return kImmediateReady;
+    }
+    auto* task = sequence->front();
     if (task == nullptr) {
         return kImmediateReady;
     }
-    return submitCustomSqe(custom->resolveTaskEventType(*task), task->context, controller);
+    return submitSequenceSqe(sequence->resolveTaskEventType(*task), task->context, controller);
 }
 
-int IOUringReactor::submitCustomSqe(IOEventType type,
-                                    IOContextBase* ctx,
-                                    IOController* controller) {
+int IOUringReactor::submitSequenceSqe(IOEventType type,
+                                      IOContextBase* ctx,
+                                      IOController* controller) {
     auto* token = controller->makeSqeRequest(IOController::READ);
     if (token == nullptr) {
         return -ENOMEM;
@@ -529,8 +532,8 @@ int IOUringReactor::submitCustomSqe(IOEventType type,
         return -1;
     }
 
-    auto* custom = controller->getAwaitable<CustomAwaitable>();
-    custom->m_sqe_type = CUSTOM;
+    auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
+    sequence->m_sqe_type = SEQUENCE;
     io_uring_sqe_set_data(sqe, token);
     return 0;
 }
@@ -802,31 +805,21 @@ void IOUringReactor::processCompletion(struct io_uring_cqe* cqe) {
         }
         break;
     }
-    case CUSTOM: {
-        auto* custom = static_cast<CustomAwaitable*>(base);
-        auto* task = custom->front();
+    case SEQUENCE: {
+        auto* sequence = static_cast<SequenceAwaitableBase*>(base);
+        auto* task = sequence->front();
         if (task) {
-            const bool done = task->context->handleComplete(cqe, controller->m_handle);
-            if (done) {
-                custom->popFront();
-                if (custom->empty()) {
-                    custom->m_waker.wakeUp();
-                } else {
-                    const int ret = addCustom(controller);
-                    if (ret == kImmediateReady) {
-                        custom->m_waker.wakeUp();
-                    } else if (ret < 0) {
-                        detail::storeBackendError(
-                            m_last_error_code, kNotReady, negativeRetOrErrno(ret));
-                        custom->m_waker.wakeUp();
-                    }
-                }
+            const auto progress = sequence->onActiveEvent(cqe, controller->m_handle);
+            if (progress == SequenceProgress::kCompleted) {
+                sequence->m_waker.wakeUp();
             } else {
-                const int ret = addCustom(controller);
-                if (ret < 0) {
+                const int ret = addSequence(controller);
+                if (ret == kImmediateReady) {
+                    sequence->m_waker.wakeUp();
+                } else if (ret < 0) {
                     detail::storeBackendError(
                         m_last_error_code, kNotReady, negativeRetOrErrno(ret));
-                    custom->m_waker.wakeUp();
+                    sequence->m_waker.wakeUp();
                 }
             }
         }

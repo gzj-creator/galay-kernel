@@ -39,7 +39,7 @@ public:
     int addSendTo(IOController* controller);
     int addFileWatch(IOController* controller);
     int addSendFile(IOController* controller);
-    int addCustom(IOController* controller);
+    int addSequence(IOController* controller);
     int remove(IOController* controller);
 
     void poll(int timeout_ms, WakeCoordinator& wake_coordinator);
@@ -47,7 +47,7 @@ public:
 private:
     uint32_t buildEvents(IOController* controller) const;
     int applyEvents(IOController* controller, uint32_t events);
-    int processCustom(IOEventType type, IOController* controller);
+    int processSequence(IOEventType type, IOController* controller);
     void processEvent(struct epoll_event& ev);
     void syncEvents(IOController* controller);
 

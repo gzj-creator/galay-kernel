@@ -32,12 +32,12 @@ inline bool suspendRegisteredAwaitable(AwaitableT& awaitable, std::coroutine_han
 }
 
 template <auto RegisterFn>
-inline bool suspendCustomAwaitable(CustomAwaitable& awaitable, std::coroutine_handle<> handle) {
+inline bool suspendSequenceAwaitable(SequenceAwaitableBase& awaitable, std::coroutine_handle<> handle) {
     awaitable.m_waker = Waker(handle);
 #ifdef USE_IOURING
-    awaitable.m_sqe_type = CUSTOM;
+    awaitable.m_sqe_type = SEQUENCE;
 #endif
-    awaitable.m_controller->fillAwaitable(CUSTOM, &awaitable);
+    awaitable.m_controller->fillAwaitable(SEQUENCE, &awaitable);
     auto* scheduler = awaitable.m_waker.getScheduler();
     if (scheduler == nullptr || scheduler->type() != kIOScheduler) {
         return false;
@@ -174,8 +174,8 @@ std::expected<size_t, IOError> SendFileAwaitable::await_resume() {
     return detail::resumeIOAwaitable<SENDFILE>(*this);
 }
 
-bool CustomAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    return suspendCustomAwaitable<&IOScheduler::addCustom>(*this, handle);
+bool SequenceAwaitableBase::await_suspend(std::coroutine_handle<> handle) {
+    return suspendSequenceAwaitable<&IOScheduler::addSequence>(*this, handle);
 }
 
 }

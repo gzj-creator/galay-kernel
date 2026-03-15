@@ -71,7 +71,7 @@ public:
     // 零拷贝发送文件
     int addSendFile(IOController* controller) override;
 
-    int addCustom(IOController* controller) override;
+    int addSequence(IOController* controller) override;
 
     int remove(IOController* controller) override;
     std::optional<IOError> lastError() const override;

@@ -2,7 +2,7 @@
  * @file Awaitable.h
  * @brief 异步IO可等待对象
  * @author galay-kernel
- * @version 2.0.0
+ * @version 3.1.0
  *
  * @details 三层继承结构：
  * - AwaitableBase: 基类（m_sqe_type, virtual ~）
@@ -10,7 +10,7 @@
  *   - XxxIOContext: IO参数 + result + handleComplete 实现
  *     - XxxAwaitable: m_controller + m_waker + await_* + TimeoutSupport
  * - CloseAwaitable: 直接继承 AwaitableBase（无IO参数，无handleComplete）
- * - CustomAwaitable: 中间层基类，持有 IOTask 队列，用户继承实现自定义组合IO
+ * - SequenceAwaitable: 组合式序列 Awaitable，支持标准 IO 与本地解析步骤
  *
  * 所有 Awaitable 都支持超时：
  * @code
@@ -37,6 +37,9 @@
 #include <expected>
 #include <span>
 #include <array>
+#include <vector>
+#include <memory>
+#include <optional>
 #include <type_traits>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -70,7 +73,7 @@ struct IOContextBase: public AwaitableBase {
     virtual bool handleComplete(GHandle handle) = 0;
 #endif
 
-    // CustomAwaitable 调度时可由上下文动态指定下一次等待方向；
+    // SequenceAwaitable 调度时可由上下文动态指定下一次等待方向；
     // 返回 INVALID 表示沿用静态 task.type。
     virtual IOEventType type() const { return IOEventType::INVALID; }
 };
@@ -147,6 +150,24 @@ constexpr IOEventType customAwaitableDefaultEvent() {
         return IOEventType::INVALID;
     }
 }
+
+template <typename T>
+struct is_expected : std::false_type {};
+
+template <typename T, typename E>
+struct is_expected<std::expected<T, E>> : std::true_type {};
+
+template <typename ResultT>
+constexpr bool is_expected_v = is_expected<std::remove_cvref_t<ResultT>>::value;
+
+template <typename ResultT>
+struct expected_traits;
+
+template <typename T, typename E>
+struct expected_traits<std::expected<T, E>> {
+    using value_type = T;
+    using error_type = E;
+};
 
 }  // namespace detail
 
@@ -671,63 +692,31 @@ struct SendFileAwaitable: public SendFileIOContext, public TimeoutSupport<SendFi
     Waker m_waker;
 };
 
-// ==================== CustomAwaitable（中间层基类） ====================
+enum class SequenceProgress {
+    kNeedWait,
+    kCompleted,
+};
 
-/**
- * @brief 自定义组合IO操作的基类
- *
- * @details 用户通过继承此类，在构造函数中用 addTask 填充 IO 队列，
- * 并实现 await_ready / await_resume 来定义返回值类型。
- *
- * 三层结构：
- *   AwaitableBase
- *     └── CustomAwaitable          // 中间层：IOTask队列 + await_suspend
- *           └── MyCustomAwaitable  // 用户层：填充队列 + await_resume
- *
- * @code
- * struct SendThenRecv : public CustomAwaitable {
- *     SendIOContext m_send;
- *     RecvIOContext m_recv;
- *
- *     SendThenRecv(IOController* ctrl, const char* data, size_t len, char* buf, size_t bufLen)
- *         : CustomAwaitable(ctrl), m_send(data, len), m_recv(buf, bufLen)
- *     {
- *         addTask(SEND, &m_send);
- *         addTask(RECV, &m_recv);
- *     }
- *
- *     bool await_ready() { return false; }
- *     std::expected<size_t, IOError> await_resume() {
- *         onCompleted();
- *         return std::move(m_recv.m_result);
- *     }
- * };
- * @endcode
- */
-struct CustomAwaitable: public AwaitableBase {
+enum class ParseStatus {
+    kNeedMore,
+    kContinue,
+    kCompleted,
+};
+
+struct SequenceAwaitableBase: public AwaitableBase {
     struct IOTask {
         IOEventType type;
-        IOContextBase* context;  // 非拥有指针，生命周期由子类管理
+        void* task = nullptr;
+        IOContextBase* context = nullptr;
     };
 
-    CustomAwaitable(IOController* controller)
+    explicit SequenceAwaitableBase(IOController* controller)
         : m_controller(controller) {}
 
-    /// 添加一个 IO 任务到队列（IOContext 生命周期由子类负责）
-    void addTask(IOEventType type, IOContextBase* ctx) {
-        m_tasks.push_back(IOTask{type, ctx});
-    }
-
-    IOTask* front() {
-        if (m_cursor >= m_tasks.size()) return nullptr;
-        return &m_tasks[m_cursor];
-    }
-
-    void popFront() {
-        if (m_cursor < m_tasks.size()) ++m_cursor;
-    }
-
-    bool empty() const { return m_cursor >= m_tasks.size(); }
+    virtual IOTask* front() = 0;
+    virtual const IOTask* front() const = 0;
+    virtual void popFront() = 0;
+    virtual bool empty() const = 0;
 
     IOEventType resolveTaskEventType(const IOTask& task) const {
         if (task.context == nullptr) {
@@ -737,81 +726,521 @@ struct CustomAwaitable: public AwaitableBase {
         return desired == IOEventType::INVALID ? task.type : desired;
     }
 
-    /// 子类在 await_resume 中调用，清理调度器注册
     void onCompleted() {
-        m_controller->removeAwaitable(CUSTOM);
+        m_controller->removeAwaitable(SEQUENCE);
     }
 
     bool await_suspend(std::coroutine_handle<> handle);
 
-    /// 调度层错误（addCustom 失败时设置），子类 await_resume 应优先检查
-    std::optional<IOError> m_error;
+#ifdef USE_IOURING
+    virtual SequenceProgress prepareForSubmit() = 0;
+    virtual SequenceProgress onActiveEvent(struct io_uring_cqe* cqe, GHandle handle) = 0;
+#else
+    virtual SequenceProgress prepareForSubmit(GHandle handle) = 0;
+    virtual SequenceProgress onActiveEvent(GHandle handle) = 0;
+#endif
 
+    std::optional<IOError> m_error;
     IOController* m_controller;
     Waker m_waker;
-    std::vector<IOTask> m_tasks;
-    size_t m_cursor = 0;
 };
 
-template <typename OwnerT, typename BaseContextT, auto Handler>
-struct CustomStepContext : public BaseContextT {
-    static_assert(std::is_base_of_v<IOContextBase, BaseContextT>,
-                  "CustomStepContext requires an IOContextBase-derived base context");
+template <typename ResultT, size_t InlineN = 4>
+class SequenceAwaitable;
 
-    template <typename... Args>
-    explicit CustomStepContext(OwnerT* owner, Args&&... args)
-        : BaseContextT(std::forward<Args>(args)...)
-        , m_owner(owner) {}
+template <typename ResultT, size_t InlineN = 4>
+class SequenceOps {
+public:
+    explicit SequenceOps(SequenceAwaitable<ResultT, InlineN>& owner)
+        : m_owner(owner) {}
+
+    template <typename StepT>
+    StepT& queue(StepT& step) {
+        m_owner.queue(step);
+        return step;
+    }
+
+    template <typename... StepTs>
+    void queueMany(StepTs&... steps) {
+        (queue(steps), ...);
+    }
+
+    void clear() {
+        m_owner.clear();
+    }
+
+    template <typename ValueT>
+    void complete(ValueT&& value) {
+        m_owner.complete(std::forward<ValueT>(value));
+    }
+
+private:
+    SequenceAwaitable<ResultT, InlineN>& m_owner;
+};
+
+template <typename ResultT, size_t InlineN>
+class SequenceAwaitable : public SequenceAwaitableBase {
+public:
+    struct TaskBase {
+        virtual ~TaskBase() = default;
+        virtual IOContextBase* contextBase() = 0;
+        virtual IOEventType defaultEventType() const = 0;
+        virtual void beforeSubmit() {}
+        virtual bool isLocal() const = 0;
+#ifdef USE_IOURING
+        virtual bool onEvent(SequenceAwaitable& owner, struct io_uring_cqe* cqe, GHandle handle) = 0;
+#else
+        virtual bool onReady(SequenceAwaitable& owner, GHandle handle) = 0;
+        virtual bool onEvent(SequenceAwaitable& owner, GHandle handle) = 0;
+#endif
+    };
+
+    explicit SequenceAwaitable(IOController* controller)
+        : SequenceAwaitableBase(controller) {}
+
+    bool await_ready() {
+        return m_result_set;
+    }
+
+    auto await_resume() -> ResultT {
+        onCompleted();
+        if (m_result_set) {
+            return std::move(*m_result);
+        }
+        if (m_error.has_value()) {
+            if constexpr (detail::is_expected_v<ResultT>) {
+                using ErrorT = typename detail::expected_traits<ResultT>::error_type;
+                if constexpr (std::is_constructible_v<ErrorT, IOError>) {
+                    return std::unexpected(ErrorT(*m_error));
+                }
+            }
+        }
+        if constexpr (detail::is_expected_v<ResultT>) {
+            using ErrorT = typename detail::expected_traits<ResultT>::error_type;
+            if constexpr (std::is_constructible_v<ErrorT, IOError>) {
+                return std::unexpected(ErrorT(IOError(kNotReady, errno)));
+            }
+        }
+        std::abort();
+    }
+
+    template <typename StepT>
+    StepT& queue(StepT& step) {
+        static_assert(std::is_base_of_v<TaskBase, std::remove_cvref_t<StepT>>,
+                      "SequenceAwaitable::queue requires a Sequence task");
+        emplaceTask(step.defaultEventType(), step.contextBase(), &step);
+        return step;
+    }
+
+    TaskBase& queue(TaskBase& task) {
+        emplaceTask(task.defaultEventType(), task.contextBase(), &task);
+        return task;
+    }
+
+    template <typename StepT>
+    StepT& queue(IOEventType type, StepT& step) {
+        static_assert(std::is_base_of_v<TaskBase, std::remove_cvref_t<StepT>>,
+                      "SequenceAwaitable::queue requires a Sequence task");
+        emplaceTask(type, step.contextBase(), &step);
+        return step;
+    }
+
+    TaskBase& queue(IOEventType type, TaskBase& task) {
+        emplaceTask(type, task.contextBase(), &task);
+        return task;
+    }
+
+    template <typename... StepTs>
+    void queueMany(StepTs&... steps) {
+        (queue(steps), ...);
+    }
+
+    void clear() {
+        m_head = 0;
+        m_size = 0;
+    }
+
+    template <typename ValueT>
+    void complete(ValueT&& value) {
+        m_result = std::forward<ValueT>(value);
+        m_result_set = true;
+        clear();
+    }
+
+    void fail(IOError error) {
+        m_error = std::move(error);
+        clear();
+    }
+
+    SequenceOps<ResultT, InlineN> ops() {
+        return SequenceOps<ResultT, InlineN>(*this);
+    }
+
+    IOTask* front() override {
+        if (m_size == 0) {
+            return nullptr;
+        }
+        return &m_tasks[m_head];
+    }
+
+    const IOTask* front() const override {
+        if (m_size == 0) {
+            return nullptr;
+        }
+        return &m_tasks[m_head];
+    }
+
+    void popFront() override {
+        if (m_size == 0) {
+            return;
+        }
+        m_head = (m_head + 1) % InlineN;
+        --m_size;
+    }
+
+    bool empty() const override {
+        return m_size == 0;
+    }
 
 #ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
-        return (m_owner->*Handler)(*this, cqe, handle);
+    SequenceProgress prepareForSubmit() override {
+        while (auto* entry = front()) {
+            auto* task = static_cast<TaskBase*>(entry->task);
+            if (!task) {
+                popFront();
+                continue;
+            }
+            if (task->isLocal()) {
+                task->onEvent(*this, nullptr, m_controller->m_handle);
+                consumeFrontIfSame(task);
+                if (m_result_set) {
+                    return SequenceProgress::kCompleted;
+                }
+                continue;
+            }
+            task->beforeSubmit();
+            entry->context = task->contextBase();
+            return SequenceProgress::kNeedWait;
+        }
+        return SequenceProgress::kCompleted;
+    }
+
+    SequenceProgress onActiveEvent(struct io_uring_cqe* cqe, GHandle handle) override {
+        auto* entry = front();
+        if (!entry) {
+            return SequenceProgress::kCompleted;
+        }
+        auto* task = static_cast<TaskBase*>(entry->task);
+        if (!task) {
+            popFront();
+            return prepareForSubmit();
+        }
+        if (task->onEvent(*this, cqe, handle)) {
+            consumeFrontIfSame(task);
+        }
+        if (m_result_set) {
+            return SequenceProgress::kCompleted;
+        }
+        return prepareForSubmit();
     }
 #else
-    bool handleComplete(GHandle handle) override {
-        return (m_owner->*Handler)(*this, handle);
+    SequenceProgress prepareForSubmit(GHandle handle) override {
+        while (auto* entry = front()) {
+            auto* task = static_cast<TaskBase*>(entry->task);
+            if (!task) {
+                popFront();
+                continue;
+            }
+            task->beforeSubmit();
+            entry->context = task->contextBase();
+            if (task->onReady(*this, handle)) {
+                consumeFrontIfSame(task);
+                if (m_result_set) {
+                    return SequenceProgress::kCompleted;
+                }
+                continue;
+            }
+            return SequenceProgress::kNeedWait;
+        }
+        return SequenceProgress::kCompleted;
+    }
+
+    SequenceProgress onActiveEvent(GHandle handle) override {
+        auto* entry = front();
+        if (!entry) {
+            return SequenceProgress::kCompleted;
+        }
+        auto* task = static_cast<TaskBase*>(entry->task);
+        if (!task) {
+            popFront();
+            return prepareForSubmit(handle);
+        }
+        if (task->onEvent(*this, handle)) {
+            consumeFrontIfSame(task);
+        }
+        if (m_result_set) {
+            return SequenceProgress::kCompleted;
+        }
+        return prepareForSubmit(handle);
     }
 #endif
 
 private:
-    OwnerT* m_owner;
+    void emplaceTask(IOEventType type, IOContextBase* context, TaskBase* task) {
+        if (m_size >= InlineN) {
+            std::abort();
+        }
+        const size_t index = (m_head + m_size) % InlineN;
+        m_tasks[index] = IOTask{type, task, context};
+        ++m_size;
+    }
+
+    void consumeFrontIfSame(TaskBase* task) {
+        auto* entry = front();
+        if (entry && entry->task == task) {
+            popFront();
+        }
+    }
+
+    std::array<IOTask, InlineN> m_tasks{};
+    size_t m_head = 0;
+    size_t m_size = 0;
+    std::optional<ResultT> m_result;
+    bool m_result_set = false;
 };
 
-struct CustomSequenceAwaitable : public CustomAwaitable {
-    using CustomAwaitable::CustomAwaitable;
-    using CustomAwaitable::await_suspend;
+template <typename ResultT, size_t InlineN, typename FlowT, typename BaseContextT, auto Handler>
+struct SequenceStep : public SequenceAwaitable<ResultT, InlineN>::TaskBase, public BaseContextT {
+    static_assert(std::is_base_of_v<IOContextBase, BaseContextT>,
+                  "SequenceStep requires an IOContextBase-derived base context");
 
-    bool await_ready() { return false; }
+    template <typename... Args>
+    explicit SequenceStep(FlowT* owner, Args&&... args)
+        : BaseContextT(std::forward<Args>(args)...)
+        , m_owner(owner) {}
 
-    template <typename ContextT>
-    ContextT& addStep(ContextT& context) {
-        static_assert(std::is_base_of_v<IOContextBase, std::remove_cvref_t<ContextT>>,
-                      "CustomSequenceAwaitable::addStep requires an IOContextBase-derived context");
-        constexpr IOEventType type = detail::customAwaitableDefaultEvent<ContextT>();
-        static_assert(type != IOEventType::INVALID,
-                      "CustomSequenceAwaitable::addStep cannot infer IOEventType for this context");
-        CustomAwaitable::addTask(type, &context);
-        return context;
+    IOContextBase* contextBase() override {
+        return this;
     }
 
-    template <typename ContextT>
-    ContextT& addStep(IOEventType type, ContextT& context) {
-        static_assert(std::is_base_of_v<IOContextBase, std::remove_cvref_t<ContextT>>,
-                      "CustomSequenceAwaitable::addStep requires an IOContextBase-derived context");
-        CustomAwaitable::addTask(type, &context);
-        return context;
+    IOEventType defaultEventType() const override {
+        return detail::customAwaitableDefaultEvent<BaseContextT>();
     }
 
-    template <typename... ContextTs>
-    void addSteps(ContextTs&... contexts) {
-        (addStep(contexts), ...);
+    bool isLocal() const override {
+        return false;
     }
 
-    template <typename ResultT>
-    decltype(auto) complete(ResultT&& result) {
-        onCompleted();
-        return std::forward<ResultT>(result);
+#ifdef USE_IOURING
+    bool onEvent(SequenceAwaitable<ResultT, InlineN>& owner, struct io_uring_cqe* cqe, GHandle handle) override {
+        if (!BaseContextT::handleComplete(cqe, handle)) {
+            return false;
+        }
+        auto ops = owner.ops();
+        (m_owner->*Handler)(ops, static_cast<BaseContextT&>(*this));
+        return true;
     }
+#else
+    bool onReady(SequenceAwaitable<ResultT, InlineN>& owner, GHandle handle) override {
+        if (!BaseContextT::handleComplete(handle)) {
+            return false;
+        }
+        auto ops = owner.ops();
+        (m_owner->*Handler)(ops, static_cast<BaseContextT&>(*this));
+        return true;
+    }
+
+    bool onEvent(SequenceAwaitable<ResultT, InlineN>& owner, GHandle handle) override {
+        if (!BaseContextT::handleComplete(handle)) {
+            return false;
+        }
+        auto ops = owner.ops();
+        (m_owner->*Handler)(ops, static_cast<BaseContextT&>(*this));
+        return true;
+    }
+#endif
+
+private:
+    FlowT* m_owner;
+};
+
+template <typename ResultT, size_t InlineN, typename FlowT, auto Handler>
+struct LocalSequenceStep : public SequenceAwaitable<ResultT, InlineN>::TaskBase {
+    explicit LocalSequenceStep(FlowT* owner)
+        : m_owner(owner) {}
+
+    IOContextBase* contextBase() override {
+        return nullptr;
+    }
+
+    IOEventType defaultEventType() const override {
+        return IOEventType::INVALID;
+    }
+
+    bool isLocal() const override {
+        return true;
+    }
+
+#ifdef USE_IOURING
+    bool onEvent(SequenceAwaitable<ResultT, InlineN>& owner, struct io_uring_cqe*, GHandle) override {
+        auto ops = owner.ops();
+        (m_owner->*Handler)(ops);
+        return true;
+    }
+#else
+    bool onReady(SequenceAwaitable<ResultT, InlineN>& owner, GHandle) override {
+        auto ops = owner.ops();
+        (m_owner->*Handler)(ops);
+        return true;
+    }
+
+    bool onEvent(SequenceAwaitable<ResultT, InlineN>& owner, GHandle) override {
+        auto ops = owner.ops();
+        (m_owner->*Handler)(ops);
+        return true;
+    }
+#endif
+
+private:
+    FlowT* m_owner;
+};
+
+template <typename ResultT, size_t InlineN, typename FlowT, auto Handler>
+struct ParserSequenceStep : public SequenceAwaitable<ResultT, InlineN>::TaskBase {
+    explicit ParserSequenceStep(FlowT* owner,
+                                typename SequenceAwaitable<ResultT, InlineN>::TaskBase* rearm_step)
+        : m_owner(owner)
+        , m_rearm_step(rearm_step) {}
+
+    IOContextBase* contextBase() override {
+        return nullptr;
+    }
+
+    IOEventType defaultEventType() const override {
+        return IOEventType::INVALID;
+    }
+
+    bool isLocal() const override {
+        return true;
+    }
+
+#ifdef USE_IOURING
+    bool onEvent(SequenceAwaitable<ResultT, InlineN>& owner, struct io_uring_cqe*, GHandle) override {
+        return run(owner);
+    }
+#else
+    bool onReady(SequenceAwaitable<ResultT, InlineN>& owner, GHandle) override {
+        return run(owner);
+    }
+
+    bool onEvent(SequenceAwaitable<ResultT, InlineN>& owner, GHandle) override {
+        return run(owner);
+    }
+#endif
+
+private:
+    bool run(SequenceAwaitable<ResultT, InlineN>& owner) {
+        auto ops = owner.ops();
+        const ParseStatus status = (m_owner->*Handler)(ops);
+        switch (status) {
+            case ParseStatus::kNeedMore:
+                if (m_rearm_step == nullptr || m_rearm_step->isLocal()) {
+                    owner.fail(IOError(kParamInvalid, 0));
+                    return true;
+                }
+                owner.queue(*m_rearm_step);
+                owner.queue(*this);
+                return true;
+            case ParseStatus::kContinue:
+                owner.queue(*this);
+                return true;
+            case ParseStatus::kCompleted:
+                return true;
+        }
+        owner.fail(IOError(kParamInvalid, 0));
+        return true;
+    }
+
+    FlowT* m_owner;
+    typename SequenceAwaitable<ResultT, InlineN>::TaskBase* m_rearm_step;
+};
+
+template <typename ResultT, size_t InlineN, typename FlowT>
+class AwaitableBuilder : public SequenceAwaitable<ResultT, InlineN> {
+    using Base = SequenceAwaitable<ResultT, InlineN>;
+    using TaskBase = typename Base::TaskBase;
+
+public:
+    AwaitableBuilder(IOController* controller, FlowT& flow)
+        : Base(controller)
+        , m_flow(&flow)
+    {
+        m_owned_steps.reserve(InlineN);
+    }
+
+    template <auto Handler>
+    AwaitableBuilder& local() {
+        auto* step = ownStep<LocalSequenceStep<ResultT, InlineN, FlowT, Handler>>(m_flow);
+        this->queue(*step);
+        return *this;
+    }
+
+    template <auto Handler>
+    AwaitableBuilder& parse() {
+        auto* step = ownStep<ParserSequenceStep<ResultT, InlineN, FlowT, Handler>>(m_flow, m_last_io_step);
+        this->queue(*step);
+        return *this;
+    }
+
+    template <auto Handler>
+    AwaitableBuilder& finish() {
+        return local<Handler>();
+    }
+
+    template <auto Handler>
+    AwaitableBuilder& recv(char* buffer, size_t length) {
+        auto* step = ownStep<SequenceStep<ResultT, InlineN, FlowT, RecvIOContext, Handler>>(m_flow, buffer, length);
+        this->queue(*step);
+        m_last_io_step = step;
+        return *this;
+    }
+
+    template <auto Handler>
+    AwaitableBuilder& send(const char* buffer, size_t length) {
+        auto* step = ownStep<SequenceStep<ResultT, InlineN, FlowT, SendIOContext, Handler>>(m_flow, buffer, length);
+        this->queue(*step);
+        m_last_io_step = step;
+        return *this;
+    }
+
+    template <auto Handler>
+    AwaitableBuilder& connect(const Host& host) {
+        auto* step = ownStep<SequenceStep<ResultT, InlineN, FlowT, ConnectIOContext, Handler>>(m_flow, host);
+        this->queue(*step);
+        m_last_io_step = step;
+        return *this;
+    }
+
+    AwaitableBuilder&& build() & {
+        return std::move(*this);
+    }
+
+    AwaitableBuilder&& build() && {
+        return std::move(*this);
+    }
+
+private:
+    template <typename StepT, typename... Args>
+    StepT* ownStep(Args&&... args) {
+        auto step = std::make_unique<StepT>(std::forward<Args>(args)...);
+        StepT* raw = step.get();
+        m_owned_steps.push_back(std::move(step));
+        return raw;
+    }
+
+    FlowT* m_flow;
+    std::vector<std::unique_ptr<TaskBase>> m_owned_steps;
+    TaskBase* m_last_io_step = nullptr;
 };
 
 

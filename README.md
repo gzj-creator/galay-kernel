@@ -21,10 +21,24 @@
 - 协程与任务：`Coroutine`、`Task<T>`、`JoinHandle<T>::join()/wait()`、`blockOn()`、`spawn()`、`spawnBlocking()`、`sleep(...)`
 - 网络 IO：`galay::async::TcpSocket`、`galay::async::UdpSocket`
 - 文件 IO：`galay::async::AsyncFile`；Linux epoll 下额外提供 `galay::async::AioFile`
+- 低层组合扩展：`SequenceAwaitable<ResultT, InlineN>`、`AwaitableBuilder<ResultT, InlineN, FlowT>`、`ParseStatus`、`ByteQueueView`
 - 并发原语：`AsyncMutex`、`MpscChannel<T>`、`UnsafeChannel<T>`、`AsyncWaiter<T>`
 - 定时器：`TimerScheduler` + 线程安全分层时间轮
 - 文件监控：`galay::async::FileWatcher`
 - 向量 IO / 零拷贝：`readv` / `writev` / `sendfile`
+
+## v3.1.0 非兼容升级
+
+- 旧 `CustomAwaitable` / `CustomSequenceAwaitable` / `addCustom(...)` 扩展模型已移除，不再保留兼容层。
+- 自定义组合 IO 统一改为 `SequenceAwaitable + SequenceStep + AwaitableBuilder`。
+- 协议解析推荐使用 `AwaitableBuilder::parse(...) + ParseStatus + ByteQueueView`：
+  - `ParseStatus::kNeedMore` 会自动重挂最近一个读步骤，不提前唤醒协程
+  - `ParseStatus::kContinue` 会继续本地 parse loop，适合单次 `recv` 吃完粘包 backlog
+  - `ByteQueueView` 用于累积半包、读取协议头和消费已解析字节
+- 真实回归入口：
+  - 线性组合：`test/T63-custom_sequence_awaitable.cc`
+  - 半包不提前唤醒：`test/T76-sequence_parser_need_more.cc`
+  - 粘包本地连读：`test/T77-sequence_parser_coalesced_frames.cc`
 
 ## 构建前提
 
@@ -87,7 +101,7 @@ target_link_libraries(your_app PRIVATE galay-kernel::galay-kernel)
 
 ## 性能验证口径（2026-03-15）
 
-- 当前有效对比只保留两组：`baseline=cde3da1` 与 `refactored=current main / v3.0.1`
+- 当前本地 fresh 验证对应 `v3.1.0` worktree；历史 triplet 对比仍以 `baseline=cde3da1`、`refactored=v3.0.1(59bc155)` 为准
 - 单 benchmark 的标准入口是 `scripts/run_single_benchmark_triplet.sh`
 - 后端顺序固定为 `kqueue -> epoll -> io_uring`
 - `scripts/run_benchmark_triplet.sh` 是单 backend 低层 orchestrator，`scripts/parse_benchmark_triplet.py` 只输出 `baseline | refactored`
@@ -108,7 +122,7 @@ python3 -m unittest \
 cmake -S . -B build -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON -DBUILD_BENCHMARKS=ON
 cmake --build build --parallel
 
-bash scripts/run_test_matrix.sh "$PWD/build" "$PWD/build/test_matrix_logs_2026_03_15_v301_final"
+bash scripts/run_test_matrix.sh "$PWD/build" "$PWD/build/test_matrix_logs_2026_03_15_v310_final_rerun"
 
 for name in E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-CoroutineBasic E5-UdpEcho; do
   ./build/bin/$name
@@ -116,13 +130,13 @@ done
 
 bash scripts/run_benchmark_matrix.sh \
   --build-dir "$PWD/build" \
-  --log-root "$PWD/build/benchmark_matrix_logs_2026_03_15_v301_final"
+  --log-root "$PWD/build/benchmark_matrix_logs_2026_03_15_v310_final"
 ```
 
 实际结果：
 
 - 脚本单测：`24/24` 通过
-- 测试：全量 `test matrix` fresh 跑完，`71` 个日志全部生成，未出现新的 `FAILED` / `Segmentation fault` / `terminate called`
+- 测试：全量 `test matrix` fresh 跑完，`74` 个日志全部生成，未出现新的 `FAILED` / `Segmentation fault` / `terminate called`
 - 示例：
   - `E1-SendfileExample`：PASS
   - `E2-TcpEchoServer`：PASS
@@ -132,7 +146,8 @@ bash scripts/run_benchmark_matrix.sh \
 - benchmark：
   - `B1` ~ `B14` fresh 跑完并生成当前机器日志
   - `B4/B5-Udp` 已恢复有效收发；`B5` 仍只作为 smoke / stability 检查
-  - `B6-Udp` 本地 kqueue fresh 结果为 `200000/200000`、loss `0.00%`
+  - `B5-UdpClient` 本地 kqueue fresh 结果为 `100000 sent / 99507 received`、loss `0.493%`
+  - `B6-Udp` 本地 kqueue fresh 结果为 `200000/200000`、loss `0.00%`、recv throughput `8.86656 MB/s`
 - 模块 import 示例：当前环境 `ENABLE_CPP23_MODULES=OFF`，未生成 import target；最近一次专门的模块构建结论仍是 `Unix Makefiles + AppleClang` 下不会生成模块 target
 - 安装与消费：最近一次专门 smoke 验证仍是 `2026-03-10`，细节见 `docs/00-快速开始.md`
 

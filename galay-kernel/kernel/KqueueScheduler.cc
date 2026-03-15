@@ -114,9 +114,9 @@ int KqueueScheduler::addSendFile(IOController* controller)
     return m_reactor.addSendFile(controller);
 }
 
-int KqueueScheduler::addCustom(IOController* controller)
+int KqueueScheduler::addSequence(IOController* controller)
 {
-    return m_reactor.addCustom(controller);
+    return m_reactor.addSequence(controller);
 }
 
 int KqueueScheduler::remove(IOController* controller)

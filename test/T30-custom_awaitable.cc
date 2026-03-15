@@ -1,8 +1,8 @@
 /**
  * @file T30-custom_awaitable.cc
- * @brief 用途：验证自定义 Awaitable 在当前内核中的接入与执行语义。
- * 关键覆盖点：自定义 `await_ready/await_suspend/await_resume`、状态传递、调度器集成。
- * 通过条件：自定义 Awaitable 流程断言全部成立，测试返回 0。
+ * @brief 用途：验证显式 SequenceAwaitable 步骤组合在当前内核中的接入与执行语义。
+ * 关键覆盖点：显式 `SequenceStep` 编排、状态传递、调度器集成、SEND/RECV 双阶段组合。
+ * 通过条件：显式 sequence 流程断言全部成立，测试返回 0。
  */
 
 #include "galay-kernel/kernel/Coroutine.h"
@@ -39,39 +39,37 @@ std::atomic<int> g_passed{0};
 std::atomic<int> g_failed{0};
 std::atomic<int> g_total{0};
 
-// ==================== 用户自定义 Awaitable ====================
+using SequenceResult = std::expected<size_t, IOError>;
+using SequenceT = SequenceAwaitable<SequenceResult, 4>;
 
-/**
- * 先 SEND 再 RECV，一个 co_await 完成两步 IO。
- * await_resume 返回 RECV 的结果。
- */
-struct SendThenRecvAwaitable : public CustomAwaitable {
-    SendIOContext m_send;
-    RecvIOContext m_recv;
+struct SendThenRecvFlow {
+    void onSend(SequenceOps<SequenceResult, 4>& ops, SendIOContext&);
+    void onRecv(SequenceOps<SequenceResult, 4>& ops, RecvIOContext& recv_ctx);
 
-    SendThenRecvAwaitable(IOController* ctrl,
-                          const char* sendData, size_t sendLen,
-                          char* recvBuf, size_t recvBufLen)
-        : CustomAwaitable(ctrl)
-        , m_send(sendData, sendLen)
-        , m_recv(recvBuf, recvBufLen)
-    {
-        addTask(IOEventType::SEND, &m_send);
-        addTask(IOEventType::RECV, &m_recv);
+    using SendStep = SequenceStep<SequenceResult, 4, SendThenRecvFlow, SendIOContext, &SendThenRecvFlow::onSend>;
+    using RecvStep = SequenceStep<SequenceResult, 4, SendThenRecvFlow, RecvIOContext, &SendThenRecvFlow::onRecv>;
+
+    SendThenRecvFlow(const char* send_data, size_t send_len, char* recv_buf, size_t recv_buf_len)
+        : send(this, send_data, send_len)
+        , recv(this, recv_buf, recv_buf_len) {}
+
+    auto make(IOController* controller) -> SequenceT {
+        SequenceT awaitable(controller);
+        awaitable.queue(send);
+        return awaitable;
     }
 
-    bool await_ready() { return false; }
-
-    std::expected<size_t, IOError> await_resume() {
-        onCompleted();
-        return std::move(m_recv.m_result);
-    }
-
-    /// 获取 SEND 结果
-    const auto& sendResult() const { return m_send.m_result; }
+    SendStep send;
+    RecvStep recv;
 };
 
-// ==================== 测试协程 ====================
+inline void SendThenRecvFlow::onSend(SequenceOps<SequenceResult, 4>& ops, SendIOContext&) {
+    ops.queue(recv);
+}
+
+inline void SendThenRecvFlow::onRecv(SequenceOps<SequenceResult, 4>& ops, RecvIOContext& recv_ctx) {
+    ops.complete(std::move(recv_ctx.m_result));
+}
 
 Coroutine serverCoroutine([[maybe_unused]] IOScheduler* scheduler, int listen_fd)
 {
@@ -92,28 +90,25 @@ Coroutine serverCoroutine([[maybe_unused]] IOScheduler* scheduler, int listen_fd
     fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
     LogInfo("[Server] Client connected, fd={}", client_fd);
 
-    // 一个 co_await 完成 SEND "hello" + RECV 回复
     IOController ctrl(GHandle{.fd = client_fd});
     const std::string greeting = "hello";
     char recvBuf[256]{};
 
-    SendThenRecvAwaitable custom(&ctrl, greeting.c_str(), greeting.size(),
-                                  recvBuf, sizeof(recvBuf) - 1);
+    SendThenRecvFlow flow(greeting.c_str(), greeting.size(), recvBuf, sizeof(recvBuf) - 1);
+    auto sequence = flow.make(&ctrl);
 
-    LogInfo("[Server] co_await SendThenRecvAwaitable...");
-    auto recvResult = co_await custom;
-    LogInfo("[Server] SendThenRecvAwaitable completed");
+    LogInfo("[Server] co_await explicit SequenceAwaitable...");
+    auto recvResult = co_await sequence;
+    LogInfo("[Server] SequenceAwaitable completed");
 
-    // 检查 SEND
     bool sendOk = false;
-    if (custom.sendResult().has_value()) {
-        LogInfo("[Server] SEND: {} bytes", custom.sendResult().value());
-        sendOk = (custom.sendResult().value() == greeting.size());
+    if (flow.send.m_result.has_value()) {
+        LogInfo("[Server] SEND: {} bytes", flow.send.m_result.value());
+        sendOk = (flow.send.m_result.value() == greeting.size());
     } else {
-        LogError("[Server] SEND failed: {}", custom.sendResult().error().message());
+        LogError("[Server] SEND failed: {}", flow.send.m_result.error().message());
     }
 
-    // 检查 RECV
     bool recvOk = false;
     if (recvResult.has_value()) {
         std::string received(recvBuf, recvResult.value());
@@ -160,9 +155,7 @@ Coroutine clientCoroutine([[maybe_unused]] IOScheduler* scheduler, const char* i
         g_failed++;
         co_return;
     }
-    LogInfo("[Client] Connected");
 
-    // RECV 服务端的 greeting
     char buf[256]{};
     RecvAwaitable recvAw(&ctrl, buf, sizeof(buf) - 1);
     auto recvResult = co_await recvAw;
@@ -172,10 +165,7 @@ Coroutine clientCoroutine([[maybe_unused]] IOScheduler* scheduler, const char* i
         g_failed++;
         co_return;
     }
-    std::string received(buf, recvResult.value());
-    LogInfo("[Client] Received: \"{}\"", received);
 
-    // SEND 回复
     const std::string reply = "world";
     SendAwaitable sendAw(&ctrl, reply.c_str(), reply.size());
     auto sendResult = co_await sendAw;
@@ -185,13 +175,10 @@ Coroutine clientCoroutine([[maybe_unused]] IOScheduler* scheduler, const char* i
         g_failed++;
         co_return;
     }
-    LogInfo("[Client] Sent: \"{}\" ({} bytes)", reply, sendResult.value());
 
-    if (received == "hello") {
-        LogInfo("[Client] PASS");
+    if (std::string(buf, recvResult.value()) == "hello") {
         g_passed++;
     } else {
-        LogError("[Client] FAIL: expected \"hello\", got \"{}\"", received);
         g_failed++;
     }
 
@@ -202,23 +189,13 @@ Coroutine clientCoroutine([[maybe_unused]] IOScheduler* scheduler, const char* i
 int main()
 {
     LogInfo("========================================");
-    LogInfo("CustomAwaitable Inheritance Test");
-    LogInfo("  SendThenRecvAwaitable: SEND + RECV");
+    LogInfo("SequenceAwaitable Explicit Step Test");
+    LogInfo("  SendThenRecvFlow: SEND + RECV");
     LogInfo("========================================");
 
-#ifdef USE_IOURING
-    LogInfo("Backend: io_uring");
-#elif defined(USE_EPOLL)
-    LogInfo("Backend: epoll");
-#elif defined(USE_KQUEUE)
-    LogInfo("Backend: kqueue");
-#endif
-
     const int PORT = 20030;
-
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0) {
-        LogError("Failed to create listen socket");
         return 1;
     }
 
@@ -232,42 +209,31 @@ int main()
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(PORT);
-
-    if (bind(listen_fd, (sockaddr*)&addr, sizeof(addr)) < 0) {
-        LogError("Bind failed: {}", strerror(errno));
+    if (bind(listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         close(listen_fd);
         return 1;
     }
-
     if (listen(listen_fd, 128) < 0) {
-        LogError("Listen failed: {}", strerror(errno));
         close(listen_fd);
         return 1;
     }
-
-    LogInfo("Server listening on port {}", PORT);
 
     TestScheduler scheduler;
     scheduler.start();
-
     scheduler.spawn(serverCoroutine(&scheduler, listen_fd));
     scheduler.spawn(clientCoroutine(&scheduler, "127.0.0.1", PORT));
-
     std::this_thread::sleep_for(std::chrono::seconds(3));
-
     scheduler.stop();
     close(listen_fd);
 
-    galay::test::TestResultWriter writer("test_custom_awaitable");
-    for (int i = 0; i < g_total.load(); ++i) writer.addTest();
-    for (int i = 0; i < g_passed.load(); ++i) writer.addPassed();
-    for (int i = 0; i < g_failed.load(); ++i) writer.addFailed();
+    const bool ok = g_failed.load() == 0 && g_passed.load() == g_total.load();
+    galay::test::TestResultWriter writer("T30");
+    writer.addTest();
+    if (ok) {
+        writer.addPassed();
+    } else {
+        writer.addFailed();
+    }
     writer.writeResult();
-
-    LogInfo("========================================");
-    LogInfo("Test Results: Total={}, Passed={}, Failed={}",
-            g_total.load(), g_passed.load(), g_failed.load());
-    LogInfo("========================================");
-
-    return g_failed > 0 ? 1 : 0;
+    return ok ? 0 : 1;
 }

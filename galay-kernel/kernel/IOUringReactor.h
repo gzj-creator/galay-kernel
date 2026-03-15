@@ -44,13 +44,13 @@ public:
     int addSendTo(IOController* controller);
     int addFileWatch(IOController* controller);
     int addSendFile(IOController* controller);
-    int addCustom(IOController* controller);
+    int addSequence(IOController* controller);
     int remove(IOController* controller);
 
     void poll(uint64_t timeout_ns, WakeCoordinator& wake_coordinator);
 
 private:
-    int submitCustomSqe(IOEventType type, IOContextBase* ctx, IOController* controller);
+    int submitSequenceSqe(IOEventType type, IOContextBase* ctx, IOController* controller);
     void processCompletion(struct io_uring_cqe* cqe);
     void ensureWakeReadArmed();
 

@@ -117,7 +117,7 @@ int main() {
                 "m_event_fd",
                 "m_eventfd_buf",
                 "processCompletion(",
-                "submitCustomSqe(",
+                "submitSequenceSqe(",
             },
             {
                 "io_uring_queue_init_params(",
@@ -125,7 +125,7 @@ int main() {
                 "io_uring_wait_cqe_timeout(",
                 "io_uring_submit_and_wait_timeout(",
                 "processCompletion(",
-                "submitCustomSqe(",
+                "submitSequenceSqe(",
             },
         },
     };

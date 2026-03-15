@@ -25,7 +25,8 @@
 
 - 稳定 direct-include 入口由包配置变量 `GALAY_KERNEL_SUPPORTED_HEADERS` 给出
 - 仅为内联 / 模板依赖而安装的内部头由 `GALAY_KERNEL_INTERNAL_HEADERS` 给出
-- `Awaitable.h`、`IOController.hpp`、`Timeout.hpp`、`Scheduler.hpp`、`IOScheduler.hpp` 当前属于内部依赖层；除非在做底层扩展或排障，不要把它们当业务入口头
+- `Awaitable.h`、`IOController.hpp`、`Timeout.hpp`、`Scheduler.hpp`、`IOScheduler.hpp` 默认仍属于低层扩展 / 排障入口；日常业务优先使用 `Runtime`、`TcpSocket`、`UdpSocket` 等高层接口
+- 其中 `Awaitable.h` 在 `v3.1.0` 起承载正式的组合式扩展面：`SequenceAwaitable`、`SequenceStep`、`AwaitableBuilder`、`ParseStatus`
 - 仓库内最小消费夹具位于 `test/package-consumer/`，安装后同样可通过 `GALAY_KERNEL_PACKAGE_CONSUMER_FIXTURE_DIR` 定位
 
 ## 稳定公开头快速索引
@@ -40,6 +41,7 @@
   - `galay-kernel/kernel/IOUringScheduler.h`
   - `galay-kernel/kernel/TimerScheduler.h`
   - `galay-kernel/kernel/Coroutine.h`
+  - `galay-kernel/kernel/Awaitable.h`（仅当你要做底层组合 Awaitable / 协议扩展）
 - 网络与文件：
   - `galay-kernel/async/TcpSocket.h`
   - `galay-kernel/async/UdpSocket.h`
@@ -52,6 +54,7 @@
   - `galay-kernel/common/Sleep.hpp`
   - `galay-kernel/common/Bytes.h`
   - `galay-kernel/common/Buffer.h`
+  - `galay-kernel/common/ByteQueueView.h`
   - `galay-kernel/common/Error.h`
 - 并发：
   - `galay-kernel/concurrency/AsyncMutex.h`
@@ -397,7 +400,7 @@
 
 - 生命周期：`start()`、`stop()`、`notify()`
 - 事件注册：`addAccept(...)`、`addConnect(...)`、`addRecv(...)`、`addSend(...)`、`addReadv(...)`、`addWritev(...)`、`addClose(...)`
-- 文件 / UDP / 监控 / 零拷贝：`addFileRead(...)`、`addFileWrite(...)`、`addRecvFrom(...)`、`addSendTo(...)`、`addFileWatch(...)`、`addSendFile(...)`、`addCustom(...)`
+- 文件 / UDP / 监控 / 零拷贝：`addFileRead(...)`、`addFileWrite(...)`、`addRecvFrom(...)`、`addSendTo(...)`、`addFileWatch(...)`、`addSendFile(...)`、`addSequence(...)`
 - 调度：`spawn(...)`、`schedule(...)`、`spawnDeferred(...)`、`scheduleDeferred(...)`、`spawnImmidiately(...)`
 - 诊断：`int remove(IOController* controller)`、`std::optional<IOError> lastError() const`
 
@@ -407,6 +410,50 @@
 - `KqueueScheduler` 只在 `USE_KQUEUE`
 - `IOUringScheduler` 只在 `USE_IOURING`
 - 业务代码通常优先通过 `Runtime` 获取默认后端；只有在需要显式控制队列深度、批量参数或平台后端时才直接实例化这些类
+
+## 低层组合 Awaitable 扩展面
+
+头文件：
+
+- `galay-kernel/kernel/Awaitable.h`
+- `galay-kernel/common/ByteQueueView.h`
+
+公开类型：
+
+- `template <typename ResultT, size_t InlineN = 4> class SequenceAwaitable`
+- `template <typename ResultT, size_t InlineN = 4> class SequenceOps`
+- `template <typename ResultT, size_t InlineN, typename FlowT, typename BaseContextT, auto Handler> struct SequenceStep`
+- `template <typename ResultT, size_t InlineN, typename FlowT, auto Handler> struct LocalSequenceStep`
+- `template <typename ResultT, size_t InlineN, typename FlowT, auto Handler> struct ParserSequenceStep`
+- `template <typename ResultT, size_t InlineN, typename FlowT> class AwaitableBuilder`
+- `enum class ParseStatus { kNeedMore, kContinue, kCompleted }`
+- `class ByteQueueView`
+
+推荐用法：
+
+- 线性组合步骤优先用 `AwaitableBuilder`
+- 需要显式持有步骤对象、跨步骤共享状态或自定义 re-arm 路径时使用 `SequenceAwaitable + SequenceStep`
+- 协议解析优先使用 `AwaitableBuilder::parse(...)`，parse handler 返回 `ParseStatus`
+
+parse 语义：
+
+- `ParseStatus::kNeedMore`：builder 会自动重挂最近一个非本地 IO 步骤，然后再次进入 parse；协程保持挂起
+- `ParseStatus::kContinue`：builder 会继续本地 parse loop，不等待新的内核事件
+- `ParseStatus::kCompleted`：parse handler 已完成最终 `ops.complete(...)` 或显式排好了后续步骤
+
+`ByteQueueView` 当前能力：
+
+- `append(...)`：把新到达字节追加到队尾
+- `size()` / `empty()` / `has(n)`：判断是否足够解析协议头或包体
+- `view(offset, length)`：读取当前可见窗口内的连续字节视图
+- `consume(length)`：消费已解析字节，并在合适时自动 compact
+
+真实参考：
+
+- 线性 builder：`test/T63-custom_sequence_awaitable.cc`
+- 显式步骤编排：`test/T30-custom_awaitable.cc`
+- 半包不提前唤醒：`test/T76-sequence_parser_need_more.cc`
+- 粘包单次恢复尽量吃完：`test/T77-sequence_parser_coalesced_frames.cc`
 
 协程辅助：
 

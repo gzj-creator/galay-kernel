@@ -39,14 +39,14 @@ public:
     int addSendTo(IOController* controller);
     int addFileWatch(IOController* controller);
     int addSendFile(IOController* controller);
-    int addCustom(IOController* controller);
+    int addSequence(IOController* controller);
     int remove(IOController* controller);
 
     void poll(const struct timespec& timeout, WakeCoordinator& wake_coordinator);
 
 private:
     void processEvent(struct kevent& ev);
-    int processCustom(IOEventType type, IOController* controller);
+    int processSequence(IOEventType type, IOController* controller);
 
     int m_kqueue_fd = -1;
     int m_notify_pipe[2] = {-1, -1};

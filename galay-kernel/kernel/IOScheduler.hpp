@@ -197,8 +197,8 @@ inline auto IOController::getAwaitable() -> SendFileAwaitable* {
 }
 
 template<>
-inline auto IOController::getAwaitable() -> CustomAwaitable* {
-    return static_cast<CustomAwaitable*>(m_awaitable[READ]);
+inline auto IOController::getAwaitable() -> SequenceAwaitableBase* {
+    return static_cast<SequenceAwaitableBase*>(m_awaitable[READ]);
 };
 
 template<typename Awaitable>
@@ -320,7 +320,7 @@ public:
      */
     virtual int addSendFile(IOController* controller) = 0;
 
-    virtual int addCustom(IOController* controller) = 0;
+    virtual int addSequence(IOController* controller) = 0;
 
     /**
      * @brief 删除fd的所有事件
@@ -375,7 +375,7 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
     case IOEventType::RECVFROM:
     case IOEventType::ACCEPT:
     case IOEventType::FILEWATCH:
-    case IOEventType::CUSTOM:
+    case IOEventType::SEQUENCE:
         m_awaitable[READ] = awaitable;
 #ifdef USE_IOURING
         advanceSqeGeneration(READ);
@@ -407,7 +407,7 @@ inline void IOController::removeAwaitable(IOEventType type) {
     case IOEventType::RECVFROM:
     case IOEventType::ACCEPT:
     case IOEventType::FILEWATCH:
-    case IOEventType::CUSTOM:
+    case IOEventType::SEQUENCE:
         m_awaitable[READ] = nullptr;
 #ifdef USE_IOURING
         advanceSqeGeneration(READ);

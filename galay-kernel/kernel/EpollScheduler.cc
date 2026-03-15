@@ -119,9 +119,9 @@ int EpollScheduler::addSendFile(IOController* controller)
     return m_reactor.addSendFile(controller);
 }
 
-int EpollScheduler::addCustom(IOController* controller)
+int EpollScheduler::addSequence(IOController* controller)
 {
-    return m_reactor.addCustom(controller);
+    return m_reactor.addSequence(controller);
 }
 
 int EpollScheduler::remove(IOController* controller)

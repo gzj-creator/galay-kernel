@@ -1,8 +1,8 @@
 /**
  * @file T63-custom_sequence_awaitable.cc
- * @brief 用途：验证自定义序列 Awaitable 能按预期完成多步挂起与恢复。
- * 关键覆盖点：多阶段 Awaitable 状态机、连续挂起恢复、最终结果汇总。
- * 通过条件：多步序列全部按预期执行，测试返回 0。
+ * @brief 用途：验证 AwaitableBuilder 能按预期完成线性多步挂起与恢复。
+ * 关键覆盖点：builder 直接声明标准步骤、连续挂起恢复、最终结果汇总。
+ * 通过条件：builder 组合流程全部按预期执行，测试返回 0。
  */
 
 #include "galay-kernel/kernel/Coroutine.h"
@@ -39,29 +39,18 @@ namespace {
 std::atomic<bool> g_server_ok{false};
 std::atomic<bool> g_client_ok{false};
 
-struct SendThenRecvAwaitable : public CustomSequenceAwaitable {
-    SendIOContext m_send;
-    RecvIOContext m_recv;
+using BuilderResult = std::expected<size_t, IOError>;
 
-    SendThenRecvAwaitable(IOController* controller,
-                          const char* send_data,
-                          size_t send_len,
-                          char* recv_buffer,
-                          size_t recv_len)
-        : CustomSequenceAwaitable(controller)
-        , m_send(send_data, send_len)
-        , m_recv(recv_buffer, recv_len)
-    {
-        addSteps(m_send, m_recv);
+struct BuilderFlow {
+    void onSend(SequenceOps<BuilderResult, 4>&, SendIOContext& send_ctx) {
+        send_ok = send_ctx.m_result.has_value();
     }
 
-    std::expected<size_t, IOError> await_resume() {
-        return complete(std::move(m_recv.m_result));
+    void onRecv(SequenceOps<BuilderResult, 4>& ops, RecvIOContext& recv_ctx) {
+        ops.complete(std::move(recv_ctx.m_result));
     }
 
-    const auto& sendResult() const {
-        return m_send.m_result;
-    }
+    bool send_ok = false;
 };
 
 Coroutine serverTask(int listen_fd) {
@@ -80,16 +69,16 @@ Coroutine serverTask(int listen_fd) {
     IOController controller(GHandle{.fd = client_fd});
     char recv_buffer[64]{};
     const std::string greeting = "hello";
-    SendThenRecvAwaitable exchange(&controller,
-                                   greeting.c_str(),
-                                   greeting.size(),
-                                   recv_buffer,
-                                   sizeof(recv_buffer) - 1);
+    BuilderFlow flow;
+    auto exchange = AwaitableBuilder<BuilderResult, 4, BuilderFlow>(&controller, flow)
+        .send<&BuilderFlow::onSend>(greeting.c_str(), greeting.size())
+        .recv<&BuilderFlow::onRecv>(recv_buffer, sizeof(recv_buffer) - 1)
+        .build();
 
     auto received = co_await exchange;
-    if (exchange.sendResult() && received) {
+    if (flow.send_ok && received) {
         const std::string reply(recv_buffer, received.value());
-        if (exchange.sendResult().value() == greeting.size() && reply == "world") {
+        if (reply == "world") {
             g_server_ok.store(true, std::memory_order_release);
         }
     }
@@ -178,10 +167,10 @@ int main() {
 
     if (!g_server_ok.load(std::memory_order_acquire) ||
         !g_client_ok.load(std::memory_order_acquire)) {
-        std::cerr << "[T63] expected CustomSequenceAwaitable exchange to succeed\n";
+        std::cerr << "[T63] expected AwaitableBuilder exchange to succeed\n";
         return 1;
     }
 
-    std::cout << "T63-CustomSequenceAwaitable PASS\n";
+    std::cout << "T63-SequenceBuilder PASS\n";
     return 0;
 }

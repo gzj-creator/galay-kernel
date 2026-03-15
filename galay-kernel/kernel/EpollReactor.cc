@@ -234,20 +234,19 @@ int EpollReactor::addFileWatch(IOController* controller) {
     return applyEvents(controller, buildEvents(controller));
 }
 
-int EpollReactor::addCustom(IOController* controller) {
-    auto* custom = controller->getAwaitable<CustomAwaitable>();
-    if (custom == nullptr) return -1;
+int EpollReactor::addSequence(IOController* controller) {
+    auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
+    if (sequence == nullptr) return -1;
 
-    while (auto* task = custom->front()) {
-        const bool done = task->context->handleComplete(controller->m_handle);
-        if (done) {
-            custom->popFront();
-            continue;
-        }
-        return processCustom(custom->resolveTaskEventType(*task), controller);
+    if (sequence->prepareForSubmit(controller->m_handle) == SequenceProgress::kCompleted) {
+        return kImmediateReady;
     }
 
-    return kImmediateReady;
+    auto* task = sequence->front();
+    if (task == nullptr) {
+        return kImmediateReady;
+    }
+    return processSequence(sequence->resolveTaskEventType(*task), controller);
 }
 
 int EpollReactor::remove(IOController* controller) {
@@ -257,7 +256,7 @@ int EpollReactor::remove(IOController* controller) {
     return applyEvents(controller, EPOLLET);
 }
 
-int EpollReactor::processCustom(IOEventType type, IOController* controller) {
+int EpollReactor::processSequence(IOEventType type, IOController* controller) {
     const uint32_t t = static_cast<uint32_t>(type);
     uint32_t events = EPOLLET;
     if (t & (ACCEPT | RECV | READV | RECVFROM | FILEREAD)) {
@@ -412,37 +411,22 @@ void EpollReactor::processEvent(struct epoll_event& ev) {
         }
     }
 
-    if (t & CUSTOM) {
-        auto* custom = controller->getAwaitable<CustomAwaitable>();
-        if (custom) {
-            auto* task = custom->front();
-            if (task) {
-                const bool done = task->context->handleComplete(controller->m_handle);
-                if (done) {
-                    custom->popFront();
-                    if (custom->empty()) {
-                        custom->m_waker.wakeUp();
-                    } else {
-                        const int ret = addCustom(controller);
-                        if (ret == kImmediateReady) {
-                            custom->m_waker.wakeUp();
-                        } else if (ret < 0) {
-                            const uint32_t sys = (ret != -1)
-                                ? static_cast<uint32_t>(-ret)
-                                : static_cast<uint32_t>(errno);
-                            detail::storeBackendError(m_last_error_code, kNotReady, sys);
-                            custom->m_waker.wakeUp();
-                        }
-                    }
-                } else {
-                    const int ret = processCustom(custom->resolveTaskEventType(*task), controller);
-                    if (ret < 0) {
-                        const uint32_t sys = (ret != -1)
-                            ? static_cast<uint32_t>(-ret)
-                            : static_cast<uint32_t>(errno);
-                        detail::storeBackendError(m_last_error_code, kNotReady, sys);
-                        custom->m_waker.wakeUp();
-                    }
+    if (t & SEQUENCE) {
+        auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
+        if (sequence) {
+            const auto progress = sequence->onActiveEvent(controller->m_handle);
+            if (progress == SequenceProgress::kCompleted) {
+                sequence->m_waker.wakeUp();
+            } else {
+                const int ret = addSequence(controller);
+                if (ret == kImmediateReady) {
+                    sequence->m_waker.wakeUp();
+                } else if (ret < 0) {
+                    const uint32_t sys = (ret != -1)
+                        ? static_cast<uint32_t>(-ret)
+                        : static_cast<uint32_t>(errno);
+                    detail::storeBackendError(m_last_error_code, kNotReady, sys);
+                    sequence->m_waker.wakeUp();
                 }
             }
         }

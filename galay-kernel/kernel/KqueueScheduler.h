@@ -68,7 +68,7 @@ public:
     int addSendTo(IOController* controller) override;
     int addFileWatch(IOController* controller) override;
     int addSendFile(IOController* controller) override;
-    int addCustom(IOController* controller) override;
+    int addSequence(IOController* controller) override;
 
     int remove(IOController* controller) override;
     std::optional<IOError> lastError() const override;

@@ -118,9 +118,9 @@ int IOUringScheduler::addSendFile(IOController* controller)
     return m_reactor.addSendFile(controller);
 }
 
-int IOUringScheduler::addCustom(IOController* controller)
+int IOUringScheduler::addSequence(IOController* controller)
 {
-    return m_reactor.addCustom(controller);
+    return m_reactor.addSequence(controller);
 }
 
 int IOUringScheduler::remove(IOController* controller)

@@ -61,7 +61,7 @@ target_link_libraries(B12-TcpIovClient PRIVATE galay-kernel)
 target_include_directories(B12-TcpIovClient PRIVATE ${CMAKE_SOURCE_DIR})
 
 # B13 - SendFile 性能对比和压测
-add_executable(B13-Sendfile B13-sendfile.cc)
+add_executable(B13-Sendfile B13-Sendfile.cc)
 target_link_libraries(B13-Sendfile PRIVATE galay-kernel)
 target_include_directories(B13-Sendfile PRIVATE ${CMAKE_SOURCE_DIR})
 

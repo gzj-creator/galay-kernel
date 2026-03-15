@@ -85,7 +85,7 @@
         FILEWATCH   = 1u << 9,
         RECVFROM    = 1u << 10,
         SENDTO      = 1u << 11,
-        CUSTOM      = 1u << 12,  ///< 用户自定义
+        SEQUENCE    = 1u << 12,  ///< 组合式序列 Awaitable
     };
 
     inline IOEventType operator|(IOEventType a, IOEventType b) {

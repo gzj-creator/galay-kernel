@@ -234,18 +234,17 @@ int KqueueReactor::addSendFile(IOController* controller) {
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
-int KqueueReactor::addCustom(IOController* controller) {
-    auto* custom = controller->getAwaitable<CustomAwaitable>();
-    if (custom == nullptr) return -1;
-    while (auto* task = custom->front()) {
-        const bool done = task->context->handleComplete(controller->m_handle);
-        if (done) {
-            custom->popFront();
-            continue;
-        }
-        return processCustom(custom->resolveTaskEventType(*task), controller);
+int KqueueReactor::addSequence(IOController* controller) {
+    auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
+    if (sequence == nullptr) return -1;
+    if (sequence->prepareForSubmit(controller->m_handle) == SequenceProgress::kCompleted) {
+        return 1;
     }
-    return 1;
+    auto* task = sequence->front();
+    if (task == nullptr) {
+        return 1;
+    }
+    return processSequence(sequence->resolveTaskEventType(*task), controller);
 }
 
 int KqueueReactor::remove(IOController* controller) {
@@ -347,49 +346,36 @@ void KqueueReactor::processEvent(struct kevent& ev) {
         }
     }
 
-    if (t & CUSTOM) {
-        auto* custom = controller->getAwaitable<CustomAwaitable>();
-        if (!custom) {
+    if (t & SEQUENCE) {
+        auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
+        if (!sequence) {
             return;
         }
-        auto* task = custom->front();
+        auto* task = sequence->front();
         if (!task) {
             return;
         }
 
-        const bool done = task->context->handleComplete(controller->m_handle);
-        if (done) {
-            custom->popFront();
-            if (custom->empty()) {
-                custom->m_waker.wakeUp();
-                return;
-            }
-
-            const int ret = addCustom(controller);
-            if (ret == 1) {
-                custom->m_waker.wakeUp();
-            } else if (ret < 0) {
-                const uint32_t sys = (ret != -1)
-                    ? static_cast<uint32_t>(-ret)
-                    : static_cast<uint32_t>(errno);
-                detail::storeBackendError(m_last_error_code, kNotReady, sys);
-                custom->m_waker.wakeUp();
-            }
+        const auto progress = sequence->onActiveEvent(controller->m_handle);
+        if (progress == SequenceProgress::kCompleted) {
+            sequence->m_waker.wakeUp();
             return;
         }
 
-        const int ret = processCustom(custom->resolveTaskEventType(*task), controller);
-        if (ret < 0) {
+        const int ret = addSequence(controller);
+        if (ret == 1) {
+            sequence->m_waker.wakeUp();
+        } else if (ret < 0) {
             const uint32_t sys = (ret != -1)
                 ? static_cast<uint32_t>(-ret)
                 : static_cast<uint32_t>(errno);
             detail::storeBackendError(m_last_error_code, kNotReady, sys);
-            custom->m_waker.wakeUp();
+            sequence->m_waker.wakeUp();
         }
     }
 }
 
-int KqueueReactor::processCustom(IOEventType type, IOController* controller) {
+int KqueueReactor::processSequence(IOEventType type, IOController* controller) {
     struct kevent evs[2];
     int ev_count = 0;
     const uint32_t t = static_cast<uint32_t>(type);

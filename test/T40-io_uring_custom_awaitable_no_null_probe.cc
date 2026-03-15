@@ -1,8 +1,8 @@
 /**
  * @file T40-io_uring_custom_awaitable_no_null_probe.cc
- * @brief 用途：验证 io_uring 自定义 Awaitable 不依赖空指针探测也能完成注册。
- * 关键覆盖点：自定义 Awaitable 注册、io_uring 路径接线、无空探测完成恢复。
- * 通过条件：io_uring 自定义 Awaitable 路径可用且测试返回 0。
+ * @brief 用途：验证 io_uring 组合式 SequenceAwaitable 不依赖空指针探测也能完成注册。
+ * 关键覆盖点：sequence 路径注册、io_uring 路径接线、无空探测完成恢复。
+ * 通过条件：io_uring sequence 路径可用且测试返回 0。
  */
 
 #include "galay-kernel/kernel/Coroutine.h"
@@ -38,22 +38,30 @@ struct ProbeSendContext : public SendIOContext {
     int null_probes = 0;
 };
 
-struct ProbeSendAwaitable : public CustomAwaitable {
-    ProbeSendAwaitable(IOController* controller, const char* buffer, size_t length)
-        : CustomAwaitable(controller)
-        , m_send(buffer, length) {
-        addTask(SEND, &m_send);
+using ProbeResult = std::expected<size_t, IOError>;
+
+struct ProbeFlow {
+    void onSend(SequenceOps<ProbeResult, 2>& ops, ProbeSendContext& send_ctx);
+
+    using SendStep = SequenceStep<ProbeResult, 2, ProbeFlow, ProbeSendContext, &ProbeFlow::onSend>;
+
+    ProbeFlow(const char* buffer, size_t length)
+        : send(this, buffer, length) {}
+
+    auto make(IOController* controller) -> SequenceAwaitable<ProbeResult, 2> {
+        SequenceAwaitable<ProbeResult, 2> awaitable(controller);
+        awaitable.queue(send);
+        return awaitable;
     }
 
-    bool await_ready() { return false; }
-
-    std::expected<size_t, IOError> await_resume() {
-        onCompleted();
-        return std::move(m_send.m_result);
-    }
-
-    ProbeSendContext m_send;
+    SendStep send;
+    int null_probes = 0;
 };
+
+inline void ProbeFlow::onSend(SequenceOps<ProbeResult, 2>& ops, ProbeSendContext& send_ctx) {
+    null_probes = send_ctx.null_probes;
+    ops.complete(std::move(send_ctx.m_result));
+}
 
 struct TestState {
     std::atomic<bool> done{false};
@@ -63,10 +71,11 @@ struct TestState {
 
 Coroutine sendCoroutine(TestState* state, int fd, const char* msg, size_t len) {
     IOController controller(GHandle{.fd = fd});
-    ProbeSendAwaitable awaitable(&controller, msg, len);
-    auto result = co_await awaitable;
+    ProbeFlow flow(msg, len);
+    auto sequence = flow.make(&controller);
+    auto result = co_await sequence;
 
-    state->null_probes.store(awaitable.m_send.null_probes, std::memory_order_release);
+    state->null_probes.store(flow.null_probes, std::memory_order_release);
     state->success.store(result.has_value() && result.value() == len, std::memory_order_release);
     state->done.store(true, std::memory_order_release);
     co_return;
@@ -99,7 +108,7 @@ int main() {
         fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     }
 
-    const char payload[] = "hello-iouring-custom";
+    const char payload[] = "hello-iouring-sequence";
     char recv_buf[64]{};
     std::atomic<bool> peer_done{false};
     std::thread peer([&]() {
@@ -153,14 +162,14 @@ int main() {
         return 1;
     }
 
-    std::cout << "T40-IOUringCustomAwaitableNoNullProbe PASS\n";
+    std::cout << "T40-IOUringSequenceNoNullProbe PASS\n";
     return 0;
 }
 
 #else
 
 int main() {
-    std::cout << "T40-IOUringCustomAwaitableNoNullProbe SKIP\n";
+    std::cout << "T40-IOUringSequenceNoNullProbe SKIP\n";
     return 0;
 }
 
