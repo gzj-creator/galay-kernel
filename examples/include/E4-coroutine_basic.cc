@@ -1,94 +1,102 @@
 /**
  * @file E4-CoroutineBasic.cc
- * @brief 协程基础示例
- * @details 演示协程的基本用法，包括创建、spawn和等待
- *
- * 使用场景：
- *   - 学习协程基本概念
- *   - 理解协程的创建和调度
- *   - 掌握协程间的等待和同步
+ * @brief Runtime task API basic example
+ * @details Demonstrates Task<T>, Runtime::blockOn, Runtime::spawn and RuntimeHandle
  */
 
-#include <iostream>
 #include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/kernel/ComputeScheduler.h"
+#include "galay-kernel/kernel/Runtime.h"
 #include "test/StdoutLog.h"
+#include <atomic>
+#include <chrono>
+#include <thread>
 
 using namespace galay::kernel;
 
-/**
- * @brief 简单的计算协程
- */
-Coroutine simpleTask(int id) {
+namespace {
+
+std::atomic<int> g_detachedFinished{0};
+
+Task<int> sumTask(int id, int limit)
+{
     LogInfo("Task {} started", id);
 
-    // 模拟一些计算工作
     int sum = 0;
-    for (int i = 0; i < 1000; ++i) {
+    for (int i = 0; i < limit; ++i) {
         sum += i;
     }
 
     LogInfo("Task {} completed, sum = {}", id, sum);
+    co_return sum;
+}
+
+Task<void> detachedTask(int id)
+{
+    LogInfo("Detached task {} started", id);
+    co_yield true;
+    g_detachedFinished.fetch_add(1, std::memory_order_acq_rel);
+    LogInfo("Detached task {} completed", id);
     co_return;
 }
 
-/**
- * @brief 父协程，spawn多个子协程
- */
-Coroutine parentTask() {
-    LogInfo("Parent task started");
+Task<void> spawnFromCurrentRuntime()
+{
+    LogInfo("Spawning detached tasks through RuntimeHandle::current()");
+    auto runtimeHandle = RuntimeHandle::current();
+    runtimeHandle.spawn(detachedTask(1));
+    runtimeHandle.spawn(detachedTask(2));
+    co_return;
+}
 
-    // Spawn多个子协程
-    for (int i = 0; i < 3; ++i) {
-        co_await spawn(simpleTask(i));
+Task<void> waitForDetachedTasks()
+{
+    for (int i = 0; i < 1024 && g_detachedFinished.load(std::memory_order_acquire) < 2; ++i) {
+        co_yield true;
     }
 
-    LogInfo("Parent task: all child tasks spawned");
+    LogInfo("Detached tasks finished: {}", g_detachedFinished.load(std::memory_order_acquire));
     co_return;
 }
 
-/**
- * @brief 演示协程等待
- */
-Coroutine waitExample() {
-    LogInfo("Wait example started");
+Task<void> spawnBlockingDemo()
+{
+    auto blocking = RuntimeHandle::current().spawnBlocking([]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        return 7;
+    });
+    blocking.wait();
+    int value = blocking.join();
 
-    // 创建一个协程
-    Coroutine task = simpleTask(100);
-
-    // 等待协程完成
-    co_await task.wait();
-
-    LogInfo("Wait example: task completed");
+    LogInfo("spawnBlocking returned {}", value);
     co_return;
 }
 
-int main() {
-    LogInfo("=== Coroutine Basic Example ===");
+} // namespace
 
-    // 创建计算调度器
-    ComputeScheduler scheduler;
+int main()
+{
+    LogInfo("=== Runtime Task API Basic Example ===");
 
-    // 启动调度器
-    scheduler.start();
+    Runtime runtime = RuntimeBuilder()
+        .ioSchedulerCount(0)
+        .computeSchedulerCount(1)
+        .build();
 
-    // 示例1: 简单协程
-    LogInfo("\n--- Example 1: Simple Coroutine ---");
-    scheduler.spawn(simpleTask(1));
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    LogInfo("\n--- Example 1: blockOn(Task<int>) ---");
+    int rootValue = runtime.blockOn(sumTask(1, 1000));
+    LogInfo("blockOn returned {}", rootValue);
 
-    // 示例2: 父子协程
-    LogInfo("\n--- Example 2: Parent-Child Coroutines ---");
-    scheduler.spawn(parentTask());
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    LogInfo("\n--- Example 2: spawn(Task<int>) -> JoinHandle<int> ---");
+    auto handle = runtime.spawn(sumTask(2, 2000));
+    handle.wait();
+    LogInfo("spawn().join() returned {}", handle.join());
 
-    // 示例3: 协程等待
-    LogInfo("\n--- Example 3: Coroutine Wait ---");
-    scheduler.spawn(waitExample());
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    LogInfo("\n--- Example 3: RuntimeHandle::current().spawn(...) ---");
+    runtime.blockOn(spawnFromCurrentRuntime());
+    runtime.blockOn(waitForDetachedTasks());
 
-    // 停止调度器
-    scheduler.stop();
+    LogInfo("\n--- Example 4: RuntimeHandle::spawnBlocking(...) ---");
+    runtime.blockOn(spawnBlockingDemo());
 
     LogInfo("\n=== Example Completed ===");
     return 0;

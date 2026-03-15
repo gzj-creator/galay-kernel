@@ -1,6 +1,5 @@
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Runtime.h"
-#include <cstdio>
 #include <iostream>
 
 using namespace galay::kernel;
@@ -29,14 +28,15 @@ Coroutine test()
     co_return;
 }
 
+Task<void> rootTask()
+{
+    co_await test().wait();
+}
+
 
 int main()
 {
     Runtime runtime;
-    runtime.start();
-    auto scheduler = runtime.getNextComputeScheduler();
-    scheduler->spawn(test());
-    getchar();
-    runtime.stop();
+    runtime.blockOn(rootTask());
     return 0;
 }

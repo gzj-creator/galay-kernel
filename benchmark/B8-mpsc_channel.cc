@@ -22,6 +22,7 @@
 #include <set>
 #include <mutex>
 #include <numeric>
+#include "benchmark/BenchmarkSync.h"
 #include "galay-kernel/concurrency/MpscChannel.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/ComputeScheduler.h"
@@ -35,6 +36,12 @@ using namespace std::chrono_literals;
 constexpr int THROUGHPUT_MESSAGES = 1000000;
 constexpr int LATENCY_MESSAGES = 100000;
 constexpr int CORRECTNESS_MESSAGES = 100000;
+constexpr std::size_t PRODUCER_THROUGHPUT_SAMPLE_COUNT = 5;
+constexpr auto PRODUCER_MIN_SAMPLE_DURATION = 300ms;
+constexpr std::size_t BATCH_SAMPLE_COUNT = 5;
+constexpr auto BATCH_MIN_SAMPLE_DURATION = 300ms;
+constexpr std::size_t LATENCY_SAMPLE_COUNT = 5;
+constexpr std::size_t CROSS_SCHEDULER_SAMPLE_COUNT = 5;
 
 // ============== 全局计数器 ==============
 std::atomic<int64_t> g_sent{0};
@@ -43,7 +50,8 @@ std::atomic<int64_t> g_sum{0};
 std::atomic<int64_t> g_latency_sum_ns{0};
 std::atomic<int64_t> g_latency_count{0};
 std::atomic<bool> g_consumer_done{false};
-std::atomic<bool> g_producer_done{false};
+std::atomic<bool> g_consumer_ready{false};
+galay::benchmark::CompletionLatch* g_consumer_done_latch = nullptr;
 
 // 正确性验证
 std::mutex g_received_mutex;
@@ -56,7 +64,8 @@ void resetCounters() {
     g_latency_sum_ns = 0;
     g_latency_count = 0;
     g_consumer_done = false;
-    g_producer_done = false;
+    g_consumer_ready = false;
+    g_consumer_done_latch = nullptr;
     g_received_set.clear();
 }
 
@@ -66,10 +75,23 @@ struct TimestampedMessage {
     std::chrono::steady_clock::time_point send_time;
 };
 
+struct ThroughputSample {
+    double elapsed_ms;
+    double throughput;
+    int64_t received;
+    int64_t sum;
+};
+
+struct LatencySample {
+    double avg_latency_us;
+    int64_t received;
+};
+
 // ============== 消费者协程 ==============
 
 // 简单消费者（吞吐量测试）
 Coroutine simpleConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
+    g_consumer_ready.store(true, std::memory_order_release);
     int64_t received = 0;
     int64_t sum = 0;
     while (received < expected_count) {
@@ -82,11 +104,15 @@ Coroutine simpleConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) 
     g_received.store(received, std::memory_order_relaxed);
     g_sum.store(sum, std::memory_order_relaxed);
     g_consumer_done = true;
+    if (g_consumer_done_latch) {
+        g_consumer_done_latch->arrive();
+    }
     co_return;
 }
 
 // 批量消费者
 Coroutine batchConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
+    g_consumer_ready.store(true, std::memory_order_release);
     int64_t received = 0;
     int64_t sum = 0;
     while (received < expected_count) {
@@ -101,6 +127,9 @@ Coroutine batchConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
     g_received.store(received, std::memory_order_relaxed);
     g_sum.store(sum, std::memory_order_relaxed);
     g_consumer_done = true;
+    if (g_consumer_done_latch) {
+        g_consumer_done_latch->arrive();
+    }
     co_return;
 }
 
@@ -108,6 +137,7 @@ Coroutine batchConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
 Coroutine latencyConsumer(MpscChannel<TimestampedMessage>* channel, int64_t expected_count) {
     int64_t received = 0;
     int64_t latency_sum_ns = 0;
+    g_consumer_ready.store(true, std::memory_order_release);
     while (received < expected_count) {
         auto msg = co_await channel->recv();
         if (msg) {
@@ -122,6 +152,9 @@ Coroutine latencyConsumer(MpscChannel<TimestampedMessage>* channel, int64_t expe
     g_latency_sum_ns.store(latency_sum_ns, std::memory_order_relaxed);
     g_latency_count.store(received, std::memory_order_relaxed);
     g_consumer_done = true;
+    if (g_consumer_done_latch) {
+        g_consumer_done_latch->arrive();
+    }
     co_return;
 }
 
@@ -150,7 +183,6 @@ void singleProducer(MpscChannel<int64_t>* channel, int64_t count) {
         channel->send(i);
     }
     g_sent.store(count, std::memory_order_relaxed);
-    g_producer_done = true;
 }
 
 // 多线程生产者
@@ -172,7 +204,22 @@ void latencyProducer(MpscChannel<TimestampedMessage>* channel, int64_t count) {
         channel->send(std::move(msg));
     }
     g_sent.store(count, std::memory_order_relaxed);
-    g_producer_done = true;
+}
+
+Coroutine crossSchedulerProducer(MpscChannel<int64_t>* channel,
+                                 int64_t count,
+                                 galay::benchmark::CompletionLatch* completion_latch) {
+    for (int64_t i = 0; i < count; ++i) {
+        channel->send(i);
+        if (i != 0 && (i % 100) == 0) {
+            co_yield true;
+        }
+    }
+    g_sent.store(count, std::memory_order_relaxed);
+    if (completion_latch) {
+        completion_latch->arrive();
+    }
+    co_return;
 }
 
 // ============== 压测函数 ==============
@@ -180,149 +227,289 @@ void latencyProducer(MpscChannel<TimestampedMessage>* channel, int64_t count) {
 // 1. 单生产者吞吐量测试
 void benchSingleProducerThroughput(int64_t message_count) {
     LogInfo("--- Single Producer Throughput Test ({} messages) ---", message_count);
-    resetCounters();
+    std::vector<ThroughputSample> samples;
+    samples.reserve(PRODUCER_THROUGHPUT_SAMPLE_COUNT);
 
-    MpscChannel<int64_t> channel;
-    ComputeScheduler scheduler;
+    for (std::size_t sample_index = 0;
+         sample_index < PRODUCER_THROUGHPUT_SAMPLE_COUNT;
+         ++sample_index) {
+        int64_t sample_message_count = message_count;
+        while (true) {
+            resetCounters();
 
-    scheduler.start();
+            MpscChannel<int64_t> channel;
+            ComputeScheduler scheduler;
 
-    // 正式测试（移除预热，避免状态不同步）
-    scheduler.spawn(simpleConsumer(&channel, message_count));
+            scheduler.start();
+            galay::benchmark::CompletionLatch consumer_done_latch(1);
+            g_consumer_done_latch = &consumer_done_latch;
 
-    auto start = std::chrono::steady_clock::now();
+            scheduler.spawn(simpleConsumer(&channel, sample_message_count));
+            if (!galay::benchmark::waitForFlag(g_consumer_ready, 2s)) {
+                LogError("  consumer did not become ready before throughput run");
+                g_consumer_done_latch = nullptr;
+                scheduler.stop();
+                return;
+            }
 
-    std::thread producer([&]() {
-        singleProducer(&channel, message_count);
-    });
+            galay::benchmark::CompletionLatch producer_ready_latch(1);
+            galay::benchmark::StartGate start_gate;
+            std::thread producer([&]() {
+                producer_ready_latch.arrive();
+                start_gate.wait();
+                singleProducer(&channel, sample_message_count);
+            });
 
-    // 等待完成
-    while (!g_consumer_done) {
-        std::this_thread::sleep_for(1ms);
+            if (!producer_ready_latch.waitFor(2s)) {
+                LogError("  producer did not become ready before throughput run");
+                start_gate.open();
+                producer.join();
+                g_consumer_done_latch = nullptr;
+                scheduler.stop();
+                return;
+            }
+
+            const auto start = std::chrono::steady_clock::now();
+            start_gate.open();
+            consumer_done_latch.wait();
+
+            const auto elapsed = std::chrono::steady_clock::now() - start;
+            const auto elapsed_ns =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
+
+            producer.join();
+            g_consumer_done_latch = nullptr;
+            scheduler.stop();
+
+            if (elapsed < PRODUCER_MIN_SAMPLE_DURATION) {
+                sample_message_count *= 2;
+                continue;
+            }
+
+            samples.push_back({
+                .elapsed_ms = static_cast<double>(elapsed_ns) / 1'000'000.0,
+                .throughput = elapsed_ns > 0
+                    ? (static_cast<double>(sample_message_count) * 1'000'000'000.0 / elapsed_ns)
+                    : 0.0,
+                .received = g_received.load(std::memory_order_relaxed),
+                .sum = g_sum.load(std::memory_order_relaxed),
+            });
+            break;
+        }
     }
 
-    auto elapsed = std::chrono::steady_clock::now() - start;
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-    double throughput = (double)message_count / ms * 1000.0;
-
-    producer.join();
-    scheduler.stop();
-
-    // 验证
-    int64_t expected_sum = (message_count - 1) * message_count / 2;
-    bool correct = (g_received == message_count) && (g_sum == expected_sum);
+    const auto median_sample = galay::benchmark::medianElement(
+        std::move(samples),
+        [](const ThroughputSample& lhs, const ThroughputSample& rhs) {
+            return lhs.throughput < rhs.throughput;
+        });
+    const int64_t expected_sum = (median_sample.received - 1) * median_sample.received / 2;
+    const bool correct =
+        (median_sample.received > 0) && (median_sample.sum == expected_sum);
 
     LogInfo("  sent={}, received={}, time={}ms, throughput={:.0f} msg/s",
-            g_sent.load(), g_received.load(), ms, throughput);
+            median_sample.received,
+            median_sample.received,
+            median_sample.elapsed_ms,
+            median_sample.throughput);
     LogInfo("  sum={} (expected {}), correct={}",
-            g_sum.load(), expected_sum, correct ? "YES" : "NO");
+            median_sample.sum, expected_sum, correct ? "YES" : "NO");
 }
 
 // 2. 多生产者吞吐量测试
 void benchMultiProducerThroughput(int producer_count, int64_t total_messages) {
     LogInfo("--- Multi Producer Throughput Test ({} producers, {} messages) ---",
             producer_count, total_messages);
-    resetCounters();
+    std::vector<ThroughputSample> samples;
+    samples.reserve(PRODUCER_THROUGHPUT_SAMPLE_COUNT);
 
-    MpscChannel<int64_t> channel;
-    ComputeScheduler scheduler;
+    for (std::size_t sample_index = 0;
+         sample_index < PRODUCER_THROUGHPUT_SAMPLE_COUNT;
+         ++sample_index) {
+        resetCounters();
 
-    scheduler.start();
-    scheduler.spawn(simpleConsumer(&channel, total_messages));
+        MpscChannel<int64_t> channel;
+        ComputeScheduler scheduler;
 
-    int64_t per_producer = total_messages / producer_count;
+        scheduler.start();
+        galay::benchmark::CompletionLatch consumer_done_latch(1);
+        g_consumer_done_latch = &consumer_done_latch;
+        scheduler.spawn(simpleConsumer(&channel, total_messages));
+        if (!galay::benchmark::waitForFlag(g_consumer_ready, 2s)) {
+            LogError("  consumer did not become ready before multi-producer run");
+            g_consumer_done_latch = nullptr;
+            scheduler.stop();
+            return;
+        }
 
-    auto start = std::chrono::steady_clock::now();
+        const int64_t per_producer = total_messages / producer_count;
+        const auto start = std::chrono::steady_clock::now();
 
-    // 启动多个生产者线程
-    std::vector<std::thread> producers;
-    for (int i = 0; i < producer_count; ++i) {
-        int64_t start_id = i * per_producer;
-        producers.emplace_back(multiProducer, &channel, start_id, per_producer);
+        std::vector<std::thread> producers;
+        for (int i = 0; i < producer_count; ++i) {
+            const int64_t start_id = i * per_producer;
+            producers.emplace_back(multiProducer, &channel, start_id, per_producer);
+        }
+
+        for (auto& t : producers) {
+            t.join();
+        }
+
+        consumer_done_latch.wait();
+
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        const auto elapsed_ns =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
+
+        g_consumer_done_latch = nullptr;
+        scheduler.stop();
+
+        samples.push_back({
+            .elapsed_ms = static_cast<double>(elapsed_ns) / 1'000'000.0,
+            .throughput = elapsed_ns > 0
+                ? (static_cast<double>(total_messages) * 1'000'000'000.0 / elapsed_ns)
+                : 0.0,
+            .received = g_received.load(std::memory_order_relaxed),
+            .sum = g_sum.load(std::memory_order_relaxed),
+        });
     }
 
-    // 等待所有生产者完成
-    for (auto& t : producers) {
-        t.join();
-    }
-
-    // 等待消费者完成
-    while (!g_consumer_done) {
-        std::this_thread::sleep_for(1ms);
-    }
-
-    auto elapsed = std::chrono::steady_clock::now() - start;
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-    double throughput = (double)total_messages / ms * 1000.0;
-
-    scheduler.stop();
+    const auto median_sample = galay::benchmark::medianElement(
+        std::move(samples),
+        [](const ThroughputSample& lhs, const ThroughputSample& rhs) {
+            return lhs.throughput < rhs.throughput;
+        });
 
     LogInfo("  sent={}, received={}, time={}ms, throughput={:.0f} msg/s",
-            g_sent.load(), g_received.load(), ms, throughput);
+            total_messages,
+            median_sample.received,
+            median_sample.elapsed_ms,
+            median_sample.throughput);
 }
 
 // 3. 批量接收吞吐量测试
 void benchBatchReceiveThroughput(int64_t message_count) {
     LogInfo("--- Batch Receive Throughput Test ({} messages) ---", message_count);
-    resetCounters();
+    std::vector<ThroughputSample> samples;
+    samples.reserve(BATCH_SAMPLE_COUNT);
 
-    MpscChannel<int64_t> channel;
-    ComputeScheduler scheduler;
+    for (std::size_t sample_index = 0; sample_index < BATCH_SAMPLE_COUNT; ++sample_index) {
+        int64_t sample_message_count = message_count;
+        while (true) {
+            resetCounters();
 
-    scheduler.start();
-    scheduler.spawn(batchConsumer(&channel, message_count));
+            MpscChannel<int64_t> channel;
+            ComputeScheduler scheduler;
 
-    auto start = std::chrono::steady_clock::now();
+            scheduler.start();
+            galay::benchmark::CompletionLatch consumer_done_latch(1);
+            g_consumer_done_latch = &consumer_done_latch;
+            scheduler.spawn(batchConsumer(&channel, sample_message_count));
+            if (!galay::benchmark::waitForFlag(g_consumer_ready, 2s)) {
+                LogError("  consumer did not become ready before batch run");
+                g_consumer_done_latch = nullptr;
+                scheduler.stop();
+                return;
+            }
 
-    std::thread producer([&]() {
-        singleProducer(&channel, message_count);
-    });
+            const auto start = std::chrono::steady_clock::now();
+            std::thread producer([&]() {
+                singleProducer(&channel, sample_message_count);
+            });
 
-    while (!g_consumer_done) {
-        std::this_thread::sleep_for(1ms);
+            consumer_done_latch.wait();
+
+            const auto elapsed = std::chrono::steady_clock::now() - start;
+            const auto elapsed_ns =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
+
+            producer.join();
+            g_consumer_done_latch = nullptr;
+            scheduler.stop();
+
+            if (elapsed < BATCH_MIN_SAMPLE_DURATION) {
+                sample_message_count *= 2;
+                continue;
+            }
+
+            samples.push_back({
+                .elapsed_ms = static_cast<double>(elapsed_ns) / 1'000'000.0,
+                .throughput = elapsed_ns > 0
+                    ? (static_cast<double>(sample_message_count) * 1'000'000'000.0 / elapsed_ns)
+                    : 0.0,
+                .received = g_received.load(std::memory_order_relaxed),
+                .sum = g_sum.load(std::memory_order_relaxed),
+            });
+            break;
+        }
     }
 
-    auto elapsed = std::chrono::steady_clock::now() - start;
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-    double throughput = (double)message_count / ms * 1000.0;
-
-    producer.join();
-    scheduler.stop();
-
-    int64_t expected_sum = (message_count - 1) * message_count / 2;
-    bool correct = (g_received == message_count) && (g_sum == expected_sum);
+    const auto median_sample = galay::benchmark::medianElement(
+        std::move(samples),
+        [](const ThroughputSample& lhs, const ThroughputSample& rhs) {
+            return lhs.throughput < rhs.throughput;
+        });
+    const int64_t expected_sum = (median_sample.received - 1) * median_sample.received / 2;
+    const bool correct =
+        (median_sample.received > 0) && (median_sample.sum == expected_sum);
 
     LogInfo("  sent={}, received={}, time={}ms, throughput={:.0f} msg/s",
-            g_sent.load(), g_received.load(), ms, throughput);
+            median_sample.received,
+            median_sample.received,
+            median_sample.elapsed_ms,
+            median_sample.throughput);
     LogInfo("  sum={} (expected {}), correct={}",
-            g_sum.load(), expected_sum, correct ? "YES" : "NO");
+            median_sample.sum, expected_sum, correct ? "YES" : "NO");
 }
 
 // 4. 延迟测试
 void benchLatency(int64_t message_count) {
     LogInfo("--- Latency Test ({} messages) ---", message_count);
-    resetCounters();
+    std::vector<LatencySample> samples;
+    samples.reserve(LATENCY_SAMPLE_COUNT);
 
-    MpscChannel<TimestampedMessage> channel;
-    ComputeScheduler scheduler;
+    for (std::size_t sample_index = 0; sample_index < LATENCY_SAMPLE_COUNT; ++sample_index) {
+        resetCounters();
 
-    scheduler.start();
-    scheduler.spawn(latencyConsumer(&channel, message_count));
+        MpscChannel<TimestampedMessage> channel;
+        ComputeScheduler scheduler;
 
-    std::thread producer([&]() {
-        latencyProducer(&channel, message_count);
-    });
+        scheduler.start();
+        galay::benchmark::CompletionLatch consumer_done_latch(1);
+        g_consumer_done_latch = &consumer_done_latch;
+        scheduler.spawn(latencyConsumer(&channel, message_count));
 
-    while (!g_consumer_done) {
-        std::this_thread::sleep_for(1ms);
+        if (!galay::benchmark::waitForFlag(g_consumer_ready, 2s)) {
+            LogError("  consumer did not become ready before latency run");
+            g_consumer_done_latch = nullptr;
+            scheduler.stop();
+            return;
+        }
+
+        std::thread producer([&]() {
+            latencyProducer(&channel, message_count);
+        });
+
+        consumer_done_latch.wait();
+
+        producer.join();
+        g_consumer_done_latch = nullptr;
+        scheduler.stop();
+
+        samples.push_back({
+            .avg_latency_us = (double)g_latency_sum_ns.load(std::memory_order_relaxed) /
+                g_latency_count.load(std::memory_order_relaxed) / 1000.0,
+            .received = g_received.load(std::memory_order_relaxed),
+        });
     }
 
-    producer.join();
-    scheduler.stop();
+    const auto median_sample = galay::benchmark::medianElement(
+        std::move(samples),
+        [](const LatencySample& lhs, const LatencySample& rhs) {
+            return lhs.avg_latency_us < rhs.avg_latency_us;
+        });
 
-    double avg_latency_us = (double)g_latency_sum_ns / g_latency_count / 1000.0;
-
-    LogInfo("  messages={}, avg_latency={:.2f}us", g_received.load(), avg_latency_us);
+    LogInfo("  messages={}, avg_latency={:.2f}us", median_sample.received, median_sample.avg_latency_us);
 }
 
 // 5. 正确性验证测试
@@ -386,66 +573,90 @@ void benchCorrectness(int producer_count, int64_t total_messages) {
 // 6. 跨调度器测试
 void benchCrossScheduler(int64_t message_count) {
     LogInfo("--- Cross-Scheduler Test ({} messages) ---", message_count);
-    resetCounters();
+    std::vector<ThroughputSample> samples;
+    samples.reserve(CROSS_SCHEDULER_SAMPLE_COUNT);
 
-    MpscChannel<int64_t> channel;
+    for (std::size_t sample_index = 0;
+         sample_index < CROSS_SCHEDULER_SAMPLE_COUNT;
+         ++sample_index) {
+        resetCounters();
 
-    // 消费者调度器
-    ComputeScheduler consumerScheduler;
+        MpscChannel<int64_t> channel;
+        ComputeScheduler consumerScheduler;
 
-    // 生产者协程
-    auto producerCoro = [](MpscChannel<int64_t>* ch, int64_t count) -> Coroutine {
-
-        for (int64_t i = 0; i < count; ++i) {
-            ch->send(i);
-            g_sent.fetch_add(1, std::memory_order_relaxed);
-            if (i % 100 == 0) {
-                co_yield true;  // 让出执行权
-            }
-        }
-        g_producer_done = true;
-        co_return;
-    };
-
-    auto start = std::chrono::steady_clock::now();
-
-    // 启动消费者线程
-    std::thread consumerThread([&]() {
         consumerScheduler.start();
+        galay::benchmark::CompletionLatch consumer_done_latch(1);
+        g_consumer_done_latch = &consumer_done_latch;
         consumerScheduler.spawn(simpleConsumer(&channel, message_count));
-
-        while (!g_consumer_done) {
-            std::this_thread::sleep_for(1ms);
+        if (!galay::benchmark::waitForFlag(g_consumer_ready, 2s)) {
+            LogError("  consumer did not become ready before cross-scheduler run");
+            g_consumer_done_latch = nullptr;
+            consumerScheduler.stop();
+            return;
         }
+
+        galay::benchmark::CompletionLatch producer_ready_latch(1);
+        galay::benchmark::CompletionLatch producer_done_latch(1);
+        galay::benchmark::StartGate start_gate;
+
+        std::thread producer_thread([&]() {
+            ComputeScheduler producerScheduler;
+            producerScheduler.start();
+            producer_ready_latch.arrive();
+            start_gate.wait();
+            producerScheduler.spawn(
+                crossSchedulerProducer(&channel, message_count, &producer_done_latch));
+            producer_done_latch.wait();
+            producerScheduler.stop();
+        });
+
+        if (!producer_ready_latch.waitFor(2s)) {
+            LogError("  producer did not become ready before cross-scheduler run");
+            start_gate.open();
+            producer_thread.join();
+            g_consumer_done_latch = nullptr;
+            consumerScheduler.stop();
+            return;
+        }
+
+        const auto start = std::chrono::steady_clock::now();
+        start_gate.open();
+        consumer_done_latch.wait();
+        producer_done_latch.wait();
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        const auto elapsed_ns =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
+
+        producer_thread.join();
+        g_consumer_done_latch = nullptr;
         consumerScheduler.stop();
-    });
 
-    // 启动生产者线程（独立调度器）
-    std::thread producerThread([&]() {
-        ComputeScheduler producerScheduler;
-        producerScheduler.start();
-        producerScheduler.spawn(producerCoro(&channel, message_count));
+        samples.push_back({
+            .elapsed_ms = static_cast<double>(elapsed_ns) / 1'000'000.0,
+            .throughput = elapsed_ns > 0
+                ? (static_cast<double>(message_count) * 1'000'000'000.0 / elapsed_ns)
+                : 0.0,
+            .received = g_received.load(std::memory_order_relaxed),
+            .sum = g_sum.load(std::memory_order_relaxed),
+        });
+    }
 
-        while (!g_producer_done) {
-            std::this_thread::sleep_for(1ms);
-        }
-        producerScheduler.stop();
-    });
-
-    producerThread.join();
-    consumerThread.join();
-
-    auto elapsed = std::chrono::steady_clock::now() - start;
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-    double throughput = (double)message_count / ms * 1000.0;
-
-    int64_t expected_sum = (message_count - 1) * message_count / 2;
-    bool correct = (g_received == message_count) && (g_sum == expected_sum);
+    const auto median_sample = galay::benchmark::medianElement(
+        std::move(samples),
+        [](const ThroughputSample& lhs, const ThroughputSample& rhs) {
+            return lhs.throughput < rhs.throughput;
+        });
+    const int64_t expected_sum = (message_count - 1) * message_count / 2;
+    const bool correct =
+        (median_sample.received == message_count) && (median_sample.sum == expected_sum);
 
     LogInfo("  sent={}, received={}, time={}ms, throughput={:.0f} msg/s",
-            g_sent.load(), g_received.load(), ms, throughput);
+            message_count,
+            median_sample.received,
+            median_sample.elapsed_ms,
+            median_sample.throughput);
     LogInfo("  sum={} (expected {}), correct={}",
-            g_sum.load(), expected_sum, correct ? "YES" : "NO");
+            median_sample.sum, expected_sum, correct ? "YES" : "NO");
 }
 
 // 7. 持续压力测试
@@ -535,7 +746,7 @@ int main() {
     LogInfo("");
 
     // 3. 批量接收吞吐量
-    benchBatchReceiveThroughput(THROUGHPUT_MESSAGES);
+    benchBatchReceiveThroughput(THROUGHPUT_MESSAGES * 5);
     LogInfo("");
 
     // 4. 延迟测试

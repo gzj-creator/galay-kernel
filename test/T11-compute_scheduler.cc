@@ -53,7 +53,6 @@ Coroutine testComputeIntensive() {
 }
 
 // 测试4：协程链式执行（使用 then）
-std::atomic<int> g_test4_order{0};
 std::vector<int> g_test4_sequence;
 std::mutex g_test4_mutex;
 
@@ -207,12 +206,8 @@ void runTests() {
         }
     }
 
-    // 测试4：协程链式执行（跳过 - Coroutine::then 功能需要单独修复）
-    // {
-    //     LogInfo("[Test 4] Coroutine chaining (then)...");
-    //     g_total++;
-    //     ...
-    // }
+    // 测试4：协程链式执行（兼容 then）
+    // focused 验证已迁移到 T61-coroutine_then_compat，避免这个旧套件把停机时机噪声混入 then 语义回归
 
     // 测试5：调度器启停
     {

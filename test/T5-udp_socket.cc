@@ -4,6 +4,7 @@
 #include <string_view>
 #include "galay-kernel/async/UdpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
+#include "test/TestPortConfig.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -20,6 +21,14 @@
 
 using namespace galay::async;
 using namespace galay::kernel;
+
+namespace {
+
+uint16_t udpTestPort() {
+    return galay::test::resolvePortFromEnv("GALAY_TEST_UDP_PORT", 8080);
+}
+
+}
 
 // UDP Echo服务器协程
 Coroutine udpEchoServer() {
@@ -41,7 +50,7 @@ Coroutine udpEchoServer() {
     }
 
     // 绑定地址
-    Host bindHost(IPType::IPV4, "127.0.0.1", 8080);
+    Host bindHost(IPType::IPV4, "127.0.0.1", udpTestPort());
     auto bindResult = socket.bind(bindHost);
     if (!bindResult) {
         LogError("Failed to bind: {}", bindResult.error().message());
@@ -49,7 +58,7 @@ Coroutine udpEchoServer() {
     }
     LogDebug("Bind successful");
 
-    LogInfo("UDP Server listening on 127.0.0.1:8080");
+    LogInfo("UDP Server listening on 127.0.0.1:{}", udpTestPort());
 
     // Echo循环 - 接收并回显3个数据报
     char buffer[65536];
@@ -88,7 +97,7 @@ Coroutine udpEchoClient() {
     socket.option().handleNonBlock();
 
     // 服务器地址
-    Host serverHost(IPType::IPV4, "127.0.0.1", 8080);
+    Host serverHost(IPType::IPV4, "127.0.0.1", udpTestPort());
 
     // 发送3条消息
     const char* messages[] = {

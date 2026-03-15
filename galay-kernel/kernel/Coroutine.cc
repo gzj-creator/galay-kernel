@@ -4,10 +4,101 @@
 namespace galay::kernel
 {
 
-TaskRef::TaskRef(TaskState* state, bool retain_ref) noexcept
+namespace
+{
+
+thread_local Runtime* g_currentRuntime = nullptr;
+
+void attachThenContinuation(TaskState* state, Coroutine co)
+{
+    if (state == nullptr) {
+        return;
+    }
+
+    TaskRef next = detail::CoroutineAccess::taskRef(co);
+    detail::inheritTaskRuntime(next, state->m_runtime);
+    if (next.belongScheduler() == nullptr && state->m_scheduler != nullptr) {
+        detail::setTaskScheduler(next, state->m_scheduler);
+    }
+    state->m_then = std::move(next);
+}
+
+} // namespace
+
+namespace detail
+{
+
+Runtime* currentRuntime() noexcept
+{
+    return g_currentRuntime;
+}
+
+Runtime* swapCurrentRuntime(Runtime* runtime) noexcept
+{
+    Runtime* previous = g_currentRuntime;
+    g_currentRuntime = runtime;
+    return previous;
+}
+
+bool scheduleTask(const TaskRef& task) noexcept
+{
+    auto* scheduler = task.belongScheduler();
+    return scheduler != nullptr && scheduler->schedule(task);
+}
+
+bool scheduleTaskDeferred(const TaskRef& task) noexcept
+{
+    auto* scheduler = task.belongScheduler();
+    return scheduler != nullptr && scheduler->scheduleDeferred(task);
+}
+
+bool spawnCoroutine(Scheduler* scheduler, Coroutine co) noexcept
+{
+    return scheduler != nullptr && scheduler->spawn(std::move(co));
+}
+
+bool spawnCoroutineImmediately(Scheduler* scheduler, Coroutine co) noexcept
+{
+    return scheduler != nullptr && scheduler->spawnImmidiately(std::move(co));
+}
+
+std::thread::id schedulerThreadId(Scheduler* scheduler) noexcept
+{
+    return scheduler ? scheduler->threadId() : std::thread::id{};
+}
+
+void completeTaskState(const TaskRef& task) noexcept
+{
+    auto* state = task.state();
+    if (!state) {
+        return;
+    }
+
+    state->m_done.store(true, std::memory_order_release);
+
+    if (state->m_then.has_value()) {
+        TaskRef next_then = std::move(*state->m_then);
+        state->m_then.reset();
+        if (auto* scheduler = next_then.belongScheduler()) {
+            scheduler->schedule(std::move(next_then));
+        }
+    }
+
+    if (state->m_next.has_value()) {
+        TaskRef next = std::move(*state->m_next);
+        state->m_next.reset();
+        if (auto* scheduler = next.belongScheduler()) {
+            scheduler->schedule(std::move(next));
+        }
+    }
+}
+
+} // namespace detail
+
+TaskRef::TaskRef(TaskState* state, bool retainRef) noexcept
     : m_state(state)
 {
-    if (retain_ref) {
+    if (retainRef) {
         retain();
     }
 }
@@ -74,58 +165,33 @@ void TaskRef::release() noexcept
     }
 }
 
-// PromiseType implementation
 Coroutine PromiseType::get_return_object() noexcept
 {
     m_coroutine = Coroutine(std::coroutine_handle<PromiseType>::from_promise(*this));
+    if (Runtime* runtime = detail::currentRuntime()) {
+        detail::inheritTaskRuntime(m_coroutine.m_task, runtime);
+    }
     return m_coroutine;
 }
 
 std::suspend_always PromiseType::yield_value(ReSchedulerType flag) noexcept
 {
-    if(flag) {
-        m_coroutine.m_task.belongScheduler()->scheduleDeferred(m_coroutine.taskRef());
+    if (flag) {
+        detail::scheduleTaskDeferred(m_coroutine.m_task);
     }
     return {};
 }
 
-void PromiseType::return_void() noexcept {
-    auto* state = m_coroutine.m_task.state();
-    state->m_done.store(true, std::memory_order_relaxed);
-
-    if (state->m_next.has_value()) {
-        state->m_next->m_task.state()->m_handle.resume();
-    }
-}
-
-bool WaitResult::await_suspend(std::coroutine_handle<> handle)
+void PromiseType::unhandled_exception() noexcept
 {
-    auto typed_handle = std::coroutine_handle<Coroutine::promise_type>::from_address(handle.address());
-    auto& wait_co = typed_handle.promise().coroutineRef();
-    wait_co.belongScheduler()->spawnImmidiately(m_co);
-    if(m_co.done()) return false;
-    m_co.m_task.state()->m_next = wait_co;
-    return true;
+    detail::completeTaskState(m_coroutine.m_task);
 }
 
-bool SpawnAwaitable::await_suspend(std::coroutine_handle<PromiseType> handle) noexcept
+void PromiseType::return_void() noexcept
 {
-    // 从当前协程获取调度器
-    auto& promise = handle.promise();
-    auto& current_coro = promise.coroutineRef();
-    auto scheduler = current_coro.belongScheduler();
-
-    if (scheduler) {
-        // 将新协程spawn到当前调度器
-        scheduler->spawn(std::move(m_co));
-    }
-
-    // 不挂起当前协程，立即继续执行
-    return false;
+    detail::completeTaskState(m_coroutine.m_task);
 }
 
-
-// Coroutine implementation
 Coroutine::Coroutine(std::coroutine_handle<promise_type> handle) noexcept
     : m_task(new TaskState(handle), false)
 {
@@ -162,43 +228,22 @@ Coroutine& Coroutine::operator=(const Coroutine& other) noexcept
     return *this;
 }
 
-void Coroutine::resume()
-{
-    auto* state = m_task.state();
-    if (state && state->m_handle && state->m_scheduler) {
-        if (!state->m_queued.exchange(true, std::memory_order_acq_rel)) {
-            state->m_scheduler->schedule(m_task);
-        }
-    }
-}
-
-Scheduler *Coroutine::belongScheduler() const
-{
-    auto* state = m_task.state();
-    return state ? state->m_scheduler : nullptr;
-}
-
-void Coroutine::belongScheduler(Scheduler* scheduler)
-{
-    auto* state = m_task.state();
-    if (state) {
-        state->m_scheduler = scheduler;
-    }
-}
-
-std::thread::id Coroutine::threadId() const
-{
-    auto* state = m_task.state();
-    return (state && state->m_scheduler) ? state->m_scheduler->threadId() : std::thread::id{};
-}
-
 bool Coroutine::done() const
 {
     auto* state = m_task.state();
-    if(state) {
-        return state->m_done.load(std::memory_order_relaxed);
-    }
-    return true;
+    return !state || state->m_done.load(std::memory_order_acquire);
+}
+
+Coroutine& Coroutine::then(Coroutine co) &
+{
+    attachThenContinuation(m_task.state(), std::move(co));
+    return *this;
+}
+
+Coroutine&& Coroutine::then(Coroutine co) &&
+{
+    attachThenContinuation(m_task.state(), std::move(co));
+    return std::move(*this);
 }
 
 WaitResult Coroutine::wait()
@@ -206,4 +251,4 @@ WaitResult Coroutine::wait()
     return WaitResult(*this);
 }
 
-}
+} // namespace galay::kernel

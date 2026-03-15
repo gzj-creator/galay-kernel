@@ -1,6 +1,5 @@
 import galay.kernel;
 
-#include <coroutine>
 #include <atomic>
 #include <chrono>
 #include <iostream>
@@ -9,50 +8,81 @@ import galay.kernel;
 using namespace galay::kernel;
 
 namespace {
-std::atomic<int> g_tasks_finished{0};
-std::atomic<bool> g_wait_done{false};
 
-Coroutine simpleTask(int id, int limit) {
-    long long sum = 0;
+std::atomic<int> g_detachedFinished{0};
+
+Task<int> sumTask(int id, int limit)
+{
+    std::cout << "task " << id << " started\n";
+
+    int sum = 0;
     for (int i = 0; i < limit; ++i) {
         sum += i;
     }
 
-    std::cout << "task " << id << " finished, sum=" << sum << "\n";
-    g_tasks_finished.fetch_add(1, std::memory_order_release);
+    std::cout << "task " << id << " completed, sum=" << sum << "\n";
+    co_return sum;
+}
+
+Task<void> detachedTask(int id)
+{
+    std::cout << "detached task " << id << " started\n";
+    co_yield true;
+    g_detachedFinished.fetch_add(1, std::memory_order_acq_rel);
+    std::cout << "detached task " << id << " completed\n";
     co_return;
 }
 
-Coroutine parentTask() {
-    co_await spawn(simpleTask(2, 1000));
-    co_await spawn(simpleTask(3, 2000));
+Task<void> spawnFromCurrentRuntime()
+{
+    auto runtimeHandle = RuntimeHandle::current();
+    runtimeHandle.spawn(detachedTask(1));
+    runtimeHandle.spawn(detachedTask(2));
     co_return;
 }
 
-Coroutine waitExample() {
-    Coroutine task = simpleTask(100, 3000);
-    co_await task.wait();
-    g_wait_done.store(true, std::memory_order_release);
-    co_return;
-}
-}  // namespace
-
-int main() {
-    ComputeScheduler scheduler;
-    scheduler.start();
-
-    scheduler.spawn(simpleTask(1, 500));
-    scheduler.spawn(parentTask());
-    scheduler.spawn(waitExample());
-
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while ((!g_wait_done.load(std::memory_order_acquire) ||
-            g_tasks_finished.load(std::memory_order_acquire) < 4) &&
-           std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+Task<void> waitForDetachedTasks()
+{
+    for (int i = 0; i < 1024 && g_detachedFinished.load(std::memory_order_acquire) < 2; ++i) {
+        co_yield true;
     }
 
-    scheduler.stop();
-    std::cout << "finished task count: " << g_tasks_finished.load() << "\n";
+    std::cout << "detached tasks finished: " << g_detachedFinished.load(std::memory_order_acquire) << "\n";
+    co_return;
+}
+
+Task<void> spawnBlockingDemo()
+{
+    auto blocking = RuntimeHandle::current().spawnBlocking([]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        return 7;
+    });
+    blocking.wait();
+    int value = blocking.join();
+
+    std::cout << "spawnBlocking returned " << value << "\n";
+    co_return;
+}
+
+} // namespace
+
+int main()
+{
+    Runtime runtime = RuntimeBuilder()
+        .ioSchedulerCount(0)
+        .computeSchedulerCount(1)
+        .build();
+
+    int rootValue = runtime.blockOn(sumTask(1, 1000));
+    std::cout << "blockOn returned " << rootValue << "\n";
+
+    auto handle = runtime.spawn(sumTask(2, 2000));
+    handle.wait();
+    std::cout << "spawn().join() returned " << handle.join() << "\n";
+
+    runtime.blockOn(spawnFromCurrentRuntime());
+    runtime.blockOn(waitForDetachedTasks());
+    runtime.blockOn(spawnBlockingDemo());
+
     return 0;
 }

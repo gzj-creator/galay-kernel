@@ -288,16 +288,17 @@
 - `struct RuntimeAffinityConfig`
 - `struct RuntimeConfig`
 - `class Runtime`
+- `class RuntimeHandle`
 - `class RuntimeBuilder`
+- `template <typename T> class Task`
+- `template <typename T> class JoinHandle`
 - `class ComputeScheduler`
 - `class EpollScheduler`
 - `class KqueueScheduler`
 - `class IOUringScheduler`
-- `class TaskRef`
 - `class Coroutine`
 - `struct WaitResult`
 - `struct SpawnAwaitable`
-- `struct ComputeTask`
 - `class Timer`
 - `class CBTimer`
 - `class TimerScheduler`
@@ -319,6 +320,10 @@
 `Runtime` 关键接口：
 
 - `explicit Runtime(const RuntimeConfig& config = RuntimeConfig{})`
+- `template <typename T> T blockOn(Task<T> task)`
+- `template <typename T> JoinHandle<T> spawn(Task<T> task)`
+- `template <typename F> auto spawnBlocking(F&& func) -> JoinHandle<R>`
+- `RuntimeHandle handle()`
 - `bool addIOScheduler(std::unique_ptr<IOScheduler> scheduler)`
 - `bool addComputeScheduler(std::unique_ptr<ComputeScheduler> scheduler)`
 - `void start()`
@@ -330,6 +335,13 @@
 - `ComputeScheduler* getComputeScheduler(size_t index)`
 - `IOScheduler* getNextIOScheduler()`
 - `ComputeScheduler* getNextComputeScheduler()`
+
+`RuntimeHandle` 关键接口：
+
+- `static RuntimeHandle current()`
+- `static std::optional<RuntimeHandle> tryCurrent()`
+- `template <typename T> JoinHandle<T> spawn(Task<T> task) const`
+- `template <typename F> auto spawnBlocking(F&& func) const -> JoinHandle<R>`
 
 `RuntimeBuilder` 关键接口：
 
@@ -343,6 +355,9 @@
 
 注意：
 
+- 高层任务入口统一收口到 `blockOn(...)`、`spawn(...)`、`spawnBlocking(...)`、`RuntimeHandle`
+- `JoinHandle<T>` 的公开结果路径只有 `wait()` / `join()`；当前没有 `result()` 一类兼容接口
+- `RuntimeHandle::current()` 在 runtime 上下文外会抛异常；更稳妥的探测入口是 `tryCurrent()`
 - `Runtime::start()` 只有在 IO / Compute 两类调度器都还为空时才会自动创建默认调度器；如果你手工只添加了其中一类，另一类不会被自动补齐
 - `Runtime::start()` 会先启动全局 `TimerScheduler`，再启动 IO / 计算调度器
 - `Runtime::stop()` 会按相反顺序停止并回收
@@ -395,47 +410,36 @@
 
 协程辅助：
 
-- `TaskRef`
 - `Coroutine`
+- `template <typename T> class Task`
+- `template <typename T> class JoinHandle`
 - `WaitResult Coroutine::wait()`
+- `Coroutine& then(Coroutine co) &`
+- `Coroutine&& then(Coroutine co) &&`
 - `SpawnAwaitable spawn(Coroutine co)`
 - `template<concepts::ChronoDuration Duration> SleepAwaitable sleep(Duration duration)`
 
-`TaskRef` / `Coroutine` / `WaitResult` / `SpawnAwaitable` / `ComputeTask`：
+`Task<T>` / `JoinHandle<T>` / `Coroutine` / `WaitResult` / `SpawnAwaitable`：
 
-- `TaskRef() noexcept`
-- `TaskRef(const TaskRef& other) noexcept`
-- `TaskRef(TaskRef&& other) noexcept`
-- `TaskRef& operator=(const TaskRef& other) noexcept`
-- `TaskRef& operator=(TaskRef&& other) noexcept`
-- `bool isValid() const noexcept`
-- `TaskState* state() const noexcept`
-- `Scheduler* belongScheduler() const noexcept`
-- `Coroutine() noexcept`
-- `explicit Coroutine(std::coroutine_handle<promise_type> handle) noexcept`
-- `Coroutine(Coroutine&& other) noexcept`
-- `Coroutine(const Coroutine& other) noexcept`
-- `Coroutine& operator=(Coroutine&& other) noexcept`
-- `Coroutine& operator=(const Coroutine& other) noexcept`
-- `bool isValid() const`
-- `bool done() const`
-- `WaitResult wait()`
-- `Scheduler* belongScheduler() const`
-- `TaskRef taskRef() const noexcept`
-- `TaskRef detachTask() && noexcept`
-- `void belongScheduler(Scheduler* scheduler)`
-- `std::thread::id threadId() const`
-- `void resume()`
-- `struct ComputeTask { Coroutine coro; bool is_stop_signal = false; }`
+- `Task<T>`：runtime 提交单元；通过 `Runtime::blockOn(...)`、`Runtime::spawn(...)`、`RuntimeHandle::spawn(...)` 消费
+- `JoinHandle<T>::wait()`：阻塞到结果就绪，但不提取结果
+- `JoinHandle<T>::join()`：提取结果或重抛异常；结果只能消费一次
+- `Coroutine`：保留 `isValid()`、`done()`、`wait()`、`then(...)`
+- `SpawnAwaitable spawn(Coroutine co)`：把协程提交到当前协程所属调度器
+
+内部说明：
+
+- `TaskRef`、`ComputeTask`、调度器绑定 / resume plumbing 已降级为 runtime/scheduler 内核实现细节，不再作为公开工作流 API 描述
+- 需要排障或读实现时，以 `galay-kernel/kernel/Coroutine.h` 与相关测试为准，不建议业务代码直接依赖这些内部类型
 
 语义说明：
 
-- `TaskRef` 是轻量、可拷贝的 intrusive 任务引用，内部只保存 `TaskState*`
 - `Coroutine` 拷贝后仍共享同一任务状态；`done()` 读取的是共享的原子完成位
-- `Coroutine::resume()` 不会直接在当前线程执行句柄，而是把任务通过 `schedule(...)` 路径重新投递到所属调度器
-- `co_await coro.wait()` 会先尝试把被等待协程 `spawnImmidiately(...)` 到当前等待者所属调度器；若目标协程尚未完成，则把等待者挂到目标协程的 `m_next`
+- `Coroutine::then(...)` 用于根协程链式串接，continuation 生命周期不依赖调用点临时对象
+- `co_await coro.wait()` 会先尝试把被等待协程 `spawnImmidiately(...)` 到当前等待者所属调度器；若目标协程尚未完成，则把等待者挂到目标协程 continuation
+- 当前 `wait()` 仍是单 waiter 语义；同一个 `Coroutine` 不应被多个协程并发 `wait()`
+- 被等待协程完成后，waiter 会通过其所属 `Scheduler::schedule(...)` 路径恢复，而不是直接跨线程恢复底层句柄
 - `co_await spawn(child)` 只负责把 `child` 提交到当前协程所属调度器；`await_suspend(...)` 返回 `false`，因此当前协程不会因为这个 awaitable 被挂起
-- `ComputeTask` 是 `ComputeScheduler` 队列里传递的最小单元；`is_stop_signal=true` 表示唤醒工作线程并结束循环
 
 `Timer` / `CBTimer` / `TimerScheduler`：
 

@@ -26,7 +26,7 @@ target_link_libraries(B5-UdpClient PRIVATE galay-kernel)
 target_include_directories(B5-UdpClient PRIVATE ${CMAKE_SOURCE_DIR})
 
 # B6 - UDP Socket 压测（原始合并版本）
-add_executable(B6-Udp B6-udp.cc)
+add_executable(B6-Udp B6-Udp.cc)
 target_link_libraries(B6-Udp PRIVATE galay-kernel)
 target_include_directories(B6-Udp PRIVATE ${CMAKE_SOURCE_DIR})
 
@@ -46,7 +46,7 @@ target_link_libraries(B9-UnsafeChannel PRIVATE galay-kernel)
 target_include_directories(B9-UnsafeChannel PRIVATE ${CMAKE_SOURCE_DIR})
 
 # B10 - RingBuffer 压测
-add_executable(B10-Ringbuffer B10-ringbuffer.cc)
+add_executable(B10-Ringbuffer B10-Ringbuffer.cc)
 target_link_libraries(B10-Ringbuffer PRIVATE galay-kernel)
 target_include_directories(B10-Ringbuffer PRIVATE ${CMAKE_SOURCE_DIR})
 
@@ -61,6 +61,11 @@ target_link_libraries(B12-TcpIovClient PRIVATE galay-kernel)
 target_include_directories(B12-TcpIovClient PRIVATE ${CMAKE_SOURCE_DIR})
 
 # B13 - SendFile 性能对比和压测
-add_executable(B13-Sendfile B13-sendfile.cc)
+add_executable(B13-Sendfile B13-Sendfile.cc)
 target_link_libraries(B13-Sendfile PRIVATE galay-kernel)
 target_include_directories(B13-Sendfile PRIVATE ${CMAKE_SOURCE_DIR})
+
+# B14 - Scheduler injected wakeup 压测
+add_executable(B14-SchedulerInjectedWakeup B14-scheduler_injected_wakeup.cc)
+target_link_libraries(B14-SchedulerInjectedWakeup PRIVATE galay-kernel)
+target_include_directories(B14-SchedulerInjectedWakeup PRIVATE ${CMAKE_SOURCE_DIR})

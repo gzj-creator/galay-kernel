@@ -1,0 +1,68 @@
+#include "galay-kernel/kernel/WaitRegistration.h"
+
+#include <cstdint>
+#include <iostream>
+
+using namespace galay::kernel;
+
+int main() {
+    WaitRegistration registration;
+
+    void* first_waiter = reinterpret_cast<void*>(static_cast<uintptr_t>(0x1));
+    void* second_waiter = reinterpret_cast<void*>(static_cast<uintptr_t>(0x2));
+
+    if (!registration.arm(first_waiter)) {
+        std::cerr << "[T49] failed to arm first waiter\n";
+        return 1;
+    }
+
+    if (!registration.hasWaiter()) {
+        std::cerr << "[T49] expected armed waiter\n";
+        return 1;
+    }
+
+    if (registration.generation() != 1) {
+        std::cerr << "[T49] expected generation=1, got " << registration.generation() << "\n";
+        return 1;
+    }
+
+    void* signaled = registration.consumeWake();
+    if (signaled != first_waiter) {
+        std::cerr << "[T49] expected first waiter to be signaled\n";
+        return 1;
+    }
+
+    if (registration.consumeWake() != nullptr) {
+        std::cerr << "[T49] consumeWake should be single-shot\n";
+        return 1;
+    }
+
+    if (registration.clear(first_waiter)) {
+        std::cerr << "[T49] clear should fail after consumeWake\n";
+        return 1;
+    }
+
+    if (!registration.arm(second_waiter)) {
+        std::cerr << "[T49] failed to re-arm second waiter\n";
+        return 1;
+    }
+
+    if (registration.generation() != 2) {
+        std::cerr << "[T49] expected generation=2 after re-arm, got "
+                  << registration.generation() << "\n";
+        return 1;
+    }
+
+    if (!registration.clear(second_waiter)) {
+        std::cerr << "[T49] clear should succeed for currently armed waiter\n";
+        return 1;
+    }
+
+    if (registration.hasWaiter()) {
+        std::cerr << "[T49] expected waiter to be cleared\n";
+        return 1;
+    }
+
+    std::cout << "T49-ChannelWaitRegistration PASS\n";
+    return 0;
+}

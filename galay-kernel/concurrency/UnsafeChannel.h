@@ -276,8 +276,8 @@ private:
             if (handle) {
                 if (m_wake_mode == UnsafeChannelWakeMode::Deferred) {
                     auto& waiter = handle.promise().coroutineRef();
-                    if (waiter.belongScheduler()) {
-                        waiter.resume();
+                    if (detail::CoroutineAccess::belongScheduler(waiter)) {
+                        detail::CoroutineAccess::resume(waiter);
                         return;
                     }
                 }

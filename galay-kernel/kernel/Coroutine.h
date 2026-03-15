@@ -1,56 +1,59 @@
 /**
  * @file Coroutine.h
- * @brief C++20 协程封装
- * @author galay-kernel
- * @version 1.0.0
- *
- * @details 提供基于C++20标准协程的封装，包括：
- * - Coroutine: 协程句柄包装类
- * - PromiseType: 协程Promise类型
- * - CoroutineData: 协程状态数据
- * - WaitResult: 协程等待结果
- *
- * @example
- * @code
- * // 定义协程函数
- * Coroutine myCoroutine() {
- *     // 异步操作
- *     co_await someAwaitable();
- *     co_return;
- * }
- *
- * // 提交到调度器执行
- * scheduler.spawn(myCoroutine());
- * @endcode
+ * @brief C++20 coroutine wrappers for galay-kernel
  */
 
 #ifndef GALAY_KERNEL_COROUTINE_H
 #define GALAY_KERNEL_COROUTINE_H
 
 #include <atomic>
+#include <condition_variable>
 #include <coroutine>
-#include <optional>
-#include <thread>
 #include <cstdint>
+#include <exception>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <stdexcept>
+#include <thread>
+#include <type_traits>
+#include <utility>
 
 namespace galay::kernel
 {
 
-class PromiseType;
-struct TaskState;
-struct WaitResult;
-class Waker;
+class Coroutine;
 class Scheduler;
+class Waker;
+class Runtime;
+class PromiseType;
+template <typename T>
+class TaskPromise;
+template <typename T>
+class Task;
+template <typename T>
+class JoinHandle;
+struct WaitResult;
+struct SpawnAwaitable;
+struct TaskState;
 class TaskRef;
 
-/**
- * @brief 轻量任务引用
- *
- * @details
- * - 仅保存 `TaskState*`
- * - 使用 intrusive refcount 管理生命周期
- * - 供 `Coroutine` / `Waker` / scheduler 内部共享同一任务状态
- */
+namespace detail
+{
+
+Runtime* currentRuntime() noexcept;
+Runtime* swapCurrentRuntime(Runtime* runtime) noexcept;
+bool scheduleTask(const TaskRef& task) noexcept;
+bool scheduleTaskDeferred(const TaskRef& task) noexcept;
+bool spawnCoroutine(Scheduler* scheduler, Coroutine co) noexcept;
+bool spawnCoroutineImmediately(Scheduler* scheduler, Coroutine co) noexcept;
+std::thread::id schedulerThreadId(Scheduler* scheduler) noexcept;
+void completeTaskState(const TaskRef& task) noexcept;
+struct CoroutineAccess;
+struct TaskAccess;
+
+} // namespace detail
+
 class TaskRef
 {
 public:
@@ -68,8 +71,12 @@ public:
 
 private:
     friend class Coroutine;
+    template <typename T>
+    friend class Task;
+    template <typename T>
+    friend class TaskPromise;
 
-    explicit TaskRef(TaskState* state, bool retain_ref) noexcept;
+    explicit TaskRef(TaskState* state, bool retainRef) noexcept;
 
     void retain() noexcept;
     void release() noexcept;
@@ -77,339 +84,667 @@ private:
     TaskState* m_state = nullptr;
 };
 
-/**
- * @brief 协程类
- *
- * @details 封装C++20协程句柄，提供协程生命周期管理。
- * 通过轻量 `TaskRef` 引用共享任务状态，支持廉价拷贝和移动。
- *
- * @note
- * - 协程函数返回类型必须是Coroutine
- * - 协程内部使用co_await/co_return
- * - 通过scheduler.spawn()提交执行
- *
- * @see PromiseType, Scheduler
- */
+struct alignas(64) TaskState
+{
+    template <typename Promise>
+    explicit TaskState(std::coroutine_handle<Promise> handle) noexcept
+        : m_handle(handle) {}
+
+    std::coroutine_handle<> m_handle = nullptr;
+    Scheduler* m_scheduler = nullptr;
+    Runtime* m_runtime = nullptr;
+    std::optional<TaskRef> m_then;
+    std::optional<TaskRef> m_next;
+    std::atomic<uint32_t> m_refs{1};
+    std::atomic<bool> m_done{false};
+    std::atomic<bool> m_queued{false};
+};
+
+namespace detail
+{
+
+inline Runtime* taskRuntime(const TaskRef& task) noexcept
+{
+    auto* state = task.state();
+    return state ? state->m_runtime : nullptr;
+}
+
+inline void setTaskRuntime(const TaskRef& task, Runtime* runtime) noexcept
+{
+    if (auto* state = task.state()) {
+        state->m_runtime = runtime;
+        if (state->m_then.has_value()) {
+            if (auto* then_state = state->m_then->state(); then_state && then_state->m_runtime == nullptr) {
+                then_state->m_runtime = runtime;
+            }
+        }
+    }
+}
+
+inline void inheritTaskRuntime(const TaskRef& task, Runtime* runtime) noexcept
+{
+    if (auto* state = task.state(); state && state->m_runtime == nullptr) {
+        state->m_runtime = runtime;
+    }
+}
+
+inline void setTaskScheduler(const TaskRef& task, Scheduler* scheduler) noexcept
+{
+    if (auto* state = task.state()) {
+        state->m_scheduler = scheduler;
+        if (state->m_then.has_value() && state->m_then->belongScheduler() == nullptr) {
+            setTaskScheduler(*state->m_then, scheduler);
+        }
+    }
+}
+
+class CurrentRuntimeScope
+{
+public:
+    explicit CurrentRuntimeScope(Runtime* runtime) noexcept
+        : m_previous(swapCurrentRuntime(runtime)) {}
+
+    ~CurrentRuntimeScope()
+    {
+        swapCurrentRuntime(m_previous);
+    }
+
+    CurrentRuntimeScope(const CurrentRuntimeScope&) = delete;
+    CurrentRuntimeScope& operator=(const CurrentRuntimeScope&) = delete;
+
+private:
+    Runtime* m_previous;
+};
+
+} // namespace detail
+
+template <typename T>
+struct TaskCompletionState
+{
+    static_assert(!std::is_reference_v<T>, "Task<T> does not support reference results");
+
+    template <typename U>
+    void setValue(U&& value)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_value = std::forward<U>(value);
+            m_ready = true;
+        }
+        m_cv.notify_all();
+    }
+
+    void setException(std::exception_ptr exception)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_exception = std::move(exception);
+            m_ready = true;
+        }
+        m_cv.notify_all();
+    }
+
+    void wait() const
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_cv.wait(lock, [this]() { return m_ready; });
+    }
+
+    T take()
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_cv.wait(lock, [this]() { return m_ready; });
+        if (m_exception) {
+            std::rethrow_exception(m_exception);
+        }
+        if (m_consumed) {
+            throw std::runtime_error("task result already consumed");
+        }
+        m_consumed = true;
+        return std::move(*m_value);
+    }
+
+private:
+    mutable std::mutex m_mutex;
+    mutable std::condition_variable m_cv;
+    std::optional<T> m_value;
+    std::exception_ptr m_exception;
+    bool m_ready = false;
+    bool m_consumed = false;
+};
+
+template <>
+struct TaskCompletionState<void>
+{
+    void setValue()
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_ready = true;
+        }
+        m_cv.notify_all();
+    }
+
+    void setException(std::exception_ptr exception)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_exception = std::move(exception);
+            m_ready = true;
+        }
+        m_cv.notify_all();
+    }
+
+    void wait() const
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_cv.wait(lock, [this]() { return m_ready; });
+    }
+
+    void take()
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_cv.wait(lock, [this]() { return m_ready; });
+        if (m_exception) {
+            std::rethrow_exception(m_exception);
+        }
+        if (m_consumed) {
+            throw std::runtime_error("task result already consumed");
+        }
+        m_consumed = true;
+    }
+
+private:
+    mutable std::mutex m_mutex;
+    mutable std::condition_variable m_cv;
+    std::exception_ptr m_exception;
+    bool m_ready = false;
+    bool m_consumed = false;
+};
+
 class Coroutine
 {
     friend struct WaitResult;
+
 public:
-    using promise_type = PromiseType;  ///< Promise类型别名，C++20协程要求
+    using promise_type = PromiseType;
 
     friend class PromiseType;
     friend class Waker;
     friend class Scheduler;
+    template <typename T>
+    friend class Task;
 
     template <typename T>
-    friend class MpscChannel;  // MpscChannel 需要访问 resume()
+    friend class MpscChannel;
+    friend struct detail::CoroutineAccess;
 
-    /**
-     * @brief 默认构造函数
-     * @note 创建无效的协程对象
-     */
     Coroutine() noexcept = default;
-
-    /**
-     * @brief 从协程句柄构造
-     * @param handle C++20协程句柄
-     */
     explicit Coroutine(std::coroutine_handle<promise_type> handle) noexcept;
-
-    /**
-     * @brief 移动构造函数
-     * @param other 被移动的协程
-     */
     Coroutine(Coroutine&& other) noexcept;
-
-    /**
-     * @brief 拷贝构造函数
-     * @param other 被拷贝的协程
-     * @note 拷贝后共享同一任务状态
-     */
     Coroutine(const Coroutine& other) noexcept;
 
-    /**
-     * @brief 移动赋值运算符
-     * @param other 被移动的协程
-     * @return 当前对象引用
-     */
     Coroutine& operator=(Coroutine&& other) noexcept;
-
-    /**
-     * @brief 拷贝赋值运算符
-     * @param other 被拷贝的协程
-     * @return 当前对象引用
-     */
     Coroutine& operator=(const Coroutine& other) noexcept;
 
-    /**
-     * @brief 检查协程是否有效
-     * @return true 如果协程数据有效
-     */
     bool isValid() const { return m_task.isValid(); }
-
-    /**
-     * @brief 检查协程是否已完成
-     * @return true 如果协程已完成
-     * @note 线程安全，使用原子变量实现
-     */
     bool done() const;
-
-    /**
-     * @brief 等待协程完成
-     * @return WaitResult 可等待对象
-     * @note 在另一个协程中使用 co_await coro.wait(),使用另一协程持有的调度器
-     */
+    Coroutine& then(Coroutine co) &;
+    Coroutine&& then(Coroutine co) &&;
     WaitResult wait();
-
-    /**
-     * @brief 获取所属调度器
-     * @return Scheduler* 调度器指针，可能为nullptr
-     */
-    Scheduler* belongScheduler() const;
-
-    TaskRef taskRef() const noexcept { return m_task; }
-    TaskRef detachTask() && noexcept { return std::move(m_task); }
-
-    /**
-     * @brief 设置所属调度器
-     * @param scheduler 调度器指针
-     */
-    void belongScheduler(Scheduler* scheduler);
-
-    /**
-     * @brief 获取所属线程ID
-     * @return 线程ID
-     */
-    std::thread::id threadId() const;
-
-    /**
-     * @brief 恢复协程执行
-     * @note 仅供Waker和Scheduler调用，会在协程所属的scheduler上spawn
-     */
-    void resume();
 
 private:
     friend class Waker;
 
     explicit Coroutine(TaskRef task) noexcept;
 
-    TaskRef m_task;  ///< 轻量任务引用
+    TaskRef m_task;
 };
 
-/**
- * @brief 协程等待结果
- *
- * @details 用于在一个协程中等待另一个协程完成。
- * 实现了Awaitable接口。
- *
- * @code
- * Coroutine outer() {
- *     Coroutine inner = someCoroutine();
- *     co_await inner.wait();  // 等待inner完成
- * }
- * @endcode
- */
-struct WaitResult {
-public:
-    /**
-     * @brief 构造函数
-     * @param co 要等待的协程（拷贝以防止生命周期问题）
-     */
-    WaitResult(Coroutine co)
-        : m_co(co) {}
+namespace detail
+{
 
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false，需要挂起
-     */
-    bool await_ready() {
+struct CoroutineAccess
+{
+    static Scheduler* belongScheduler(const Coroutine& co)
+    {
+        auto* state = co.m_task.state();
+        return state ? state->m_scheduler : nullptr;
+    }
+
+    static void setScheduler(Coroutine& co, Scheduler* scheduler)
+    {
+        auto* state = co.m_task.state();
+        if (!state) {
+            return;
+        }
+        state->m_scheduler = scheduler;
+        if (state->m_then.has_value() && state->m_then->belongScheduler() == nullptr) {
+            detail::setTaskScheduler(*state->m_then, scheduler);
+        }
+    }
+
+    static TaskRef taskRef(const Coroutine& co) noexcept
+    {
+        return co.m_task;
+    }
+
+    static TaskRef detachTask(Coroutine&& co) noexcept
+    {
+        return std::move(co.m_task);
+    }
+
+    static std::thread::id threadId(const Coroutine& co)
+    {
+        return detail::schedulerThreadId(belongScheduler(co));
+    }
+
+    static void resume(Coroutine& co)
+    {
+        auto* state = co.m_task.state();
+        if (state && state->m_handle && state->m_scheduler &&
+            !state->m_done.load(std::memory_order_relaxed)) {
+            if (!state->m_queued.exchange(true, std::memory_order_acq_rel)) {
+                detail::scheduleTask(co.m_task);
+            }
+        }
+    }
+};
+
+} // namespace detail
+
+template <typename T>
+class Task
+{
+public:
+    using promise_type = TaskPromise<T>;
+
+    Task() noexcept = default;
+    Task(Task&& other) noexcept = default;
+    Task& operator=(Task&& other) noexcept = default;
+
+    Task(const Task&) = delete;
+    Task& operator=(const Task&) = delete;
+
+    bool isValid() const { return m_task.isValid() && static_cast<bool>(m_completion); }
+    bool done() const
+    {
+        auto* state = m_task.state();
+        return !state || state->m_done.load(std::memory_order_acquire);
+    }
+
+private:
+    friend class Runtime;
+    template <typename U>
+    friend class JoinHandle;
+    template <typename U>
+    friend class TaskPromise;
+    friend struct detail::TaskAccess;
+
+    explicit Task(TaskRef task, std::shared_ptr<TaskCompletionState<T>> completion) noexcept
+        : m_task(std::move(task))
+        , m_completion(std::move(completion))
+    {
+    }
+
+    T takeResult()
+    {
+        return m_completion->take();
+    }
+
+    const std::shared_ptr<TaskCompletionState<T>>& completionState() const noexcept
+    {
+        return m_completion;
+    }
+
+    TaskRef m_task;
+    std::shared_ptr<TaskCompletionState<T>> m_completion;
+};
+
+template <>
+class Task<void>
+{
+public:
+    using promise_type = TaskPromise<void>;
+
+    Task() noexcept = default;
+    Task(Task&& other) noexcept = default;
+    Task& operator=(Task&& other) noexcept = default;
+
+    Task(const Task&) = delete;
+    Task& operator=(const Task&) = delete;
+
+    bool isValid() const { return m_task.isValid() && static_cast<bool>(m_completion); }
+    bool done() const
+    {
+        auto* state = m_task.state();
+        return !state || state->m_done.load(std::memory_order_acquire);
+    }
+
+private:
+    friend class Runtime;
+    template <typename U>
+    friend class JoinHandle;
+    friend class TaskPromise<void>;
+    friend struct detail::TaskAccess;
+
+    explicit Task(TaskRef task, std::shared_ptr<TaskCompletionState<void>> completion) noexcept
+        : m_task(std::move(task))
+        , m_completion(std::move(completion))
+    {
+    }
+
+    void takeResult()
+    {
+        m_completion->take();
+    }
+
+    const std::shared_ptr<TaskCompletionState<void>>& completionState() const noexcept
+    {
+        return m_completion;
+    }
+
+    TaskRef m_task;
+    std::shared_ptr<TaskCompletionState<void>> m_completion;
+};
+
+template <typename T>
+class JoinHandle
+{
+public:
+    JoinHandle() noexcept = default;
+    explicit JoinHandle(std::shared_ptr<TaskCompletionState<T>> completion) noexcept
+        : m_completion(std::move(completion))
+    {
+    }
+
+    JoinHandle(JoinHandle&& other) noexcept = default;
+    JoinHandle& operator=(JoinHandle&& other) noexcept = default;
+
+    JoinHandle(const JoinHandle&) = delete;
+    JoinHandle& operator=(const JoinHandle&) = delete;
+
+    bool isValid() const noexcept { return static_cast<bool>(m_completion); }
+
+    void wait() const
+    {
+        if (!m_completion) {
+            throw std::runtime_error("invalid join handle");
+        }
+        m_completion->wait();
+    }
+
+    T join()
+    {
+        if (!m_completion) {
+            throw std::runtime_error("invalid join handle");
+        }
+        return m_completion->take();
+    }
+
+private:
+    std::shared_ptr<TaskCompletionState<T>> m_completion;
+};
+
+template <>
+class JoinHandle<void>
+{
+public:
+    JoinHandle() noexcept = default;
+    explicit JoinHandle(std::shared_ptr<TaskCompletionState<void>> completion) noexcept
+        : m_completion(std::move(completion))
+    {
+    }
+
+    JoinHandle(JoinHandle&& other) noexcept = default;
+    JoinHandle& operator=(JoinHandle&& other) noexcept = default;
+
+    JoinHandle(const JoinHandle&) = delete;
+    JoinHandle& operator=(const JoinHandle&) = delete;
+
+    bool isValid() const noexcept { return static_cast<bool>(m_completion); }
+
+    void wait() const
+    {
+        if (!m_completion) {
+            throw std::runtime_error("invalid join handle");
+        }
+        m_completion->wait();
+    }
+
+    void join()
+    {
+        if (!m_completion) {
+            throw std::runtime_error("invalid join handle");
+        }
+        m_completion->take();
+    }
+
+private:
+    std::shared_ptr<TaskCompletionState<void>> m_completion;
+};
+
+namespace detail
+{
+
+struct TaskAccess
+{
+    template <typename T>
+    static const TaskRef& taskRef(const Task<T>& task) noexcept
+    {
+        return task.m_task;
+    }
+
+    template <typename T>
+    static auto completionState(const Task<T>& task) noexcept -> const std::shared_ptr<TaskCompletionState<T>>&
+    {
+        return task.m_completion;
+    }
+
+    template <typename T>
+    static decltype(auto) takeResult(Task<T>& task)
+    {
+        return task.takeResult();
+    }
+
+    template <typename T>
+    static Coroutine asCoroutine(const Task<T>& task) noexcept
+    {
+        return Coroutine(task.m_task);
+    }
+};
+
+} // namespace detail
+
+struct WaitResult
+{
+public:
+    explicit WaitResult(Coroutine co)
+        : m_co(std::move(co))
+    {
+    }
+
+    bool await_ready()
+    {
         return false;
     }
 
-    /**
-     * @brief 挂起当前协程
-     * @param handle 当前协程句柄
-     * @return 是否需要挂起
-     */
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle)
+    {
+        TaskRef waitingTask = handle.promise().taskRefView();
+        detail::inheritTaskRuntime(m_co.m_task, detail::taskRuntime(waitingTask));
+        auto* scheduler = waitingTask.belongScheduler();
+        if (!detail::spawnCoroutineImmediately(scheduler, m_co)) {
+            return false;
+        }
+        if (m_co.done()) {
+            return false;
+        }
+        m_co.m_task.state()->m_next = std::move(waitingTask);
+        return true;
+    }
 
-    /**
-     * @brief 恢复时调用
-     */
     void await_resume() {}
 
 private:
-    Coroutine m_co;  ///< 要等待的协程
+    Coroutine m_co;
 };
 
-/**
- * @brief 协程spawn等待体
- *
- * @details 用于在协程中spawn另一个协程到当前调度器。
- * 从当前协程的handle中获取scheduler并spawn传入的协程。
- *
- * @code
- * Coroutine task() {
- *     // spawn一个新协程到当前调度器
- *     co_await spawn(someCoroutine());
- *     co_return;
- * }
- * @endcode
- */
-struct SpawnAwaitable {
+struct SpawnAwaitable
+{
 public:
-    /**
-     * @brief 构造函数
-     * @param co 要spawn的协程
-     */
     explicit SpawnAwaitable(Coroutine co)
-        : m_co(std::move(co)) {}
+        : m_co(std::move(co))
+    {
+    }
 
-    /**
-     * @brief 检查是否可以立即返回
-     * @return 始终返回false，需要挂起以获取调度器
-     */
-    bool await_ready() const noexcept {
+    bool await_ready() const noexcept
+    {
         return false;
     }
 
-    /**
-     * @brief spawn新协程
-     * @param handle 当前协程句柄
-     * @return 始终返回false，不挂起当前协程
-     */
-    bool await_suspend(std::coroutine_handle<PromiseType> handle) noexcept;
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept
+    {
+        TaskRef currentTask = handle.promise().taskRefView();
+        detail::inheritTaskRuntime(detail::CoroutineAccess::taskRef(m_co), detail::taskRuntime(currentTask));
+        detail::spawnCoroutine(currentTask.belongScheduler(), m_co);
+        return false;
+    }
 
-    /**
-     * @brief 恢复时调用
-     */
     void await_resume() noexcept {}
 
 private:
-    Coroutine m_co;  ///< 要spawn的协程
+    Coroutine m_co;
 };
 
-/**
- * @brief 全局spawn函数
- *
- * @details 在协程中spawn另一个协程到当前调度器。
- * 从当前协程的调度器中spawn新协程，不会阻塞当前协程。
- *
- * @param co 要spawn的协程
- * @return SpawnAwaitable 可等待对象
- *
- * @code
- * Coroutine parent() {
- *     // spawn子协程到当前调度器
- *     co_await spawn(childCoroutine());
- *     // 立即继续执行，不等待子协程完成
- *     co_return;
- * }
- * @endcode
- */
-inline SpawnAwaitable spawn(Coroutine co) {
+inline SpawnAwaitable spawn(Coroutine co)
+{
     return SpawnAwaitable(std::move(co));
 }
 
-/**
- * @brief 协程数据结构
- *
- * @details 存储协程的状态信息，使用64字节对齐避免伪共享。
- *
- * @note 由 `Coroutine` / `Waker` / scheduler 通过 intrusive refcount 管理
- */
-struct alignas(64) TaskState
+template <typename T>
+inline SpawnAwaitable spawn(Task<T> task)
 {
-    explicit TaskState(std::coroutine_handle<Coroutine::promise_type> handle) noexcept
-        : m_handle(handle) {}
+    return SpawnAwaitable(detail::TaskAccess::asCoroutine(task));
+}
 
-    std::coroutine_handle<Coroutine::promise_type> m_handle = nullptr;    ///< 底层协程句柄
-    Scheduler* m_scheduler = nullptr;                                     ///< 所属调度器
-    std::optional<Coroutine> m_next;                                      ///< 后续协程（用于链式执行）
-    std::atomic<uint32_t> m_refs{1};                                      ///< intrusive 引用计数
-    std::atomic<bool> m_done{false};                                      ///< 协程是否完成（线程安全）
-    std::atomic<bool> m_queued{false};                                    ///< 是否已在调度队列中（防重复入队）
-};
-
-/**
- * @brief 协程Promise类型
- *
- * @details C++20协程要求的Promise类型，定义协程的行为。
- *
- * @note
- * - initial_suspend: 协程创建后立即挂起
- * - final_suspend: 协程完成后不挂起
- * - return_void: 支持co_return（无返回值）
- */
 class PromiseType
 {
 public:
-    using ReSchedulerType = bool;  ///< yield_value参数类型
+    using ReSchedulerType = bool;
 
-    /**
-     * @brief 分配失败时调用
-     * @return 错误码
-     */
     int get_return_object_on_alloaction_failure() noexcept { return -1; }
-
-    /**
-     * @brief 获取协程返回对象
-     * @return Coroutine对象
-     */
     Coroutine get_return_object() noexcept;
-
-    /**
-     * @brief 初始挂起点
-     * @return suspend_always 协程创建后立即挂起
-     */
     std::suspend_always initial_suspend() noexcept { return {}; }
-
-    /**
-     * @brief yield值处理
-     * @param flag 是否重新调度
-     * @return suspend_always 挂起协程
-     */
     std::suspend_always yield_value(ReSchedulerType flag) noexcept;
-
-    /**
-     * @brief 最终挂起点
-     * @return suspend_never 协程完成后自动销毁
-     */
     std::suspend_never final_suspend() noexcept { return {}; }
-
-    /**
-     * @brief 未捕获异常处理
-     */
-    void unhandled_exception() noexcept {}
-
-    /**
-     * @brief 协程返回（无返回值）
-     */
+    void unhandled_exception() noexcept;
     void return_void() noexcept;
 
-    /**
-     * @brief 获取关联的Coroutine对象（复制）
-     * @return Coroutine对象副本
-     */
     Coroutine getCoroutine() { return m_coroutine; }
-
-    /**
-     * @brief 获取关联的Coroutine对象引用
-     * @return Coroutine对象引用
-     */
     Coroutine& coroutineRef() noexcept { return m_coroutine; }
     const Coroutine& coroutineRef() const noexcept { return m_coroutine; }
-
-    /**
-     * @brief 获取底层任务引用视图
-     * @return 只读 TaskRef 引用，不增加引用计数
-     */
     const TaskRef& taskRefView() const noexcept { return m_coroutine.m_task; }
 
+private:
+    Coroutine m_coroutine;
+};
+
+template <typename T>
+class TaskPromise
+{
+public:
+    using ReSchedulerType = bool;
+
+    int get_return_object_on_alloaction_failure() noexcept { return -1; }
+
+    Task<T> get_return_object() noexcept
+    {
+        auto handle = std::coroutine_handle<TaskPromise<T>>::from_promise(*this);
+        m_task = TaskRef(new TaskState(handle), false);
+        detail::inheritTaskRuntime(m_task, detail::currentRuntime());
+        return Task<T>(m_task, m_completion);
+    }
+
+    std::suspend_always initial_suspend() noexcept { return {}; }
+
+    std::suspend_always yield_value(ReSchedulerType flag) noexcept
+    {
+        if (flag) {
+            detail::scheduleTaskDeferred(m_task);
+        }
+        return {};
+    }
+
+    std::suspend_never final_suspend() noexcept { return {}; }
+
+    void unhandled_exception() noexcept
+    {
+        m_completion->setException(std::current_exception());
+        detail::completeTaskState(m_task);
+    }
+
+    template <typename U>
+    void return_value(U&& value) noexcept(std::is_nothrow_constructible_v<T, U&&>)
+    {
+        m_completion->setValue(std::forward<U>(value));
+        detail::completeTaskState(m_task);
+    }
+
+    const TaskRef& taskRefView() const noexcept { return m_task; }
 
 private:
-    Coroutine m_coroutine;  ///< 关联的Coroutine对象
+    TaskRef m_task;
+    std::shared_ptr<TaskCompletionState<T>> m_completion = std::make_shared<TaskCompletionState<T>>();
+};
+
+template <>
+class TaskPromise<void>
+{
+public:
+    using ReSchedulerType = bool;
+
+    int get_return_object_on_alloaction_failure() noexcept { return -1; }
+
+    Task<void> get_return_object() noexcept
+    {
+        auto handle = std::coroutine_handle<TaskPromise<void>>::from_promise(*this);
+        m_task = TaskRef(new TaskState(handle), false);
+        detail::inheritTaskRuntime(m_task, detail::currentRuntime());
+        return Task<void>(m_task, m_completion);
+    }
+
+    std::suspend_always initial_suspend() noexcept { return {}; }
+
+    std::suspend_always yield_value(ReSchedulerType flag) noexcept
+    {
+        if (flag) {
+            detail::scheduleTaskDeferred(m_task);
+        }
+        return {};
+    }
+
+    std::suspend_never final_suspend() noexcept { return {}; }
+
+    void unhandled_exception() noexcept
+    {
+        m_completion->setException(std::current_exception());
+        detail::completeTaskState(m_task);
+    }
+
+    void return_void() noexcept
+    {
+        m_completion->setValue();
+        detail::completeTaskState(m_task);
+    }
+
+    const TaskRef& taskRefView() const noexcept { return m_task; }
+
+private:
+    TaskRef m_task;
+    std::shared_ptr<TaskCompletionState<void>> m_completion = std::make_shared<TaskCompletionState<void>>();
 };
 
 } // namespace galay::kernel

@@ -1,7 +1,7 @@
 # 测试可执行文件 - 自动扫描目录
 
 # 扫描所有 T*.cc 测试文件
-file(GLOB TEST_SOURCES "T*.cc")
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "T*.cc")
 
 # 为每个测试文件创建可执行文件
 foreach(TEST_SOURCE ${TEST_SOURCES})

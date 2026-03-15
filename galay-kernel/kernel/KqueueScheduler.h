@@ -3,6 +3,9 @@
 
 #include "Coroutine.h"
 #include "IOScheduler.hpp"
+#include "KqueueReactor.h"
+#include "SchedulerCore.h"
+#include "WakeCoordinator.h"
 
 #ifdef USE_KQUEUE
 
@@ -27,6 +30,8 @@
 
 namespace galay::kernel
 {
+
+struct SchedulerTestAccess;
 
 #define  OK 1
 
@@ -74,8 +79,9 @@ public:
     bool scheduleDeferred(TaskRef task) override;
 
     bool spawnImmidiately(Coroutine co) override;
+
+    friend struct SchedulerTestAccess;
 protected:
-    int m_kqueue_fd;
     std::atomic<bool> m_running;
     std::thread m_thread;
 
@@ -84,20 +90,18 @@ protected:
     int m_batch_size;
     int m_check_interval_ms;
 
-    // Pipe for notification (kqueue uses pipe)
-    int m_notify_pipe[2];
     std::atomic<uint64_t> m_last_error_code{0};
+    std::atomic<bool> m_sleeping{true};
+    std::atomic<bool> m_wakeup_pending{false};
     IOSchedulerWorkerState m_worker;
-    // Event buffer
-    std::vector<struct kevent> m_events;
+    WakeCoordinator m_wake_coordinator;
+    SchedulerCore m_core;
+    KqueueReactor m_reactor;
 
 private:
     // Main controller loop
     void eventLoop();
     void processPendingCoroutines();
-    void processEvent(struct kevent& ev);
-
-    int processCustom(IOEventType type, IOController* controller);
 };
 
 }

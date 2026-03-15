@@ -9,6 +9,7 @@
 #include <string_view>
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
+#include "test/TestPortConfig.h"
 #include "test/StdoutLog.h"
 #include "test_result_writer.h"
 
@@ -30,6 +31,14 @@ using IOSchedulerType = galay::kernel::IOUringScheduler;
 using namespace galay::async;
 using namespace galay::kernel;
 
+namespace {
+
+uint16_t tcpTestPort() {
+    return galay::test::resolvePortFromEnv("GALAY_TEST_TCP_PORT", 8080);
+}
+
+}
+
 std::atomic<int> g_passed{0};
 std::atomic<int> g_failed{0};
 std::atomic<int> g_total{0};
@@ -45,7 +54,7 @@ Coroutine echoClient() {
     client.option().handleNonBlock();
 
     // 连接服务器
-    Host serverHost(IPType::IPV4, "127.0.0.1", 8080);
+    Host serverHost(IPType::IPV4, "127.0.0.1", tcpTestPort());
     LogDebug("Client connecting to server...");
     auto connectResult = co_await client.connect(serverHost);
     if (!connectResult) {

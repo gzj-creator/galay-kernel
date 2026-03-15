@@ -51,12 +51,14 @@ struct IOSchedulerWorkerState {
         local_queue.push_back(std::move(task));
     }
 
-    void scheduleInjected(TaskRef task) {
+    bool scheduleInjected(TaskRef task) {
         if (!task.isValid()) {
-            return;
+            return false;
         }
+        const bool was_empty =
+            injected_outstanding.fetch_add(1, std::memory_order_acq_rel) == 0;
         inject_queue.enqueue(std::move(task));
-        ++injected_total;
+        return was_empty;
     }
 
     size_t drainInjected(size_t max_batch = 0) {
@@ -69,13 +71,15 @@ struct IOSchedulerWorkerState {
         for (size_t i = 0; i < count; ++i) {
             local_queue.push_back(std::move(inject_buffer[i]));
         }
-        injected_drained += count;
+        if (count > 0) {
+            injected_outstanding.fetch_sub(count, std::memory_order_acq_rel);
+        }
         polls_since_inject = 0;
         return count;
     }
 
     bool hasPendingInjected() const {
-        return injected_drained < injected_total.load(std::memory_order_acquire);
+        return injected_outstanding.load(std::memory_order_acquire) > 0;
     }
 
     bool shouldCheckInjected() const {
@@ -122,8 +126,7 @@ struct IOSchedulerWorkerState {
     std::deque<TaskRef> local_queue;
     moodycamel::ConcurrentQueue<TaskRef> inject_queue;
     std::vector<TaskRef> inject_buffer;
-    std::atomic<uint64_t> injected_total{0};
-    uint64_t injected_drained = 0;
+    std::atomic<uint64_t> injected_outstanding{0};
     uint32_t consecutive_lifo_polls = 0;
     uint32_t lifo_poll_limit = 8;
     uint32_t polls_since_inject = 0;
@@ -374,6 +377,9 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
     case IOEventType::FILEWATCH:
     case IOEventType::CUSTOM:
         m_awaitable[READ] = awaitable;
+#ifdef USE_IOURING
+        advanceSqeGeneration(READ);
+#endif
         break;
     case IOEventType::SEND:
     case IOEventType::WRITEV:
@@ -382,6 +388,9 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
     case IOEventType::SENDTO:
     case IOEventType::CONNECT:
         m_awaitable[WRITE] = awaitable;
+#ifdef USE_IOURING
+        advanceSqeGeneration(WRITE);
+#endif
         break;
     default:
         return false;
@@ -400,6 +409,9 @@ inline void IOController::removeAwaitable(IOEventType type) {
     case IOEventType::FILEWATCH:
     case IOEventType::CUSTOM:
         m_awaitable[READ] = nullptr;
+#ifdef USE_IOURING
+        advanceSqeGeneration(READ);
+#endif
         break;
     case IOEventType::SEND:
     case IOEventType::WRITEV:
@@ -408,6 +420,9 @@ inline void IOController::removeAwaitable(IOEventType type) {
     case IOEventType::SENDTO:
     case IOEventType::CONNECT:
         m_awaitable[WRITE] = nullptr;
+#ifdef USE_IOURING
+        advanceSqeGeneration(WRITE);
+#endif
         break;
     default:
         break;

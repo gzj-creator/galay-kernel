@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <vector>
+#include "benchmark/BenchmarkSync.h"
 #include "galay-kernel/async/UdpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/StdoutLog.h"
@@ -28,6 +29,8 @@ std::atomic<uint64_t> g_total_received{0};
 std::atomic<uint64_t> g_total_bytes_sent{0};
 std::atomic<uint64_t> g_total_bytes_received{0};
 std::atomic<bool> g_running{true};
+std::atomic<uint32_t> g_server_workers_ready{0};
+std::atomic<bool> g_server_ready{false};
 
 // 配置参数
 constexpr int NUM_CLIENTS = 100;           // 并发客户端数量
@@ -35,6 +38,8 @@ constexpr int MESSAGES_PER_CLIENT = 1000;  // 每个客户端发送的消息数
 constexpr int MESSAGE_SIZE = 256;          // 消息大小（字节）- 与TCP压测一致
 constexpr int TEST_DURATION_SEC = 5;       // 测试持续时间（秒）
 constexpr int NUM_SERVER_WORKERS = 4;      // 服务器工作协程数量
+constexpr auto CLIENT_RECV_TIMEOUT = std::chrono::milliseconds(50);
+constexpr auto CLIENT_DRAIN_TIMEOUT = std::chrono::milliseconds(250);
 
 // UDP Echo服务器工作协程 - 多协程并发处理
 Coroutine udpServerWorker(int worker_id) {
@@ -54,6 +59,11 @@ Coroutine udpServerWorker(int worker_id) {
     if (!bindResult) {
         LogError("Worker {}: Failed to bind", worker_id);
         co_return;
+    }
+
+    if (g_server_workers_ready.fetch_add(1, std::memory_order_acq_rel) + 1 ==
+        NUM_SERVER_WORKERS) {
+        g_server_ready.store(true, std::memory_order_release);
     }
 
     if (worker_id == 0) {
@@ -130,11 +140,24 @@ Coroutine udpBenchmarkClient(int client_id) {
             }
             Host from;
             auto recvResult = co_await socket.recvfrom(recv_buffer, sizeof(recv_buffer), &from)
-                                    .timeout(std::chrono::milliseconds(50));
+                                    .timeout(CLIENT_RECV_TIMEOUT);
             if (recvResult) {
                 local_received++;
             }
         }
+    }
+
+    // 允许客户端在退出前短暂回收尾部回包，避免把轻微调度抖动误判成永久丢包。
+    const auto drain_deadline = std::chrono::steady_clock::now() + CLIENT_DRAIN_TIMEOUT;
+    while (local_received < local_sent &&
+           std::chrono::steady_clock::now() < drain_deadline) {
+        Host from;
+        auto recvResult = co_await socket.recvfrom(recv_buffer, sizeof(recv_buffer), &from)
+                                .timeout(CLIENT_RECV_TIMEOUT);
+        if (!recvResult) {
+            break;
+        }
+        local_received++;
     }
 
     g_total_sent.fetch_add(local_sent, std::memory_order_relaxed);
@@ -204,6 +227,13 @@ int main() {
     LogInfo("Scheduler started");
 
     auto start_time = std::chrono::steady_clock::now();
+    g_running.store(true, std::memory_order_relaxed);
+    g_total_sent.store(0, std::memory_order_relaxed);
+    g_total_received.store(0, std::memory_order_relaxed);
+    g_total_bytes_sent.store(0, std::memory_order_relaxed);
+    g_total_bytes_received.store(0, std::memory_order_relaxed);
+    g_server_workers_ready.store(0, std::memory_order_relaxed);
+    g_server_ready.store(false, std::memory_order_relaxed);
 
     // 启动多个服务器工作协程
     for (int i = 0; i < NUM_SERVER_WORKERS; ++i) {
@@ -211,8 +241,12 @@ int main() {
     }
     LogInfo("Started {} server workers", NUM_SERVER_WORKERS);
 
-    // 等待服务器启动
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    if (!galay::benchmark::waitForFlag(g_server_ready, std::chrono::seconds(2))) {
+        LogError("Server workers did not become ready before client start");
+        g_running.store(false, std::memory_order_relaxed);
+        scheduler.stop();
+        return 1;
+    }
 
     // 启动多个客户端
     LogInfo("Starting {} clients...", NUM_CLIENTS);

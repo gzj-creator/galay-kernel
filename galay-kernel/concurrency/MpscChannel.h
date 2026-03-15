@@ -9,14 +9,16 @@
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Scheduler.hpp"
 #include "galay-kernel/kernel/Timeout.hpp"
+#include "galay-kernel/kernel/WaitRegistration.h"
 #include "galay-kernel/kernel/Waker.h"
 #include "galay-kernel/common/Error.h"
+#include <algorithm>
 #include <concurrentqueue/moodycamel/concurrentqueue.h>
 #include <atomic>
 #include <concepts>
 #include <coroutine>
-#include <optional>
 #include <expected>
+#include <optional>
 #include <vector>
 #include <thread>
 
@@ -28,6 +30,8 @@ concept MpscValue = std::movable<T> && std::default_initializable<T>;
 
 template <typename T>
 class MpscChannel;
+
+struct MpscChannelTestAccess;
 
 /**
  * @brief 单条接收的等待体
@@ -87,10 +91,10 @@ public:
     static_assert(MpscValue<T>, "MpscChannel requires movable and default initializable T");
     using MpscToken = std::thread::id;
 
-    static constexpr size_t DEFAULT_BATCH_SIZE = 1024;
-
-
-    MpscChannel() {}
+    explicit MpscChannel(size_t defaultBatchSize = 1024, size_t singleRecvPrefetchLimit = 16)
+        : m_defaultBatchSize(std::max<size_t>(1, defaultBatchSize))
+        , m_singleRecvPrefetchLimit(singleRecvPrefetchLimit)
+        , m_singleRecvPrefetch(singleRecvPrefetchLimit) {}
     MpscChannel(const MpscChannel&) = delete;
     MpscChannel& operator=(const MpscChannel&) = delete;
     MpscChannel(MpscChannel&&) = delete;
@@ -151,33 +155,64 @@ public:
         return MpscRecvAwaitable<T>(this);
     }
 
-    MpscRecvBatchAwaitable<T> recvBatch(size_t maxCount = DEFAULT_BATCH_SIZE) {
+    MpscRecvBatchAwaitable<T> recvBatch() {
+        return MpscRecvBatchAwaitable<T>(this, m_defaultBatchSize);
+    }
+
+    MpscRecvBatchAwaitable<T> recvBatch(size_t maxCount) {
         return MpscRecvBatchAwaitable<T>(this, maxCount);
     }
 
     std::optional<T> tryRecv() {
+        if (auto cached = tryPopPrefetchedValue(); cached.has_value()) {
+            return cached;
+        }
         if (m_size.load(std::memory_order_acquire) == 0) {
             return std::nullopt;
         }
         T value;
         if (m_queue.try_dequeue(value)) {
+            (void)tryPrefetchSingleRecvValues();
             m_size.fetch_sub(1, std::memory_order_acq_rel);
             return value;
         }
         return std::nullopt;
     }
 
-    std::optional<std::vector<T>> tryRecvBatch(size_t maxCount = DEFAULT_BATCH_SIZE) {
+    std::optional<std::vector<T>> tryRecvBatch() {
+        return tryRecvBatch(m_defaultBatchSize);
+    }
+
+    std::optional<std::vector<T>> tryRecvBatch(size_t maxCount) {
         if (m_size.load(std::memory_order_acquire) == 0) {
             return std::nullopt;
         }
-        std::vector<T> values(maxCount);
-        size_t count = m_queue.try_dequeue_bulk(values.data(), maxCount);
-        if (count == 0) {
+        std::vector<T> values;
+        values.reserve(maxCount);
+
+        while (values.size() < maxCount) {
+            auto cached = tryPopPrefetchedValue();
+            if (!cached.has_value()) {
+                break;
+            }
+            values.push_back(std::move(*cached));
+        }
+
+        if (values.size() < maxCount) {
+            const size_t base = values.size();
+            values.resize(maxCount);
+            size_t count = m_queue.try_dequeue_bulk(values.data() + base, maxCount - base);
+            if (count > 0) {
+                m_size.fetch_sub(static_cast<uint32_t>(count), std::memory_order_acq_rel);
+                values.resize(base + count);
+            } else {
+                values.resize(base);
+            }
+        }
+
+        if (values.empty()) {
             return std::nullopt;
         }
-        m_size.fetch_sub(static_cast<uint32_t>(count), std::memory_order_acq_rel);
-        values.resize(count);
         return values;
     }
 
@@ -194,36 +229,78 @@ private:
     friend class MpscRecvAwaitable;
     template <typename U>
     friend class MpscRecvBatchAwaitable;
+    friend struct MpscChannelTestAccess;
 
     using WaiterHandle = std::coroutine_handle<Coroutine::promise_type>;
 
     bool hasWaiter() const noexcept {
-        return m_waiter.load(std::memory_order_acquire) != nullptr;
+        return m_waiter_registration.hasWaiter();
     }
 
     void publishWaiter(void* waiterAddress) noexcept {
-        m_waiter.store(waiterAddress, std::memory_order_release);
+        (void)m_waiter_registration.arm(waiterAddress);
     }
 
     bool clearWaiter(void* waiterAddress) noexcept {
-        return m_waiter.compare_exchange_strong(waiterAddress,
-                                                nullptr,
-                                                std::memory_order_acq_rel,
-                                                std::memory_order_acquire);
+        return m_waiter_registration.clear(waiterAddress);
     }
 
     void wakePublishedWaiter() noexcept {
-        void* waiterAddress = m_waiter.exchange(nullptr, std::memory_order_acq_rel);
+        void* waiterAddress = m_waiter_registration.consumeWake();
         if (!waiterAddress) {
             return;
         }
         Waker(WaiterHandle::from_address(waiterAddress)).wakeUp();
     }
 
+    size_t prefetchedCount() const noexcept {
+        return m_prefetchCount - m_prefetchIndex;
+    }
+
+    size_t singleRecvPrefetchLimit() const noexcept {
+        return m_singleRecvPrefetchLimit;
+    }
+
+    std::optional<T> tryPopPrefetchedValue() {
+        if (prefetchedCount() == 0) {
+            return std::nullopt;
+        }
+
+        T value = std::move(m_singleRecvPrefetch[m_prefetchIndex]);
+        ++m_prefetchIndex;
+        if (m_prefetchIndex == m_prefetchCount) {
+            m_prefetchIndex = 0;
+            m_prefetchCount = 0;
+        }
+        m_size.fetch_sub(1, std::memory_order_acq_rel);
+        return value;
+    }
+
+    bool tryPrefetchSingleRecvValues() {
+        if (prefetchedCount() != 0 || m_singleRecvPrefetchLimit == 0) {
+            return true;
+        }
+
+        const size_t count =
+            m_queue.try_dequeue_bulk(m_singleRecvPrefetch.data(), m_singleRecvPrefetchLimit);
+        if (count == 0) {
+            return false;
+        }
+
+        m_prefetchIndex = 0;
+        m_prefetchCount = count;
+        return true;
+    }
+
 
     alignas(64) std::atomic<uint32_t> m_size{0};
-    std::atomic<void*> m_waiter{nullptr};
+    WaitRegistration m_waiter_registration;
     moodycamel::ConcurrentQueue<T> m_queue;
+    size_t m_defaultBatchSize{1024};
+    size_t m_singleRecvPrefetchLimit{16};
+    std::vector<T> m_singleRecvPrefetch;
+    size_t m_prefetchIndex{0};
+    size_t m_prefetchCount{0};
 };
 
 // ============================================================================

@@ -8,6 +8,7 @@
 #include <string_view>
 #include "galay-kernel/async/UdpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
+#include "test/TestPortConfig.h"
 #include "test/StdoutLog.h"
 #include "test_result_writer.h"
 
@@ -29,6 +30,14 @@ using IOSchedulerType = galay::kernel::IOUringScheduler;
 using namespace galay::async;
 using namespace galay::kernel;
 
+namespace {
+
+uint16_t udpTestPort() {
+    return galay::test::resolvePortFromEnv("GALAY_TEST_UDP_PORT", 8080);
+}
+
+}
+
 std::atomic<int> g_passed{0};
 std::atomic<int> g_failed{0};
 std::atomic<int> g_total{0};
@@ -44,7 +53,7 @@ Coroutine udpEchoClient() {
     socket.option().handleNonBlock();
 
     // 服务器地址
-    Host serverHost(IPType::IPV4, "127.0.0.1", 8080);
+    Host serverHost(IPType::IPV4, "127.0.0.1", udpTestPort());
 
     // 发送3条消息并验证回显
     const char* messages[] = {

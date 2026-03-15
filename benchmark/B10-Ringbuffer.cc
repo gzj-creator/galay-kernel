@@ -10,6 +10,7 @@
  */
 
 #include <atomic>
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
@@ -27,6 +28,20 @@ constexpr size_t BUFFER_SIZE = 64 * 1024;        // 64KB 缓冲区
 constexpr size_t SMALL_BUFFER_SIZE = 1024;       // 1KB 小缓冲区（测试环绕）
 constexpr size_t TOTAL_DATA_SIZE = 1024 * 1024 * 1024;  // 1GB 总数据量
 constexpr size_t CHUNK_SIZES[] = {64, 256, 1024, 4096, 16384};
+constexpr auto MIN_WRITE_SAMPLE_DURATION = std::chrono::milliseconds(100);
+constexpr auto MIN_WRAP_SAMPLE_DURATION = std::chrono::milliseconds(100);
+constexpr size_t MICRO_BENCH_SAMPLES = 5;
+
+template <typename SampleFn>
+double medianSample(SampleFn&& sample_fn) {
+    std::vector<double> samples;
+    samples.reserve(MICRO_BENCH_SAMPLES);
+    for (size_t i = 0; i < MICRO_BENCH_SAMPLES; ++i) {
+        samples.push_back(sample_fn());
+    }
+    std::sort(samples.begin(), samples.end());
+    return samples[samples.size() / 2];
+}
 
 // ============== 辅助函数 ==============
 
@@ -46,7 +61,8 @@ void benchWriteThroughput(size_t chunkSize) {
     size_t totalWritten = 0;
     auto start = steady_clock::now();
 
-    while (totalWritten < TOTAL_DATA_SIZE) {
+    while (totalWritten < TOTAL_DATA_SIZE ||
+           steady_clock::now() - start < MIN_WRITE_SAMPLE_DURATION) {
         size_t written = buffer.write(data.data(), chunkSize);
         totalWritten += written;
 
@@ -116,7 +132,8 @@ void benchWrapAroundPerformance() {
     auto start = steady_clock::now();
     std::array<struct iovec, 2> iovecs{};
 
-    while (totalWritten < targetData) {
+    while (totalWritten < targetData ||
+           steady_clock::now() - start < MIN_WRAP_SAMPLE_DURATION) {
         // 写入数据
         size_t written = buffer.write(data.data(), data.size());
         totalWritten += written;
@@ -153,21 +170,23 @@ void benchIovecPerformance() {
     std::array<struct iovec, 2> readIovecs{};
     volatile size_t sink = 0;
 
-    // 测试 getWriteIovecs
-    auto start1 = steady_clock::now();
-    for (size_t i = 0; i < iterations; i++) {
-        sink += buffer.getWriteIovecs(writeIovecs);
-    }
-    auto end1 = steady_clock::now();
-    double duration1 = duration_cast<nanoseconds>(end1 - start1).count() / (double)iterations;
+    const double duration1 = medianSample([&]() {
+        auto start1 = steady_clock::now();
+        for (size_t i = 0; i < iterations; i++) {
+            sink += buffer.getWriteIovecs(writeIovecs);
+        }
+        auto end1 = steady_clock::now();
+        return duration_cast<nanoseconds>(end1 - start1).count() / (double)iterations;
+    });
 
-    // 测试 getReadIovecs
-    auto start2 = steady_clock::now();
-    for (size_t i = 0; i < iterations; i++) {
-        sink += buffer.getReadIovecs(readIovecs);
-    }
-    auto end2 = steady_clock::now();
-    double duration2 = duration_cast<nanoseconds>(end2 - start2).count() / (double)iterations;
+    const double duration2 = medianSample([&]() {
+        auto start2 = steady_clock::now();
+        for (size_t i = 0; i < iterations; i++) {
+            sink += buffer.getReadIovecs(readIovecs);
+        }
+        auto end2 = steady_clock::now();
+        return duration_cast<nanoseconds>(end2 - start2).count() / (double)iterations;
+    });
     (void)sink;
 
     LogInfo("getWriteIovecs: {:.2f} ns/call ({:.2f} M calls/s)",
@@ -183,14 +202,15 @@ void benchProduceConsumePerformance() {
 
     constexpr size_t iterations = 100000000;
 
-    // 测试 produce + consume 循环
-    auto start = steady_clock::now();
-    for (size_t i = 0; i < iterations; i++) {
-        buffer.produce(64);
-        buffer.consume(64);
-    }
-    auto end = steady_clock::now();
-    double duration = duration_cast<nanoseconds>(end - start).count() / (double)iterations;
+    const double duration = medianSample([&]() {
+        auto start = steady_clock::now();
+        for (size_t i = 0; i < iterations; i++) {
+            buffer.produce(64);
+            buffer.consume(64);
+        }
+        auto end = steady_clock::now();
+        return duration_cast<nanoseconds>(end - start).count() / (double)iterations;
+    });
 
     LogInfo("produce+consume: {:.2f} ns/pair ({:.2f} M pairs/s)",
             duration, 1000.0 / duration);

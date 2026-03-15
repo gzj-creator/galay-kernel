@@ -34,7 +34,7 @@ void ComputeScheduler::stop()
     }
 
     // 发送停止信号唤醒等待的线程
-    m_queue.enqueue(ComputeTask{Coroutine{}, true});
+    m_queue.enqueue(ComputeTask{TaskRef{}, true});
 
     // 等待线程结束
     if (m_thread.joinable()) {
@@ -44,25 +44,46 @@ void ComputeScheduler::stop()
 
 bool ComputeScheduler::spawn(Coroutine co)
 {
-    auto* scheduler = co.belongScheduler();
+    auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
     // 如果协程未绑定 scheduler，绑定到当前 scheduler
     if (!scheduler) {
-        co.belongScheduler(this);
+        detail::CoroutineAccess::setScheduler(co, this);
     } else {
         if(scheduler != this) return false;
     }
-    m_queue.enqueue(ComputeTask{std::move(co)});
+    m_queue.enqueue(ComputeTask{detail::CoroutineAccess::detachTask(std::move(co))});
     return true;
+}
+
+bool ComputeScheduler::schedule(TaskRef task)
+{
+    auto* state = task.state();
+    if (!state || state->m_scheduler != this) {
+        return false;
+    }
+    m_queue.enqueue(ComputeTask{std::move(task)});
+    return true;
+}
+
+bool ComputeScheduler::spawnDeferred(Coroutine co)
+{
+    return spawn(std::move(co));
+}
+
+bool ComputeScheduler::scheduleDeferred(TaskRef task)
+{
+    return schedule(std::move(task));
 }
 
 bool ComputeScheduler::spawnImmidiately(Coroutine co)
 {
-    auto* scheduler = co.belongScheduler();
+    auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
     if (scheduler) {
         return false;
     }
-    co.belongScheduler(this);
-    resume(co);
+    detail::CoroutineAccess::setScheduler(co, this);
+    TaskRef task = detail::CoroutineAccess::detachTask(std::move(co));
+    resume(task);
     return true;
 }
 
@@ -80,7 +101,7 @@ void ComputeScheduler::workerLoop()
             break;
         }
         // 执行协程
-        Scheduler::resume(task.coro);
+        Scheduler::resume(task.task);
     }
 
     // 退出前处理剩余任务
@@ -88,7 +109,7 @@ void ComputeScheduler::workerLoop()
         if (task.is_stop_signal) {
             continue;
         }
-        Scheduler::resume(task.coro);
+        Scheduler::resume(task.task);
     }
 }
 

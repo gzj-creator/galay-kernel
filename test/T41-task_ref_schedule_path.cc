@@ -46,9 +46,9 @@ public:
 bool verifyWakerUsesTaskRefSchedule() {
     CaptureScheduler scheduler;
     Coroutine co = pendingTask();
-    co.belongScheduler(&scheduler);
+    detail::CoroutineAccess::setScheduler(co, &scheduler);
 
-    Waker waker(co.taskRef());
+    Waker waker(detail::CoroutineAccess::taskRef(co));
     waker.wakeUp();
 
     if (scheduler.schedule_calls != 1) {
@@ -67,9 +67,9 @@ bool verifyWakerUsesTaskRefSchedule() {
 bool verifyCoroutineResumeUsesTaskRefSchedule() {
     CaptureScheduler scheduler;
     Coroutine co = pendingTask();
-    co.belongScheduler(&scheduler);
+    detail::CoroutineAccess::setScheduler(co, &scheduler);
 
-    co.resume();
+    detail::CoroutineAccess::resume(co);
 
     if (scheduler.schedule_calls != 1) {
         std::cerr << "[T41] expected Coroutine::resume to call schedule once, got "

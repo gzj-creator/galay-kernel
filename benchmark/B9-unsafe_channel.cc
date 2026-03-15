@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <vector>
+#include "benchmark/BenchmarkSync.h"
 #include "galay-kernel/concurrency/UnsafeChannel.h"
 #include "galay-kernel/concurrency/MpscChannel.h"
 #include "galay-kernel/kernel/Coroutine.h"
@@ -28,6 +29,8 @@ using namespace std::chrono_literals;
 // ============== 压测参数 ==============
 constexpr int64_t THROUGHPUT_MESSAGES = 1000000;
 constexpr int64_t LATENCY_MESSAGES = 100000;
+constexpr std::size_t THROUGHPUT_SAMPLE_COUNT = 5;
+constexpr auto THROUGHPUT_MIN_SAMPLE_DURATION = 300ms;
 
 // ============== 全局计数器 ==============
 std::atomic<int64_t> g_sent{0};
@@ -53,6 +56,48 @@ struct TimestampedMessage {
     int64_t id;
     std::chrono::steady_clock::time_point send_time;
 };
+
+struct ThroughputMeasurement {
+    double elapsed_ms;
+    double throughput;
+};
+
+struct ThroughputSample {
+    double elapsed_ms;
+    double throughput;
+    int64_t received;
+    int64_t sum;
+};
+
+ThroughputMeasurement measureThroughput(int64_t message_count,
+                                        std::chrono::steady_clock::duration elapsed) {
+    const auto elapsed_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
+    return {
+        .elapsed_ms = static_cast<double>(elapsed_ns) / 1'000'000.0,
+        .throughput = elapsed_ns > 0
+            ? (static_cast<double>(message_count) * 1'000'000'000.0 / elapsed_ns)
+            : 0.0,
+    };
+}
+
+template <typename Runner>
+ThroughputSample measureThroughputSample(int64_t message_count, Runner&& runner) {
+    int64_t sample_message_count = message_count;
+    while (true) {
+        const auto elapsed = runner(sample_message_count);
+        const auto measurement = measureThroughput(sample_message_count, elapsed);
+        if (elapsed >= THROUGHPUT_MIN_SAMPLE_DURATION) {
+            return {
+                .elapsed_ms = measurement.elapsed_ms,
+                .throughput = measurement.throughput,
+                .received = g_received.load(std::memory_order_relaxed),
+                .sum = g_sum.load(std::memory_order_relaxed),
+            };
+        }
+        sample_message_count *= 2;
+    }
+}
 
 // ============== UnsafeChannel 消费者协程 ==============
 
@@ -195,104 +240,152 @@ Coroutine mpscSimpleProducer(MpscChannel<int64_t>* channel, int64_t count) {
 // 1. UnsafeChannel 单生产者吞吐量测试
 void benchUnsafeChannelThroughput(int64_t message_count) {
     LogInfo("--- UnsafeChannel Throughput Test ({} messages) ---", message_count);
-    resetCounters();
+    std::vector<ThroughputSample> samples;
+    samples.reserve(THROUGHPUT_SAMPLE_COUNT);
 
-    UnsafeChannel<int64_t> channel;
-    ComputeScheduler scheduler;
+    for (std::size_t sample_index = 0;
+         sample_index < THROUGHPUT_SAMPLE_COUNT;
+         ++sample_index) {
+        samples.push_back(measureThroughputSample(message_count, [&](int64_t sample_message_count) {
+            resetCounters();
 
-    scheduler.start();
+            UnsafeChannel<int64_t> channel;
+            ComputeScheduler scheduler;
 
-    auto start = std::chrono::steady_clock::now();
+            scheduler.start();
 
-    scheduler.spawn(unsafeSimpleConsumer(&channel, message_count));
-    scheduler.spawn(unsafeSimpleProducer(&channel, message_count));
+            const auto start = std::chrono::steady_clock::now();
 
-    while (!g_consumer_done) {
-        std::this_thread::sleep_for(1ms);
+            scheduler.spawn(unsafeSimpleConsumer(&channel, sample_message_count));
+            scheduler.spawn(unsafeSimpleProducer(&channel, sample_message_count));
+
+            while (!g_consumer_done) {
+                std::this_thread::sleep_for(1ms);
+            }
+
+            const auto elapsed = std::chrono::steady_clock::now() - start;
+            scheduler.stop();
+            return elapsed;
+        }));
     }
 
-    auto elapsed = std::chrono::steady_clock::now() - start;
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-    double throughput = (double)message_count / ms * 1000.0;
-
-    scheduler.stop();
-
-    int64_t expected_sum = (message_count - 1) * message_count / 2;
-    bool correct = (g_received == message_count) && (g_sum == expected_sum);
+    const auto median_sample = galay::benchmark::medianElement(
+        std::move(samples),
+        [](const ThroughputSample& lhs, const ThroughputSample& rhs) {
+            return lhs.throughput < rhs.throughput;
+        });
+    const int64_t expected_sum = (median_sample.received - 1) * median_sample.received / 2;
+    const bool correct =
+        (median_sample.received > 0) && (median_sample.sum == expected_sum);
 
     LogInfo("  sent={}, received={}, time={}ms, throughput={:.0f} msg/s",
-            g_sent.load(), g_received.load(), ms, throughput);
+            median_sample.received,
+            median_sample.received,
+            median_sample.elapsed_ms,
+            median_sample.throughput);
     LogInfo("  sum={} (expected {}), correct={}",
-            g_sum.load(), expected_sum, correct ? "YES" : "NO");
+            median_sample.sum, expected_sum, correct ? "YES" : "NO");
 }
 
 // 2. UnsafeChannel 批量接收吞吐量测试
 void benchUnsafeChannelBatchThroughput(int64_t message_count) {
     LogInfo("--- UnsafeChannel Batch Receive Throughput Test ({} messages) ---", message_count);
-    resetCounters();
+    std::vector<ThroughputSample> samples;
+    samples.reserve(THROUGHPUT_SAMPLE_COUNT);
 
-    UnsafeChannel<int64_t> channel;
-    ComputeScheduler scheduler;
+    for (std::size_t sample_index = 0;
+         sample_index < THROUGHPUT_SAMPLE_COUNT;
+         ++sample_index) {
+        samples.push_back(measureThroughputSample(message_count, [&](int64_t sample_message_count) {
+            resetCounters();
 
-    scheduler.start();
+            UnsafeChannel<int64_t> channel;
+            ComputeScheduler scheduler;
 
-    auto start = std::chrono::steady_clock::now();
+            scheduler.start();
 
-    scheduler.spawn(unsafeBatchConsumer(&channel, message_count));
-    scheduler.spawn(unsafeSimpleProducer(&channel, message_count));
+            const auto start = std::chrono::steady_clock::now();
 
-    while (!g_consumer_done) {
-        std::this_thread::sleep_for(1ms);
+            scheduler.spawn(unsafeBatchConsumer(&channel, sample_message_count));
+            scheduler.spawn(unsafeSimpleProducer(&channel, sample_message_count));
+
+            while (!g_consumer_done) {
+                std::this_thread::sleep_for(1ms);
+            }
+
+            const auto elapsed = std::chrono::steady_clock::now() - start;
+            scheduler.stop();
+            return elapsed;
+        }));
     }
 
-    auto elapsed = std::chrono::steady_clock::now() - start;
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-    double throughput = (double)message_count / ms * 1000.0;
-
-    scheduler.stop();
-
-    int64_t expected_sum = (message_count - 1) * message_count / 2;
-    bool correct = (g_received == message_count) && (g_sum == expected_sum);
+    const auto median_sample = galay::benchmark::medianElement(
+        std::move(samples),
+        [](const ThroughputSample& lhs, const ThroughputSample& rhs) {
+            return lhs.throughput < rhs.throughput;
+        });
+    const int64_t expected_sum = (median_sample.received - 1) * median_sample.received / 2;
+    const bool correct =
+        (median_sample.received > 0) && (median_sample.sum == expected_sum);
 
     LogInfo("  sent={}, received={}, time={}ms, throughput={:.0f} msg/s",
-            g_sent.load(), g_received.load(), ms, throughput);
+            median_sample.received,
+            median_sample.received,
+            median_sample.elapsed_ms,
+            median_sample.throughput);
     LogInfo("  sum={} (expected {}), correct={}",
-            g_sum.load(), expected_sum, correct ? "YES" : "NO");
+            median_sample.sum, expected_sum, correct ? "YES" : "NO");
 }
 
 // 2b. UnsafeChannel recvBatched 攒批接收吞吐量测试
 void benchUnsafeChannelBatchedThroughput(int64_t message_count, int64_t batch_limit) {
     LogInfo("--- UnsafeChannel recvBatched Throughput Test ({} messages, limit={}) ---",
             message_count, batch_limit);
-    resetCounters();
+    std::vector<ThroughputSample> samples;
+    samples.reserve(THROUGHPUT_SAMPLE_COUNT);
 
-    UnsafeChannel<int64_t> channel;
-    ComputeScheduler scheduler;
+    for (std::size_t sample_index = 0;
+         sample_index < THROUGHPUT_SAMPLE_COUNT;
+         ++sample_index) {
+        samples.push_back(measureThroughputSample(message_count, [&](int64_t sample_message_count) {
+            resetCounters();
 
-    scheduler.start();
+            UnsafeChannel<int64_t> channel;
+            ComputeScheduler scheduler;
 
-    auto start = std::chrono::steady_clock::now();
+            scheduler.start();
 
-    scheduler.spawn(unsafeBatchedConsumer(&channel, message_count, batch_limit));
-    scheduler.spawn(unsafeSimpleProducer(&channel, message_count));
+            const auto start = std::chrono::steady_clock::now();
 
-    while (!g_consumer_done) {
-        std::this_thread::sleep_for(1ms);
+            scheduler.spawn(unsafeBatchedConsumer(&channel, sample_message_count, batch_limit));
+            scheduler.spawn(unsafeSimpleProducer(&channel, sample_message_count));
+
+            while (!g_consumer_done) {
+                std::this_thread::sleep_for(1ms);
+            }
+
+            const auto elapsed = std::chrono::steady_clock::now() - start;
+            scheduler.stop();
+            return elapsed;
+        }));
     }
 
-    auto elapsed = std::chrono::steady_clock::now() - start;
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-    double throughput = (double)message_count / ms * 1000.0;
-
-    scheduler.stop();
-
-    int64_t expected_sum = (message_count - 1) * message_count / 2;
-    bool correct = (g_received == message_count) && (g_sum == expected_sum);
+    const auto median_sample = galay::benchmark::medianElement(
+        std::move(samples),
+        [](const ThroughputSample& lhs, const ThroughputSample& rhs) {
+            return lhs.throughput < rhs.throughput;
+        });
+    const int64_t expected_sum = (median_sample.received - 1) * median_sample.received / 2;
+    const bool correct =
+        (median_sample.received > 0) && (median_sample.sum == expected_sum);
 
     LogInfo("  sent={}, received={}, time={}ms, throughput={:.0f} msg/s",
-            g_sent.load(), g_received.load(), ms, throughput);
+            median_sample.received,
+            median_sample.received,
+            median_sample.elapsed_ms,
+            median_sample.throughput);
     LogInfo("  sum={} (expected {}), correct={}",
-            g_sum.load(), expected_sum, correct ? "YES" : "NO");
+            median_sample.sum, expected_sum, correct ? "YES" : "NO");
 }
 
 // 3. UnsafeChannel 延迟测试
@@ -322,35 +415,51 @@ void benchUnsafeChannelLatency(int64_t message_count) {
 // 4. MpscChannel 吞吐量测试（同调度器，用于对比）
 void benchMpscChannelThroughput(int64_t message_count) {
     LogInfo("--- MpscChannel Throughput Test (same scheduler, {} messages) ---", message_count);
-    resetCounters();
+    std::vector<ThroughputSample> samples;
+    samples.reserve(THROUGHPUT_SAMPLE_COUNT);
 
-    MpscChannel<int64_t> channel;
-    ComputeScheduler scheduler;
+    for (std::size_t sample_index = 0;
+         sample_index < THROUGHPUT_SAMPLE_COUNT;
+         ++sample_index) {
+        samples.push_back(measureThroughputSample(message_count, [&](int64_t sample_message_count) {
+            resetCounters();
 
-    scheduler.start();
+            MpscChannel<int64_t> channel;
+            ComputeScheduler scheduler;
 
-    auto start = std::chrono::steady_clock::now();
+            scheduler.start();
 
-    scheduler.spawn(mpscSimpleConsumer(&channel, message_count));
-    scheduler.spawn(mpscSimpleProducer(&channel, message_count));
+            const auto start = std::chrono::steady_clock::now();
 
-    while (!g_consumer_done) {
-        std::this_thread::sleep_for(1ms);
+            scheduler.spawn(mpscSimpleConsumer(&channel, sample_message_count));
+            scheduler.spawn(mpscSimpleProducer(&channel, sample_message_count));
+
+            while (!g_consumer_done) {
+                std::this_thread::sleep_for(1ms);
+            }
+
+            const auto elapsed = std::chrono::steady_clock::now() - start;
+            scheduler.stop();
+            return elapsed;
+        }));
     }
 
-    auto elapsed = std::chrono::steady_clock::now() - start;
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-    double throughput = (double)message_count / ms * 1000.0;
-
-    scheduler.stop();
-
-    int64_t expected_sum = (message_count - 1) * message_count / 2;
-    bool correct = (g_received == message_count) && (g_sum == expected_sum);
+    const auto median_sample = galay::benchmark::medianElement(
+        std::move(samples),
+        [](const ThroughputSample& lhs, const ThroughputSample& rhs) {
+            return lhs.throughput < rhs.throughput;
+        });
+    const int64_t expected_sum = (median_sample.received - 1) * median_sample.received / 2;
+    const bool correct =
+        (median_sample.received > 0) && (median_sample.sum == expected_sum);
 
     LogInfo("  sent={}, received={}, time={}ms, throughput={:.0f} msg/s",
-            g_sent.load(), g_received.load(), ms, throughput);
+            median_sample.received,
+            median_sample.received,
+            median_sample.elapsed_ms,
+            median_sample.throughput);
     LogInfo("  sum={} (expected {}), correct={}",
-            g_sum.load(), expected_sum, correct ? "YES" : "NO");
+            median_sample.sum, expected_sum, correct ? "YES" : "NO");
 }
 
 // 5. 性能对比总结
@@ -370,8 +479,7 @@ void benchComparison(int64_t message_count) {
         std::this_thread::sleep_for(1ms);
     }
     auto elapsed1 = std::chrono::steady_clock::now() - start1;
-    auto ms1 = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed1).count();
-    double throughput1 = (double)message_count / ms1 * 1000.0;
+    const auto measurement1 = measureThroughput(message_count, elapsed1);
     scheduler1.stop();
 
     // MpscChannel 测试
@@ -387,19 +495,20 @@ void benchComparison(int64_t message_count) {
         std::this_thread::sleep_for(1ms);
     }
     auto elapsed2 = std::chrono::steady_clock::now() - start2;
-    auto ms2 = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed2).count();
-    double throughput2 = (double)message_count / ms2 * 1000.0;
+    const auto measurement2 = measureThroughput(message_count, elapsed2);
     scheduler2.stop();
 
     // 输出对比结果
     LogInfo("");
     LogInfo("| Channel Type   | Time (ms) | Throughput (msg/s) |");
     LogInfo("|----------------|-----------|-------------------|");
-    LogInfo("| UnsafeChannel  | {:>9} | {:>17.0f} |", ms1, throughput1);
-    LogInfo("| MpscChannel    | {:>9} | {:>17.0f} |", ms2, throughput2);
+    LogInfo("| UnsafeChannel  | {:>9.3f} | {:>17.0f} |",
+            measurement1.elapsed_ms, measurement1.throughput);
+    LogInfo("| MpscChannel    | {:>9.3f} | {:>17.0f} |",
+            measurement2.elapsed_ms, measurement2.throughput);
     LogInfo("");
 
-    double speedup = throughput1 / throughput2;
+    double speedup = measurement1.throughput / measurement2.throughput;
     LogInfo("UnsafeChannel is {:.2f}x {} than MpscChannel (same scheduler)",
             speedup > 1 ? speedup : 1/speedup,
             speedup > 1 ? "faster" : "slower");

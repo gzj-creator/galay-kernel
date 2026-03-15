@@ -2,12 +2,13 @@
 #define GALAY_KERNEL_EPOLL_SCHEDULER_H
 
 #include "Coroutine.h"
+#include "EpollReactor.h"
 #include "IOScheduler.hpp"
+#include "SchedulerCore.h"
+#include "WakeCoordinator.h"
 
 #ifdef USE_EPOLL
 
-#include <sys/epoll.h>
-#include <vector>
 #include <atomic>
 #include <thread>
 #include <cstdint>
@@ -27,7 +28,7 @@
 namespace galay::kernel
 {
 
-#define OK 1
+struct SchedulerTestAccess;
 
 /**
  * @brief Epoll 调度器 (Linux)
@@ -82,8 +83,9 @@ public:
 
     bool spawnImmidiately(Coroutine co) override;
 
+    friend struct SchedulerTestAccess;
+
 protected:
-    int m_epoll_fd;
     std::atomic<bool> m_running;
     std::thread m_thread;
 
@@ -91,20 +93,18 @@ protected:
     int m_batch_size;
     int m_check_interval_ms;
 
-    int m_event_fd;
     std::atomic<uint64_t> m_last_error_code{0};
+    std::atomic<bool> m_sleeping{true};
+    std::atomic<bool> m_wakeup_pending{false};
 
     IOSchedulerWorkerState m_worker;
-    std::vector<struct epoll_event> m_events;
+    WakeCoordinator m_wake_coordinator;
+    SchedulerCore m_core;
+    EpollReactor m_reactor;
 
 private:
     void eventLoop();
     void processPendingCoroutines();
-    void processEvent(struct epoll_event& ev);
-    void syncEpollEvents(IOController* controller);
-    uint32_t buildEpollEvents(IOController* controller);
-    int applyEpollEvents(IOController* controller, uint32_t events);
-    int processCustom(IOEventType type, IOController* controller);
 };
 
 }

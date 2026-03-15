@@ -12,6 +12,11 @@
 
 - `Runtime` 负责统一管理多个 IO / 计算调度器
 - `RuntimeBuilder` 负责调度器数量与高级绑核策略等配置
+- 高层任务入口现在包括 `Runtime::blockOn(Task<T>)`、`Runtime::spawn(Task<T>)`、`Runtime::spawnBlocking(...)`
+- `JoinHandle<T>` 的公开结果路径收口为 `join()` / `wait()`
+- runtime 上下文可通过 `Runtime::handle()`、`RuntimeHandle::current()`、`RuntimeHandle::tryCurrent()` 获取
+- `Coroutine::then(...)` 是保留的链式根协程接口
+- `TaskRef`、协程绑定与 resume plumbing 已收敛为 runtime/scheduler 内核细节，不再作为高层工作流 API 推荐
 - `start()` / `stop()`、调度器轮询、全局 `TimerScheduler` 的完整说明已折回主干页
 
 ## 先看主干页
@@ -24,14 +29,19 @@
 ## 源码 / 验证锚点
 
 - 源码：`galay-kernel/kernel/Runtime.h`、`galay-kernel/kernel/Runtime.cc`
-- 关联类型：`galay-kernel/kernel/ComputeScheduler.h`、`galay-kernel/kernel/IOScheduler.hpp`
-- 测试：`test/T11-compute_scheduler.cc`、`test/T12-mixed_scheduler.cc`、`test/T27-runtime_stress.cc`、`test/T42-runtime_strict_scheduler_counts.cc`
+- 关联类型：`galay-kernel/kernel/Coroutine.h`、`galay-kernel/kernel/ComputeScheduler.h`、`galay-kernel/kernel/IOScheduler.hpp`
+- 测试：`test/T11-compute_scheduler.cc`、`test/T12-mixed_scheduler.cc`、`test/T27-runtime_stress.cc`、`test/T42-runtime_strict_scheduler_counts.cc`、`test/T52-runtime_block_on_result.cc`、`test/T54-runtime_spawn_join_handle.cc`、`test/T55-runtime_handle_current.cc`、`test/T56-runtime_spawn_blocking.cc`
 - 示例：`examples/include/E2-tcp_echo_server.cc`、`examples/include/E3-tcp_client.cc`、`examples/include/E4-coroutine_basic.cc`
 
 ## RAG 关键词
 
 - `Runtime`
 - `RuntimeBuilder`
+- `Task`
+- `JoinHandle`
+- `RuntimeHandle`
+- `blockOn`
+- `spawnBlocking`
 - `start`
 - `stop`
 - `getNextIOScheduler`

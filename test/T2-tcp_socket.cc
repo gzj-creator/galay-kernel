@@ -4,6 +4,7 @@
 #include <string_view>
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
+#include "test/TestPortConfig.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -20,6 +21,14 @@
 
 using namespace galay::async;
 using namespace galay::kernel;
+
+namespace {
+
+uint16_t tcpTestPort() {
+    return galay::test::resolvePortFromEnv("GALAY_TEST_TCP_PORT", 8080);
+}
+
+}
 
 // Echo服务器协程
 Coroutine echoServer([[maybe_unused]] IOScheduler* scheduler) {
@@ -39,7 +48,7 @@ Coroutine echoServer([[maybe_unused]] IOScheduler* scheduler) {
     }
 
     // 绑定地址
-    Host bindHost(IPType::IPV4, "127.0.0.1", 8080);
+    Host bindHost(IPType::IPV4, "127.0.0.1", tcpTestPort());
     auto bindResult = listener.bind(bindHost);
     if (!bindResult) {
         LogError("Failed to bind: {}", bindResult.error().message());
@@ -54,7 +63,7 @@ Coroutine echoServer([[maybe_unused]] IOScheduler* scheduler) {
         co_return;
     }
 
-    LogInfo("Server listening on 127.0.0.1:8080");
+    LogInfo("Server listening on 127.0.0.1:{}", tcpTestPort());
 
     // 接受连接
     Host clientHost;
@@ -112,7 +121,7 @@ Coroutine echoClient([[maybe_unused]] IOScheduler* scheduler) {
     client.option().handleNonBlock();
 
     // 连接服务器
-    Host serverHost(IPType::IPV4, "127.0.0.1", 8080);
+    Host serverHost(IPType::IPV4, "127.0.0.1", tcpTestPort());
     LogDebug("Client connecting to server...");
     auto connectResult = co_await client.connect(serverHost);
     if (!connectResult) {

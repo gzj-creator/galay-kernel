@@ -37,6 +37,7 @@
 #include <expected>
 #include <span>
 #include <array>
+#include <type_traits>
 #include <sys/socket.h>
 #include <sys/uio.h>
 
@@ -74,6 +75,19 @@ struct IOContextBase: public AwaitableBase {
     virtual IOEventType type() const { return IOEventType::INVALID; }
 };
 
+struct AcceptIOContext;
+struct RecvIOContext;
+struct SendIOContext;
+struct ReadvIOContext;
+struct WritevIOContext;
+struct ConnectIOContext;
+struct FileReadIOContext;
+struct FileWriteIOContext;
+struct RecvFromIOContext;
+struct SendToIOContext;
+struct FileWatchIOContext;
+struct SendFileIOContext;
+
 namespace detail {
 
 inline uint32_t normalizeAwaitableErrno(int ret) noexcept {
@@ -100,6 +114,38 @@ template <IOEventType Event, typename AwaitableT>
 inline auto resumeIOAwaitable(AwaitableT& awaitable) -> decltype(std::move(awaitable.m_result)) {
     awaitable.m_controller->removeAwaitable(Event);
     return std::move(awaitable.m_result);
+}
+
+template <typename ContextT>
+constexpr IOEventType customAwaitableDefaultEvent() {
+    using T = std::remove_cvref_t<ContextT>;
+    if constexpr (std::is_base_of_v<AcceptIOContext, T>) {
+        return ACCEPT;
+    } else if constexpr (std::is_base_of_v<RecvIOContext, T>) {
+        return RECV;
+    } else if constexpr (std::is_base_of_v<SendIOContext, T>) {
+        return SEND;
+    } else if constexpr (std::is_base_of_v<ReadvIOContext, T>) {
+        return READV;
+    } else if constexpr (std::is_base_of_v<WritevIOContext, T>) {
+        return WRITEV;
+    } else if constexpr (std::is_base_of_v<ConnectIOContext, T>) {
+        return CONNECT;
+    } else if constexpr (std::is_base_of_v<FileReadIOContext, T>) {
+        return FILEREAD;
+    } else if constexpr (std::is_base_of_v<FileWriteIOContext, T>) {
+        return FILEWRITE;
+    } else if constexpr (std::is_base_of_v<RecvFromIOContext, T>) {
+        return RECVFROM;
+    } else if constexpr (std::is_base_of_v<SendToIOContext, T>) {
+        return SENDTO;
+    } else if constexpr (std::is_base_of_v<FileWatchIOContext, T>) {
+        return FILEWATCH;
+    } else if constexpr (std::is_base_of_v<SendFileIOContext, T>) {
+        return SENDFILE;
+    } else {
+        return IOEventType::INVALID;
+    }
 }
 
 }  // namespace detail
@@ -705,6 +751,67 @@ struct CustomAwaitable: public AwaitableBase {
     Waker m_waker;
     std::vector<IOTask> m_tasks;
     size_t m_cursor = 0;
+};
+
+template <typename OwnerT, typename BaseContextT, auto Handler>
+struct CustomStepContext : public BaseContextT {
+    static_assert(std::is_base_of_v<IOContextBase, BaseContextT>,
+                  "CustomStepContext requires an IOContextBase-derived base context");
+
+    template <typename... Args>
+    explicit CustomStepContext(OwnerT* owner, Args&&... args)
+        : BaseContextT(std::forward<Args>(args)...)
+        , m_owner(owner) {}
+
+#ifdef USE_IOURING
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
+        return (m_owner->*Handler)(*this, cqe, handle);
+    }
+#else
+    bool handleComplete(GHandle handle) override {
+        return (m_owner->*Handler)(*this, handle);
+    }
+#endif
+
+private:
+    OwnerT* m_owner;
+};
+
+struct CustomSequenceAwaitable : public CustomAwaitable {
+    using CustomAwaitable::CustomAwaitable;
+    using CustomAwaitable::await_suspend;
+
+    bool await_ready() { return false; }
+
+    template <typename ContextT>
+    ContextT& addStep(ContextT& context) {
+        static_assert(std::is_base_of_v<IOContextBase, std::remove_cvref_t<ContextT>>,
+                      "CustomSequenceAwaitable::addStep requires an IOContextBase-derived context");
+        constexpr IOEventType type = detail::customAwaitableDefaultEvent<ContextT>();
+        static_assert(type != IOEventType::INVALID,
+                      "CustomSequenceAwaitable::addStep cannot infer IOEventType for this context");
+        CustomAwaitable::addTask(type, &context);
+        return context;
+    }
+
+    template <typename ContextT>
+    ContextT& addStep(IOEventType type, ContextT& context) {
+        static_assert(std::is_base_of_v<IOContextBase, std::remove_cvref_t<ContextT>>,
+                      "CustomSequenceAwaitable::addStep requires an IOContextBase-derived context");
+        CustomAwaitable::addTask(type, &context);
+        return context;
+    }
+
+    template <typename... ContextTs>
+    void addSteps(ContextTs&... contexts) {
+        (addStep(contexts), ...);
+    }
+
+    template <typename ResultT>
+    decltype(auto) complete(ResultT&& result) {
+        onCompleted();
+        return std::forward<ResultT>(result);
+    }
 };
 
 

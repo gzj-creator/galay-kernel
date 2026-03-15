@@ -1,76 +1,24 @@
 #include "IOUringScheduler.h"
 
 #ifdef USE_IOURING
-#include <sys/eventfd.h>
-#include <sys/inotify.h>
-#include <sys/socket.h>
-#include <sys/sendfile.h>
-#include <sys/poll.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <cerrno>
-#include <stdexcept>
-#include <cstring>
 
 namespace galay::kernel
 {
-
-namespace {
-
-inline int waitForIoUringCompletion(struct io_uring* ring,
-                                    struct io_uring_cqe** cqe,
-                                    struct __kernel_timespec* timeout) {
-    if (io_uring_sq_ready(ring) == 0) {
-        return io_uring_wait_cqe_timeout(ring, cqe, timeout);
-    }
-
-    const int ret = io_uring_submit_and_wait_timeout(ring, cqe, 1, timeout, nullptr);
-    if (ret == -EBUSY) {
-        return io_uring_wait_cqe_timeout(ring, cqe, timeout);
-    }
-    return ret;
-}
-
-}  // namespace
 
 IOUringScheduler::IOUringScheduler(int queue_depth, int batch_size)
     : m_running(false)
     , m_queue_depth(queue_depth)
     , m_batch_size(batch_size)
-    , m_event_fd(eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC))
     , m_worker(static_cast<size_t>(batch_size))
+    , m_wake_coordinator(m_sleeping, m_wakeup_pending)
+    , m_core(m_worker, static_cast<size_t>(batch_size))
+    , m_reactor(queue_depth, m_last_error_code)
 {
-    if (m_event_fd == -1) {
-        throw std::runtime_error("Failed to create eventfd");
-    }
-
-    struct io_uring_params params;
-    std::memset(&params, 0, sizeof(params));
-    params.flags = IORING_SETUP_SQPOLL | IORING_SETUP_COOP_TASKRUN;
-    params.sq_thread_idle = 1000;
-
-    if (io_uring_queue_init_params(m_queue_depth, &m_ring, &params) < 0) {
-        std::memset(&params, 0, sizeof(params));
-        params.flags = IORING_SETUP_COOP_TASKRUN;
-        if (io_uring_queue_init_params(m_queue_depth, &m_ring, &params) < 0) {
-            std::memset(&params, 0, sizeof(params));
-            if (io_uring_queue_init_params(m_queue_depth, &m_ring, &params) < 0) {
-                close(m_event_fd);
-                throw std::runtime_error("Failed to initialize io_uring");
-            }
-        }
-    }
-
 }
 
 IOUringScheduler::~IOUringScheduler()
 {
     stop();
-    io_uring_queue_exit(&m_ring);
-    if (m_event_fd != -1) {
-        close(m_event_fd);
-    }
 }
 
 void IOUringScheduler::start()
@@ -93,7 +41,7 @@ void IOUringScheduler::stop()
         return;
     }
 
-    notify();
+    m_wake_coordinator.forceWake([this]() { notify(); });
 
     if (m_thread.joinable()) {
         m_thread.join();
@@ -102,427 +50,106 @@ void IOUringScheduler::stop()
 
 void IOUringScheduler::notify()
 {
-    uint64_t val = 1;
-    if (write(m_event_fd, &val, sizeof(val)) < 0) {
-        m_last_error_code.store(IOError(kNotReady, static_cast<uint32_t>(errno)).code(),
-                                std::memory_order_release);
-    }
+    m_reactor.notify();
 }
 
 int IOUringScheduler::addAccept(IOController* controller)
 {
-    auto awaitable = controller->getAwaitable<AcceptAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    io_uring_prep_accept(sqe, controller->m_handle.fd,
-                         awaitable->m_host->sockAddr(),
-                         awaitable->m_host->addrLen(), 0);
-    io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::READ]);
-    return 0;
+    return m_reactor.addAccept(controller);
 }
 
 int IOUringScheduler::addConnect(IOController* controller)
 {
-    auto awaitable = controller->getAwaitable<ConnectAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    io_uring_prep_connect(sqe, controller->m_handle.fd,
-                          awaitable->m_host.sockAddr(),
-                          *awaitable->m_host.addrLen());
-    io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::WRITE]);
-    return 0;
+    return m_reactor.addConnect(controller);
 }
 
 int IOUringScheduler::addRecv(IOController* controller)
 {
-    auto awaitable = controller->getAwaitable<RecvAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    io_uring_prep_recv(sqe, controller->m_handle.fd,
-                       awaitable->m_buffer, awaitable->m_length, 0);
-    io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::READ]);
-    return 0;
+    return m_reactor.addRecv(controller);
 }
 
 int IOUringScheduler::addSend(IOController* controller)
 {
-    auto awaitable = controller->getAwaitable<SendAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    io_uring_prep_send(sqe, controller->m_handle.fd,
-                       awaitable->m_buffer, awaitable->m_length, 0);
-    io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::WRITE]);
-    return 0;
+    return m_reactor.addSend(controller);
 }
 
 int IOUringScheduler::addReadv(IOController* controller)
 {
-    auto awaitable = controller->getAwaitable<ReadvAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    // For sockets, recv/send and recvmsg/sendmsg map better than readv/writev on io_uring.
-    if (awaitable->m_iovecs.size() == 1) {
-        const auto& iov = awaitable->m_iovecs[0];
-        io_uring_prep_recv(sqe,
-                           controller->m_handle.fd,
-                           iov.iov_base,
-                           static_cast<unsigned>(iov.iov_len),
-                           0);
-    } else {
-        io_uring_prep_recvmsg(sqe, controller->m_handle.fd, &awaitable->m_msg, 0);
-    }
-    io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::READ]);
-    return 0;
+    return m_reactor.addReadv(controller);
 }
 
 int IOUringScheduler::addWritev(IOController* controller)
 {
-    auto awaitable = controller->getAwaitable<WritevAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    // For sockets, recv/send and recvmsg/sendmsg map better than readv/writev on io_uring.
-    if (awaitable->m_iovecs.size() == 1) {
-        const auto& iov = awaitable->m_iovecs[0];
-        io_uring_prep_send(sqe,
-                           controller->m_handle.fd,
-                           iov.iov_base,
-                           static_cast<unsigned>(iov.iov_len),
-                           0);
-    } else {
-        io_uring_prep_sendmsg(sqe, controller->m_handle.fd, &awaitable->m_msg, 0);
-    }
-    io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::WRITE]);
-    return 0;
-}
-
-int IOUringScheduler::addSendFile(IOController* controller)
-{
-    auto awaitable = controller->getAwaitable<SendFileAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    // io_uring 的 splice 不能直接从普通文件到 socket
-    // 使用 poll 监听 socket 可写，然后在 processCompletion 中调用 sendfile
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    // 使用 poll 等待 socket 可写
-    io_uring_prep_poll_add(sqe, controller->m_handle.fd, POLLOUT);
-    io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::WRITE]);
-    return 0;
+    return m_reactor.addWritev(controller);
 }
 
 int IOUringScheduler::addClose(IOController* controller)
 {
-    if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
-        return 0;
-    }
-
-    const int fd = controller->m_handle.fd;
-
-    // Best-effort cancel outstanding requests for this fd before close.
-    struct io_uring_sqe* cancel_sqe = io_uring_get_sqe(&m_ring);
-    if (cancel_sqe) {
-        io_uring_prep_cancel_fd(cancel_sqe, fd, 0);
-        io_uring_sqe_set_data(cancel_sqe, nullptr);
-    }
-
-    struct io_uring_sqe* close_sqe = io_uring_get_sqe(&m_ring);
-    if (!close_sqe) {
-        close(fd);
-    } else {
-        io_uring_prep_close(close_sqe, fd);
-        io_uring_sqe_set_data(close_sqe, nullptr);
-    }
-
-    controller->m_type = IOEventType::INVALID;
-    controller->m_awaitable[IOController::READ] = nullptr;
-    controller->m_awaitable[IOController::WRITE] = nullptr;
-    controller->m_handle = GHandle::invalid();
-    return 0;
+    return m_reactor.addClose(controller);
 }
 
 int IOUringScheduler::addFileRead(IOController* controller)
 {
-    auto awaitable = controller->getAwaitable<FileReadAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    io_uring_prep_read(sqe, controller->m_handle.fd,
-                       awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
-    io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::READ]);
-    return 0;
+    return m_reactor.addFileRead(controller);
 }
 
 int IOUringScheduler::addFileWrite(IOController* controller)
 {
-    auto awaitable = controller->getAwaitable<FileWriteAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    io_uring_prep_write(sqe, controller->m_handle.fd,
-                        awaitable->m_buffer, awaitable->m_length, awaitable->m_offset);
-    io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::WRITE]);
-    return 0;
+    return m_reactor.addFileWrite(controller);
 }
 
 int IOUringScheduler::addRecvFrom(IOController* controller)
 {
-    auto awaitable = controller->getAwaitable<RecvFromAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    std::memset(&awaitable->m_msg, 0, sizeof(awaitable->m_msg));
-    std::memset(&awaitable->m_addr, 0, sizeof(awaitable->m_addr));
-
-    awaitable->m_iov.iov_base = awaitable->m_buffer;
-    awaitable->m_iov.iov_len = awaitable->m_length;
-
-    awaitable->m_msg.msg_iov = &awaitable->m_iov;
-    awaitable->m_msg.msg_iovlen = 1;
-    awaitable->m_msg.msg_name = &awaitable->m_addr;
-    awaitable->m_msg.msg_namelen = sizeof(awaitable->m_addr);
-
-    io_uring_prep_recvmsg(sqe, controller->m_handle.fd, &awaitable->m_msg, 0);
-    io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::READ]);
-    return 0;
+    return m_reactor.addRecvFrom(controller);
 }
 
 int IOUringScheduler::addSendTo(IOController* controller)
 {
-    auto awaitable = controller->getAwaitable<SendToAwaitable>();
-    if (awaitable == nullptr) return -1;
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    std::memset(&awaitable->m_msg, 0, sizeof(awaitable->m_msg));
-
-    awaitable->m_iov.iov_base = const_cast<char*>(awaitable->m_buffer);
-    awaitable->m_iov.iov_len = awaitable->m_length;
-
-    awaitable->m_msg.msg_iov = &awaitable->m_iov;
-    awaitable->m_msg.msg_iovlen = 1;
-    awaitable->m_msg.msg_name = const_cast<sockaddr*>(awaitable->m_to.sockAddr());
-    awaitable->m_msg.msg_namelen = *awaitable->m_to.addrLen();
-
-    io_uring_prep_sendmsg(sqe, controller->m_handle.fd, &awaitable->m_msg, 0);
-    io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::WRITE]);
-    return 0;
+    return m_reactor.addSendTo(controller);
 }
 
 int IOUringScheduler::addFileWatch(IOController* controller)
 {
-    auto awaitable = controller->getAwaitable<FileWatchAwaitable>();
-    if (awaitable == nullptr) return -1;
+    return m_reactor.addFileWatch(controller);
+}
 
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    // inotify fd 是可读的，当有事件时读取
-    io_uring_prep_read(sqe, controller->m_handle.fd,
-                       awaitable->m_buffer, awaitable->m_buffer_size, 0);
-    io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::READ]);
-    return 0;
+int IOUringScheduler::addSendFile(IOController* controller)
+{
+    return m_reactor.addSendFile(controller);
 }
 
 int IOUringScheduler::addCustom(IOController* controller)
 {
-    auto* custom = controller->getAwaitable<CustomAwaitable>();
-    if (custom == nullptr) return -1;
-    auto* task = custom->front();
-    if (task == nullptr) {
-        return OK;  // 队列空，由调用方决定是否唤醒
-    }
-    return submitCustomSqe(custom->resolveTaskEventType(*task), task->context, controller);
-}
-
-int IOUringScheduler::submitCustomSqe(IOEventType type, IOContextBase* ctx, IOController* controller)
-{
-    auto* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) return -EAGAIN;
-
-    switch (type) {
-    case RECV: {
-        auto* c = static_cast<RecvIOContext*>(ctx);
-        io_uring_prep_recv(sqe, controller->m_handle.fd, c->m_buffer, c->m_length, 0);
-        break;
-    }
-    case SEND: {
-        auto* c = static_cast<SendIOContext*>(ctx);
-        io_uring_prep_send(sqe, controller->m_handle.fd, c->m_buffer, c->m_length, 0);
-        break;
-    }
-    case ACCEPT: {
-        auto* c = static_cast<AcceptIOContext*>(ctx);
-        io_uring_prep_accept(sqe, controller->m_handle.fd,
-                             c->m_host->sockAddr(), c->m_host->addrLen(), 0);
-        break;
-    }
-    case CONNECT: {
-        auto* c = static_cast<ConnectIOContext*>(ctx);
-        io_uring_prep_connect(sqe, controller->m_handle.fd,
-                              c->m_host.sockAddr(), *c->m_host.addrLen());
-        break;
-    }
-    case READV: {
-        auto* c = static_cast<ReadvIOContext*>(ctx);
-        io_uring_prep_readv(sqe, controller->m_handle.fd,
-                            c->m_iovecs.data(), static_cast<unsigned>(c->m_iovecs.size()), 0);
-        break;
-    }
-    case WRITEV: {
-        auto* c = static_cast<WritevIOContext*>(ctx);
-        io_uring_prep_writev(sqe, controller->m_handle.fd,
-                             c->m_iovecs.data(), static_cast<unsigned>(c->m_iovecs.size()), 0);
-        break;
-    }
-    case FILEREAD: {
-        auto* c = static_cast<FileReadIOContext*>(ctx);
-        io_uring_prep_read(sqe, controller->m_handle.fd, c->m_buffer, c->m_length, c->m_offset);
-        break;
-    }
-    case FILEWRITE: {
-        auto* c = static_cast<FileWriteIOContext*>(ctx);
-        io_uring_prep_write(sqe, controller->m_handle.fd, c->m_buffer, c->m_length, c->m_offset);
-        break;
-    }
-    case RECVFROM: {
-        auto* c = static_cast<RecvFromIOContext*>(ctx);
-        std::memset(&c->m_msg, 0, sizeof(c->m_msg));
-        std::memset(&c->m_addr, 0, sizeof(c->m_addr));
-        c->m_iov.iov_base = c->m_buffer;
-        c->m_iov.iov_len = c->m_length;
-        c->m_msg.msg_iov = &c->m_iov;
-        c->m_msg.msg_iovlen = 1;
-        c->m_msg.msg_name = &c->m_addr;
-        c->m_msg.msg_namelen = sizeof(c->m_addr);
-        io_uring_prep_recvmsg(sqe, controller->m_handle.fd, &c->m_msg, 0);
-        break;
-    }
-    case SENDTO: {
-        auto* c = static_cast<SendToIOContext*>(ctx);
-        std::memset(&c->m_msg, 0, sizeof(c->m_msg));
-        c->m_iov.iov_base = const_cast<char*>(c->m_buffer);
-        c->m_iov.iov_len = c->m_length;
-        c->m_msg.msg_iov = &c->m_iov;
-        c->m_msg.msg_iovlen = 1;
-        c->m_msg.msg_name = const_cast<sockaddr*>(c->m_to.sockAddr());
-        c->m_msg.msg_namelen = *c->m_to.addrLen();
-        io_uring_prep_sendmsg(sqe, controller->m_handle.fd, &c->m_msg, 0);
-        break;
-    }
-    case SENDFILE: {
-        io_uring_prep_poll_add(sqe, controller->m_handle.fd, POLLOUT);
-        break;
-    }
-    case FILEWATCH: {
-        auto* c = static_cast<FileWatchIOContext*>(ctx);
-        io_uring_prep_read(sqe, controller->m_handle.fd, c->m_buffer, c->m_buffer_size, 0);
-        break;
-    }
-    default:
-        return -1;
-    }
-
-    // Set sqe_type on the CustomAwaitable so processCompletion routes correctly
-    auto* custom = controller->getAwaitable<CustomAwaitable>();
-    custom->m_sqe_type = CUSTOM;
-    io_uring_sqe_set_data(sqe, &controller->m_sqe_tag[IOController::READ]);
-    return 0;
+    return m_reactor.addCustom(controller);
 }
 
 int IOUringScheduler::remove(IOController* controller)
 {
-    if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
-        return 0;
-    }
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (!sqe) {
-        return -EAGAIN;
-    }
-
-    io_uring_prep_cancel_fd(sqe, controller->m_handle.fd, 0);
-    io_uring_sqe_set_data(sqe, nullptr);
-    return 0;
+    return m_reactor.remove(controller);
 }
 
 std::optional<IOError> IOUringScheduler::lastError() const
 {
-    const uint64_t code = m_last_error_code.load(std::memory_order_acquire);
-    if (code == 0) {
-        return std::nullopt;
-    }
-    return IOError(static_cast<IOErrorCode>(code & 0xffffffffu),
-                   static_cast<uint32_t>(code >> 32));
+    return detail::loadBackendError(m_last_error_code);
 }
 
 bool IOUringScheduler::spawn(Coroutine co)
 {
-    auto* scheduler = co.belongScheduler();
-    // 如果协程未绑定 scheduler，绑定到当前 scheduler
+    auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
     if (!scheduler) {
-        co.belongScheduler(this);
-    } else {
-        if(scheduler != this) return false;
+        detail::CoroutineAccess::setScheduler(co, this);
+    } else if (scheduler != this) {
+        return false;
     }
-    TaskRef task = std::move(co).detachTask();
 
+    TaskRef task = detail::CoroutineAccess::detachTask(std::move(co));
     if (std::this_thread::get_id() == m_threadId) {
         m_worker.scheduleLocal(std::move(task));
         return true;
     }
 
-    m_worker.scheduleInjected(std::move(task));
-    notify();
+    const bool queue_was_empty = m_worker.scheduleInjected(std::move(task));
+    m_wake_coordinator.requestWake(queue_was_empty, [this]() { notify(); });
     return true;
 }
 
@@ -538,28 +165,28 @@ bool IOUringScheduler::schedule(TaskRef task)
         return true;
     }
 
-    m_worker.scheduleInjected(std::move(task));
-    notify();
+    const bool queue_was_empty = m_worker.scheduleInjected(std::move(task));
+    m_wake_coordinator.requestWake(queue_was_empty, [this]() { notify(); });
     return true;
 }
 
 bool IOUringScheduler::spawnDeferred(Coroutine co)
 {
-    auto* scheduler = co.belongScheduler();
+    auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
     if (!scheduler) {
-        co.belongScheduler(this);
+        detail::CoroutineAccess::setScheduler(co, this);
     } else if (scheduler != this) {
         return false;
     }
-    TaskRef task = std::move(co).detachTask();
 
+    TaskRef task = detail::CoroutineAccess::detachTask(std::move(co));
     if (std::this_thread::get_id() == m_threadId) {
         m_worker.scheduleLocalDeferred(std::move(task));
         return true;
     }
 
-    m_worker.scheduleInjected(std::move(task));
-    notify();
+    const bool queue_was_empty = m_worker.scheduleInjected(std::move(task));
+    m_wake_coordinator.requestWake(queue_was_empty, [this]() { notify(); });
     return true;
 }
 
@@ -575,317 +202,55 @@ bool IOUringScheduler::scheduleDeferred(TaskRef task)
         return true;
     }
 
-    m_worker.scheduleInjected(std::move(task));
-    notify();
+    const bool queue_was_empty = m_worker.scheduleInjected(std::move(task));
+    m_wake_coordinator.requestWake(queue_was_empty, [this]() { notify(); });
     return true;
 }
 
 bool IOUringScheduler::spawnImmidiately(Coroutine co)
 {
-    auto* scheduler = co.belongScheduler();
+    auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
     if (scheduler) {
         return false;
     }
-    co.belongScheduler(this);
-    TaskRef task = std::move(co).detachTask();
+    detail::CoroutineAccess::setScheduler(co, this);
+    TaskRef task = detail::CoroutineAccess::detachTask(std::move(co));
     resume(task);
     return true;
 }
 
 void IOUringScheduler::processPendingCoroutines()
 {
-    TaskRef next;
-    while (true) {
-        if (!m_worker.hasLocalWork() ||
-            m_worker.shouldCheckInjected() ||
-            m_worker.hasPendingInjected()) {
-            m_worker.drainInjected();
-        }
-
-        if (!m_worker.popNext(next)) {
-            if (m_worker.hasPendingInjected()) {
-                continue;
-            }
-            if (m_worker.drainInjected() == 0 || !m_worker.popNext(next)) {
-                break;
-            }
-        }
-
-        Scheduler::resume(next);
-    }
+    (void)m_core.runReadyPass(
+        [this](TaskRef& next) { Scheduler::resume(next); },
+        [this](size_t drained) { m_wake_coordinator.onRemoteCollected(drained); });
 }
 
 void IOUringScheduler::eventLoop()
 {
-    struct io_uring_cqe* cqe;
-    struct __kernel_timespec timeout;
-    timeout.tv_sec = 0;
-    timeout.tv_nsec = GALAY_IOURING_WAIT_TIMEOUT_NS;
-
-    // 添加 eventfd 到 io_uring 监听
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-    if (sqe) {
-        io_uring_prep_read(sqe, m_event_fd, &m_eventfd_buf, sizeof(m_eventfd_buf), 0);
-        io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(-1));
+    const size_t batch_size = m_batch_size > 0 ? static_cast<size_t>(m_batch_size) : 1;
+    size_t local_followup_pass_limit = 4096 / batch_size;
+    if (local_followup_pass_limit == 0) {
+        local_followup_pass_limit = 1;
+    }
+    if (local_followup_pass_limit > 16) {
+        local_followup_pass_limit = 16;
     }
 
     while (m_running.load(std::memory_order_acquire)) {
-        processPendingCoroutines();
+        (void)m_core.runLocalFollowupPasses(
+            local_followup_pass_limit,
+            [this](TaskRef& next) { Scheduler::resume(next); },
+            [this](size_t drained) { m_wake_coordinator.onRemoteCollected(drained); });
         m_timer_manager.tick();
-
-        int ret = waitForIoUringCompletion(&m_ring, &cqe, &timeout);
-        if (ret < 0) {
-            if (ret == -EINTR || ret == -ETIME) {
-                continue;
-            }
-            m_last_error_code.store(
-                IOError(kNotReady, static_cast<uint32_t>(-ret)).code(),
-                std::memory_order_release);
-            break;
+        m_wake_coordinator.markSleeping();
+        if (m_core.hasPendingWork()) {
+            m_wake_coordinator.markAwake();
+            continue;
         }
 
-        unsigned head;
-        unsigned count = 0;
-        bool eventfd_triggered = false;
-
-        io_uring_for_each_cqe(&m_ring, head, cqe) {
-            void* user_data = io_uring_cqe_get_data(cqe);
-
-            if (user_data == reinterpret_cast<void*>(-1)) {
-                eventfd_triggered = true;
-            } else if (user_data != nullptr) {
-                processCompletion(cqe);
-            }
-            ++count;
-        }
-
-        if (count > 0) {
-            io_uring_cq_advance(&m_ring, count);
-        }
-
-        if (eventfd_triggered) {
-            struct io_uring_sqe* new_sqe = io_uring_get_sqe(&m_ring);
-            if (new_sqe) {
-                io_uring_prep_read(new_sqe, m_event_fd, &m_eventfd_buf, sizeof(m_eventfd_buf), 0);
-                io_uring_sqe_set_data(new_sqe, reinterpret_cast<void*>(-1));
-            }
-        }
-    }
-}
-
-void IOUringScheduler::processCompletion(struct io_uring_cqe* cqe)
-{
-    void* data = io_uring_cqe_get_data(cqe);
-    if (!data) return;
-
-    auto* tag = static_cast<SqeTag*>(data);
-    auto* controller = tag->owner;
-    auto* base = static_cast<AwaitableBase*>(controller->m_awaitable[tag->slot]);
-    if (!base) return;  // awaitable 已被超时清理，安全忽略
-
-    switch (base->m_sqe_type)
-    {
-    case ACCEPT:
-    {
-        auto* awaitable = static_cast<AcceptAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addAccept(controller);
-            if (ret < 0) {
-                awaitable->m_result = std::unexpected(IOError(kAcceptFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-                awaitable->m_waker.wakeUp();
-            }
-        }
-        break;
-    }
-    case CONNECT:
-    {
-        auto* awaitable = static_cast<ConnectAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addConnect(controller);
-            if (ret < 0) {
-                awaitable->m_result = std::unexpected(IOError(kConnectFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-                awaitable->m_waker.wakeUp();
-            }
-        }
-        break;
-    }
-    case RECV:
-    {
-        auto* awaitable = static_cast<RecvAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addRecv(controller);
-            if (ret < 0) {
-                awaitable->m_result = std::unexpected(IOError(kRecvFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-                awaitable->m_waker.wakeUp();
-            }
-        }
-        break;
-    }
-    case SEND:
-    {
-        auto* awaitable = static_cast<SendAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addSend(controller);
-            if (ret < 0) {
-                awaitable->m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-                awaitable->m_waker.wakeUp();
-            }
-        }
-        break;
-    }
-    case READV:
-    {
-        auto* awaitable = static_cast<ReadvAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addReadv(controller);
-            if (ret < 0) {
-                awaitable->m_result = std::unexpected(IOError(kRecvFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-                awaitable->m_waker.wakeUp();
-            }
-        }
-        break;
-    }
-    case WRITEV:
-    {
-        auto* awaitable = static_cast<WritevAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addWritev(controller);
-            if (ret < 0) {
-                awaitable->m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-                awaitable->m_waker.wakeUp();
-            }
-        }
-        break;
-    }
-    case FILEREAD:
-    {
-        auto* awaitable = static_cast<FileReadAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addFileRead(controller);
-            if (ret < 0) {
-                awaitable->m_result = std::unexpected(IOError(kReadFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-                awaitable->m_waker.wakeUp();
-            }
-        }
-        break;
-    }
-    case FILEWRITE:
-    {
-        auto* awaitable = static_cast<FileWriteAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addFileWrite(controller);
-            if (ret < 0) {
-                awaitable->m_result = std::unexpected(IOError(kWriteFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-                awaitable->m_waker.wakeUp();
-            }
-        }
-        break;
-    }
-    case RECVFROM:
-    {
-        auto* awaitable = static_cast<RecvFromAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addRecvFrom(controller);
-            if (ret < 0) {
-                awaitable->m_result = std::unexpected(IOError(kRecvFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-                awaitable->m_waker.wakeUp();
-            }
-        }
-        break;
-    }
-    case SENDTO:
-    {
-        auto* awaitable = static_cast<SendToAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addSendTo(controller);
-            if (ret < 0) {
-                awaitable->m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-                awaitable->m_waker.wakeUp();
-            }
-        }
-        break;
-    }
-    case FILEWATCH:
-    {
-        auto* awaitable = static_cast<FileWatchAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addFileWatch(controller);
-            if (ret < 0) {
-                awaitable->m_result = std::unexpected(IOError(kReadFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-                awaitable->m_waker.wakeUp();
-            }
-        }
-        break;
-    }
-    case SENDFILE:
-    {
-        auto* awaitable = static_cast<SendFileAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addSendFile(controller);
-            if (ret < 0) {
-                awaitable->m_result = std::unexpected(IOError(kSendFailed, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))));
-                awaitable->m_waker.wakeUp();
-            }
-        }
-        break;
-    }
-    case CUSTOM:
-    {
-        auto* custom = static_cast<CustomAwaitable*>(base);
-        auto* task = custom->front();
-        if (task) {
-            bool done = task->context->handleComplete(cqe, controller->m_handle);
-            if (done) {
-                custom->popFront();
-                if (custom->empty()) {
-                    custom->m_waker.wakeUp();
-                } else {
-                    const int ret = addCustom(controller);
-                    if (ret == OK) {
-                        custom->m_waker.wakeUp();
-                    } else if (ret < 0) {
-                        m_last_error_code.store(IOError(kNotReady, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))).code(),
-                                                std::memory_order_release);
-                        custom->m_waker.wakeUp();
-                    }
-                }
-            } else {
-                const int ret = addCustom(controller);
-                if (ret < 0) {
-                    m_last_error_code.store(IOError(kNotReady, ((ret < 0 && ret != -1) ? static_cast<uint32_t>(-ret) : static_cast<uint32_t>(errno))).code(),
-                                            std::memory_order_release);
-                    custom->m_waker.wakeUp();
-                }
-            }
-        }
-        break;
-    }
-    default:
-        break;
+        m_reactor.poll(GALAY_IOURING_WAIT_TIMEOUT_NS, m_wake_coordinator);
+        m_wake_coordinator.markAwake();
     }
 }
 

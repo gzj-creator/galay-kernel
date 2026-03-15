@@ -37,7 +37,7 @@ namespace galay::kernel
  * 协程的原调度器通过 coro.belongScheduler() 获取。
  */
 struct ComputeTask {
-    Coroutine coro;                 ///< 计算协程
+    TaskRef task;                  ///< 轻量任务引用
     bool is_stop_signal = false;    ///< 是否为停止信号
 };
 
@@ -94,6 +94,9 @@ public:
      * @note 计算完成后会自动 spawn 回协程原来的调度器
      */
     bool spawn(Coroutine coro) override;
+    bool schedule(TaskRef task) override;
+    bool spawnDeferred(Coroutine co) override;
+    bool scheduleDeferred(TaskRef task) override;
 
     /**
      * @brief 立即执行协程（在当前线程）

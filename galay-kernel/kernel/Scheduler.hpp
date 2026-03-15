@@ -181,7 +181,16 @@ inline void Scheduler::resume(Coroutine& co) {
     if (!state || !state->m_handle || state->m_done.load(std::memory_order_relaxed)) {
         return;
     }
-    state->m_queued.store(false, std::memory_order_release);
+    state->m_queued.store(false, std::memory_order_relaxed);
+    if (state->m_runtime == nullptr) {
+        state->m_handle.resume();
+        return;
+    }
+    if (state->m_runtime == detail::currentRuntime()) {
+        state->m_handle.resume();
+        return;
+    }
+    detail::CurrentRuntimeScope runtime_scope(state->m_runtime);
     state->m_handle.resume();
 }
 
@@ -190,7 +199,16 @@ inline void Scheduler::resume(TaskRef& task) {
     if (!state || !state->m_handle || state->m_done.load(std::memory_order_relaxed)) {
         return;
     }
-    state->m_queued.store(false, std::memory_order_release);
+    state->m_queued.store(false, std::memory_order_relaxed);
+    if (state->m_runtime == nullptr) {
+        state->m_handle.resume();
+        return;
+    }
+    if (state->m_runtime == detail::currentRuntime()) {
+        state->m_handle.resume();
+        return;
+    }
+    detail::CurrentRuntimeScope runtime_scope(state->m_runtime);
     state->m_handle.resume();
 }
 

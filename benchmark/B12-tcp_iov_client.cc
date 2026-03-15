@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 #include <cstring>
+#include "benchmark/BenchmarkSync.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/StdoutLog.h"
@@ -87,6 +88,8 @@ std::atomic<uint64_t> g_total_bytes{0};
 std::atomic<uint64_t> g_success_count{0};
 std::atomic<uint64_t> g_error_count{0};
 std::atomic<bool> g_running{true};
+galay::benchmark::CompletionLatch* g_connected_latch = nullptr;
+galay::benchmark::StartGate* g_start_gate = nullptr;
 
 struct BenchConfig {
     std::string host = "127.0.0.1";
@@ -105,7 +108,17 @@ Coroutine benchClient(const BenchConfig& config, [[maybe_unused]] int clientId) 
     auto connectResult = co_await client.connect(serverHost);
     if (!connectResult) {
         g_error_count.fetch_add(1, std::memory_order_relaxed);
+        if (g_connected_latch) {
+            g_connected_latch->arrive();
+        }
         co_return;
+    }
+
+    if (g_connected_latch) {
+        g_connected_latch->arrive();
+    }
+    if (g_start_gate) {
+        g_start_gate->wait();
     }
 
     std::array<struct iovec, 2> writeIovecs{};
@@ -153,6 +166,13 @@ Coroutine benchClient(const BenchConfig& config, [[maybe_unused]] int clientId) 
 
 // 统计打印线程
 void statsThread(const BenchConfig& config) {
+    if (g_connected_latch && !g_connected_latch->waitFor(std::chrono::seconds(5))) {
+        std::cout << "[warmup] connection gate timed out, starting with available clients" << std::endl;
+    }
+    if (g_start_gate) {
+        g_start_gate->open();
+    }
+
     auto startTime = std::chrono::steady_clock::now();
     auto lastTime = startTime;
     uint64_t lastRequests = 0;
@@ -205,6 +225,7 @@ void printUsage(const char* program) {
 
 int main(int argc, char* argv[]) {
     BenchConfig config;
+    g_running.store(true, std::memory_order_release);
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 && i + 1 < argc) {
@@ -251,6 +272,10 @@ int main(int argc, char* argv[]) {
 #endif
 
     scheduler.start();
+    galay::benchmark::CompletionLatch connected_latch(static_cast<std::size_t>(config.connections));
+    galay::benchmark::StartGate start_gate;
+    g_connected_latch = &connected_latch;
+    g_start_gate = &start_gate;
 
     std::thread stats(statsThread, std::ref(config));
 
@@ -260,6 +285,8 @@ int main(int argc, char* argv[]) {
     }
 
     stats.join();
+    g_connected_latch = nullptr;
+    g_start_gate = nullptr;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     scheduler.stop();

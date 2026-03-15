@@ -13,12 +13,14 @@ Coroutine noopTask() {
 
 bool verifyPromiseDirectAccessors() {
     Coroutine co = noopTask();
-    auto task = co.taskRef();
-    auto handle = task.state()->m_handle;
-    if (!handle) {
+    auto task = detail::CoroutineAccess::taskRef(co);
+    auto erased_handle = task.state()->m_handle;
+    if (!erased_handle) {
         std::cerr << "[T39] coroutine handle is invalid\n";
         return false;
     }
+    auto handle = std::coroutine_handle<Coroutine::promise_type>::from_address(
+        erased_handle.address());
 
     const TaskRef& promise_task = handle.promise().taskRefView();
     if (!promise_task.isValid() || promise_task.state() != task.state()) {
@@ -27,12 +29,12 @@ bool verifyPromiseDirectAccessors() {
     }
 
     auto& promise_coro = handle.promise().coroutineRef();
-    if (!promise_coro.isValid() || promise_coro.taskRef().state() != task.state()) {
+    if (!promise_coro.isValid() || detail::CoroutineAccess::taskRef(promise_coro).state() != task.state()) {
         std::cerr << "[T39] promise coroutineRef does not match coroutine task state\n";
         return false;
     }
 
-    handle.resume();
+    erased_handle.resume();
     return true;
 }
 

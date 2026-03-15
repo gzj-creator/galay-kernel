@@ -17,8 +17,8 @@
 
 - IO 调度：`EpollScheduler` / `IOUringScheduler` / `KqueueScheduler` / `IOCP`
 - 计算调度：`ComputeScheduler`
-- 运行时编排：`Runtime`、`RuntimeBuilder`
-- 协程与等待：`Coroutine`、`spawn()`、`sleep(...)`
+- 运行时编排：`Runtime`、`RuntimeBuilder`、`RuntimeHandle`
+- 协程与任务：`Coroutine`、`Task<T>`、`JoinHandle<T>::join()/wait()`、`blockOn()`、`spawn()`、`spawnBlocking()`、`sleep(...)`
 - 网络 IO：`galay::async::TcpSocket`、`galay::async::UdpSocket`
 - 文件 IO：`galay::async::AsyncFile`；Linux epoll 下额外提供 `galay::async::AioFile`
 - 并发原语：`AsyncMutex`、`MpscChannel<T>`、`UnsafeChannel<T>`、`AsyncWaiter<T>`
@@ -84,6 +84,14 @@ target_link_libraries(your_app PRIVATE galay-kernel::galay-kernel)
   - `E1-SendfileExampleImport` ~ `E9-TimerSleepImport` 仅在模块 target 生效时生成
 - 测试：`test/T*.cc` 会按文件名直接生成同名 target，例如 `test/T13-async_mutex.cc` -> `T13-async_mutex`
 - benchmark：`benchmark/CMakeLists.txt` 明确定义 `B1-ComputeScheduler` 到 `B13-Sendfile`
+
+## 性能验证口径（2026-03-15）
+
+- 当前有效对比只保留两组：`baseline=cde3da1` 与 `refactored=current .worktrees/v3`
+- 单 benchmark 的标准入口是 `scripts/run_single_benchmark_triplet.sh`
+- 后端顺序固定为 `kqueue -> epoll -> io_uring`
+- `scripts/run_benchmark_triplet.sh` 是单 backend 低层 orchestrator，`scripts/parse_benchmark_triplet.py` 只输出 `baseline | refactored`
+- `B5-UdpClient` 只做 smoke/stability 检查，最终 UDP 性能结论以 `B6-Udp` 为准
 
 ## 当前已验证的命令（2026-03-10）
 

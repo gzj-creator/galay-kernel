@@ -3,6 +3,13 @@
 
 #include "galay-kernel/common/Defn.hpp"
 
+#ifdef USE_IOURING
+#include <atomic>
+#include <cstdint>
+#include <memory>
+#include <new>
+#endif
+
 namespace galay::kernel
 {
 
@@ -25,9 +32,19 @@ struct IOController;
  * @brief SQE 标签，生命周期与 IOController 绑定
  * @details 用作 io_uring sqe 的 user_data，避免超时销毁 awaitable 后 CQE 解引用野指针
  */
-struct SqeTag {
-    IOController* owner;
-    uint8_t slot;  // IOController::READ=0, IOController::WRITE=1
+struct SqeState {
+    explicit SqeState(IOController* controller, uint8_t index)
+        : owner(controller)
+        , slot(index) {}
+
+    std::atomic<IOController*> owner;
+    const uint8_t slot;
+    std::atomic<uint64_t> generation{1};
+};
+
+struct SqeRequestToken {
+    std::shared_ptr<SqeState> state;
+    uint64_t generation;
 };
 #endif
 
@@ -47,9 +64,17 @@ struct IOController {
     IOController(GHandle handle)
         : m_handle(handle)
 #ifdef USE_IOURING
-        , m_sqe_tag{{this, READ}, {this, WRITE}}
+        , m_sqe_state{
+            std::make_shared<SqeState>(this, READ),
+            std::make_shared<SqeState>(this, WRITE)}
 #endif
     {}
+
+    ~IOController() {
+#ifdef USE_IOURING
+        clearSqeState();
+#endif
+    }
 
     IOController(const IOController& other) noexcept
         : m_handle(other.m_handle)
@@ -59,7 +84,9 @@ struct IOController {
         , m_registered_events(other.m_registered_events)
 #endif
 #ifdef USE_IOURING
-        , m_sqe_tag{{this, READ}, {this, WRITE}}
+        , m_sqe_state{
+            std::make_shared<SqeState>(this, READ),
+            std::make_shared<SqeState>(this, WRITE)}
 #endif
     {}
 
@@ -73,8 +100,9 @@ struct IOController {
             m_registered_events = other.m_registered_events;
 #endif
 #ifdef USE_IOURING
-            m_sqe_tag[READ] = {this, READ};
-            m_sqe_tag[WRITE] = {this, WRITE};
+            clearSqeState();
+            m_sqe_state[READ] = std::make_shared<SqeState>(this, READ);
+            m_sqe_state[WRITE] = std::make_shared<SqeState>(this, WRITE);
 #endif
         }
         return *this;
@@ -88,9 +116,12 @@ struct IOController {
         , m_registered_events(other.m_registered_events)
 #endif
 #ifdef USE_IOURING
-        , m_sqe_tag{{this, READ}, {this, WRITE}}
+        , m_sqe_state{std::move(other.m_sqe_state[READ]), std::move(other.m_sqe_state[WRITE])}
 #endif
     {
+#ifdef USE_IOURING
+        rebindSqeState();
+#endif
         other.resetMovedFrom();
     }
 
@@ -104,8 +135,10 @@ struct IOController {
             m_registered_events = other.m_registered_events;
 #endif
 #ifdef USE_IOURING
-            m_sqe_tag[READ] = {this, READ};
-            m_sqe_tag[WRITE] = {this, WRITE};
+            clearSqeState();
+            m_sqe_state[READ] = std::move(other.m_sqe_state[READ]);
+            m_sqe_state[WRITE] = std::move(other.m_sqe_state[WRITE]);
+            rebindSqeState();
 #endif
             other.resetMovedFrom();
         }
@@ -121,10 +154,34 @@ struct IOController {
         m_registered_events = 0;
 #endif
 #ifdef USE_IOURING
-        m_sqe_tag[READ] = {this, READ};
-        m_sqe_tag[WRITE] = {this, WRITE};
+        clearSqeState();
+        m_sqe_state[READ] = std::make_shared<SqeState>(this, READ);
+        m_sqe_state[WRITE] = std::make_shared<SqeState>(this, WRITE);
 #endif
     }
+
+#ifdef USE_IOURING
+    SqeRequestToken* makeSqeRequest(Index slot) const {
+        const auto& state = m_sqe_state[slot];
+        if (!state) {
+            return nullptr;
+        }
+        return new (std::nothrow) SqeRequestToken{
+            .state = state,
+            .generation = state->generation.load(std::memory_order_acquire)};
+    }
+
+    void advanceSqeGeneration(Index slot) noexcept {
+        if (auto& state = m_sqe_state[slot]; state) {
+            state->generation.fetch_add(1, std::memory_order_acq_rel);
+            state->owner.store(this, std::memory_order_release);
+        }
+    }
+
+    void invalidateSqeRequests() noexcept {
+        clearSqeState();
+    }
+#endif
 
     /**
      * @brief 填充Awaitable信息（支持 RECVWITHSEND 状态机）
@@ -146,11 +203,33 @@ struct IOController {
     uint32_t m_registered_events = 0;          ///< epoll 已注册的事件掩码缓存
 #endif
 #ifdef USE_IOURING
-    SqeTag m_sqe_tag[SIZE];
+    std::shared_ptr<SqeState> m_sqe_state[SIZE];
 #endif
 
     template<typename T>
     T* getAwaitable() { return nullptr; }
+
+#ifdef USE_IOURING
+private:
+    void clearSqeState() noexcept {
+        for (auto& state : m_sqe_state) {
+            if (!state) {
+                continue;
+            }
+            state->owner.store(nullptr, std::memory_order_release);
+            state->generation.fetch_add(1, std::memory_order_acq_rel);
+        }
+    }
+
+    void rebindSqeState() noexcept {
+        for (auto& state : m_sqe_state) {
+            if (!state) {
+                continue;
+            }
+            state->owner.store(this, std::memory_order_release);
+        }
+    }
+#endif
 };
 
 } // namespace galay::kernel

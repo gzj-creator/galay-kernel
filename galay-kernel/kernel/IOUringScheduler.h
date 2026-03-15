@@ -3,17 +3,12 @@
 
 #include "Coroutine.h"
 #include "IOScheduler.hpp"
+#include "IOUringReactor.h"
+#include "SchedulerCore.h"
+#include "WakeCoordinator.h"
 
 #ifdef USE_IOURING
 
-#include <liburing.h>
-
-// liburing/io_uring.h 定义了 BLOCK_SIZE 宏，与 concurrentqueue 冲突
-#ifdef BLOCK_SIZE
-#undef BLOCK_SIZE
-#endif
-
-#include <vector>
 #include <atomic>
 #include <thread>
 #include <cstdint>
@@ -33,7 +28,7 @@
 namespace galay::kernel
 {
 
-#define OK 1
+struct SchedulerTestAccess;
 
 class IOUringScheduler: public IOScheduler
 {
@@ -78,25 +73,26 @@ public:
 
     bool spawnImmidiately(Coroutine co) override;
 
+    friend struct SchedulerTestAccess;
+
 private:
-    struct io_uring m_ring;
     std::atomic<bool> m_running;
     std::thread m_thread;
 
     int m_queue_depth;
     int m_batch_size;
-    int m_event_fd;
-    uint64_t m_eventfd_buf;  // eventfd 读取缓冲区
+    std::atomic<bool> m_sleeping{true};
+    std::atomic<bool> m_wakeup_pending{false};
 
     IOSchedulerWorkerState m_worker;
+    WakeCoordinator m_wake_coordinator;
+    SchedulerCore m_core;
+    IOUringReactor m_reactor;
     std::atomic<uint64_t> m_last_error_code{0};
 
 private:
     void eventLoop();
     void processPendingCoroutines();
-    void processCompletion(struct io_uring_cqe* cqe);
-    int processCustom(IOEventType type, IOController* controller);
-    int submitCustomSqe(IOEventType type, IOContextBase* ctx, IOController* controller);
 };
 
 }
