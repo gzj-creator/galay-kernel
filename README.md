@@ -75,7 +75,7 @@ target_link_libraries(your_app PRIVATE galay-kernel::galay-kernel)
 
 仓库内的 source-controlled consumer fixture 位于 `test/package-consumer/`。
 
-更完整的企业接入说明见 `docs/21-企业接入与验证.md`。
+安装消费、`find_package` 与 CI 验证统一看 `docs/00-快速开始.md`、`docs/02-API参考.md`、`docs/07-常见问题.md`。
 
 ## 示例 / 测试 / benchmark 生成规则
 
@@ -164,7 +164,7 @@ cmake --build build-docverify-modules --target E6-MpscChannelImport
 ## 文档导航
 
 - 主干层：优先使用 `docs/00-快速开始.md` 到 `docs/07-常见问题.md`
-- 补充层：`docs/08-计算调度器.md` 到 `docs/21-企业接入与验证.md` 现在只保留专题摘要、关键词、源码锚点与验证入口，不再承担完整主体叙述
+- 补充层：`docs/08-计算调度器.md` 到 `docs/20-异步同步原语.md` 现在只保留专题摘要、关键词、源码锚点与验证入口，不再承担完整主体叙述
 - 总览：`docs/README.md`
 - 快速开始：`docs/00-快速开始.md`
 - 架构设计：`docs/01-架构设计.md`
@@ -199,4 +199,3 @@ cmake --build build-docverify-modules --target E6-MpscChannelImport
 - `docs/18-运行时Runtime.md`
 - `docs/19-文件监控.md`
 - `docs/20-异步同步原语.md`
-- `docs/21-企业接入与验证.md`
