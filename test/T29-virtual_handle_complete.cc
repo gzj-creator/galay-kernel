@@ -1,8 +1,8 @@
 /**
- * @file T29-VirtualHandleComplete.cc
- * @brief 测试 virtual handleComplete：继承 RecvIOContext，
- *        重写 handleComplete 返回 false 多次后返回 true，
- *        验证调度器会重复投递事件直到 handleComplete 返回 true。
+ * @file T29-virtual_handle_complete.cc
+ * @brief 用途：验证虚拟句柄完成回调路径能够正确驱动协程恢复。
+ * 关键覆盖点：完成通知、句柄状态切换、恢复时序与结果透传。
+ * 通过条件：虚拟句柄完成路径按预期触发，测试返回 0。
  */
 
 #include "galay-kernel/kernel/Coroutine.h"

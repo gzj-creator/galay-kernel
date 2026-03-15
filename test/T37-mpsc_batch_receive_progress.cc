@@ -1,3 +1,10 @@
+/**
+ * @file T37-mpsc_batch_receive_progress.cc
+ * @brief 用途：验证 `MpscChannel` 批量接收接口能够持续推进消费进度。
+ * 关键覆盖点：批量 drain backlog、单轮进度推进、无消息时等待再恢复。
+ * 通过条件：批量接收不会停滞且统计符合预期，测试返回 0。
+ */
+
 #include "galay-kernel/concurrency/MpscChannel.h"
 #include "galay-kernel/kernel/ComputeScheduler.h"
 

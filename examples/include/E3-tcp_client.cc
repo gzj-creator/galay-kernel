@@ -1,6 +1,8 @@
 /**
- * @file E3-TcpClient.cc
- * @brief TCP Client 自闭环示例
+ * @file E3-tcp_client.cc
+ * @brief 用途：用头文件方式演示 TCP 客户端主动连接与收发流程。
+ * 关键覆盖点：客户端建连、请求发送、响应接收与结果打印。
+ * 通过条件：请求响应闭环跑通并返回 0。
  */
 
 #include <atomic>

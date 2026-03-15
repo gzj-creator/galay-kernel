@@ -1,8 +1,8 @@
 /**
- * @file T30-CustomAwaitable.cc
- * @brief 测试 CustomAwaitable 继承模式：
- *        定义 SendThenRecvAwaitable 继承 CustomAwaitable，
- *        构造时填充 SEND → RECV 队列，await_resume 返回 RECV 结果。
+ * @file T30-custom_awaitable.cc
+ * @brief 用途：验证自定义 Awaitable 在当前内核中的接入与执行语义。
+ * 关键覆盖点：自定义 `await_ready/await_suspend/await_resume`、状态传递、调度器集成。
+ * 通过条件：自定义 Awaitable 流程断言全部成立，测试返回 0。
  */
 
 #include "galay-kernel/kernel/Coroutine.h"

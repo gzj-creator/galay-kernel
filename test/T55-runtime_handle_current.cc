@@ -1,3 +1,10 @@
+/**
+ * @file T55-runtime_handle_current.cc
+ * @brief 用途：验证运行时上下文中的 `RuntimeHandle` 获取与嵌套派生能力。
+ * 关键覆盖点：`current/tryCurrent`、当前运行时句柄可用性、通过句柄再次 spawn。
+ * 通过条件：运行时句柄行为符合预期，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <cassert>

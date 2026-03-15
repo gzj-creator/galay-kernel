@@ -1,6 +1,8 @@
 /**
- * @file test_async_mutex.cc
- * @brief AsyncMutex 单元测试
+ * @file T13-async_mutex.cc
+ * @brief 用途：验证 `AsyncMutex` 在异步互斥场景下的正确性。
+ * 关键覆盖点：加锁与解锁、并发竞争、超时等待以及共享状态保护。
+ * 通过条件：互斥语义保持正确，所有子测试通过并返回 0。
  */
 
 #include <iostream>

@@ -1,3 +1,10 @@
+/**
+ * @file T19-readv_writev.cc
+ * @brief 用途：验证 `readv/writev` 聚合读写在 `TcpSocket` 场景下的结果正确性。
+ * 关键覆盖点：分散缓冲区写入、聚合读取、字节数统计与载荷一致性。
+ * 通过条件：读写结果与预期完全一致，测试返回 0。
+ */
+
 #include <cstring>
 #include <atomic>
 #include <array>

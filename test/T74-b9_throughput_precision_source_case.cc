@@ -1,3 +1,10 @@
+/**
+ * @file T74-b9_throughput_precision_source_case.cc
+ * @brief 用途：验证 B9 吞吐量统计使用纳秒级时间精度计算结果。
+ * 关键覆盖点：纳秒级耗时统计、吞吐公式精度、毫秒展示换算。
+ * 通过条件：源码中高精度时间计算 token 全部存在，测试返回 0。
+ */
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>

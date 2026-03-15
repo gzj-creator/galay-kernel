@@ -1,12 +1,8 @@
 /**
- * @file E5-UdpEcho.cc
- * @brief UDP Echo示例
- * @details 演示如何使用UdpSocket创建UDP服务器和客户端
- *
- * 使用场景：
- *   - 学习UDP通信基本用法
- *   - 理解无连接协议的特点
- *   - 作为UDP应用的基础模板
+ * @file E5-udp_echo.cc
+ * @brief 用途：用头文件方式演示 UDP Echo 的基础收发闭环。
+ * 关键覆盖点：绑定端口、`sendTo/recvFrom` 调用、回显结果校验。
+ * 通过条件：至少完成一轮 UDP 收发并返回 0。
  */
 
 #include <iostream>

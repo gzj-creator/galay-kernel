@@ -1,3 +1,10 @@
+/**
+ * @file T9-file_watcher.cc
+ * @brief 用途：验证 `FileWatcher` 对文件变更事件的监听与通知行为。
+ * 关键覆盖点：文件监听注册、修改事件捕获、回调或结果通知触发。
+ * 通过条件：文件变更事件被正确观察到，测试按预期返回 0。
+ */
+
 #include "galay-kernel/async/FileWatcher.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test_result_writer.h"

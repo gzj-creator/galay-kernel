@@ -1,3 +1,10 @@
+/**
+ * @file E6-mpsc_channel.cc
+ * @brief 用途：用模块导入方式演示 `MpscChannel` 的多生产者单消费者用法。
+ * 关键覆盖点：跨线程发送、协程接收、累计求和与消息总数统计。
+ * 通过条件：收到预期消息总数且统计正确，示例返回 0。
+ */
+
 import galay.kernel;
 
 #include <coroutine>

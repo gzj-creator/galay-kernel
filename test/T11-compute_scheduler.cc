@@ -1,6 +1,8 @@
 /**
- * @file test_compute_scheduler.cc
- * @brief ComputeScheduler 单元测试
+ * @file T11-compute_scheduler.cc
+ * @brief 用途：验证 `ComputeScheduler` 在基础、并发和链式任务场景下的正确性。
+ * 关键覆盖点：任务执行、并发提交、计算密集任务、`then` 链式恢复与等待通知。
+ * 通过条件：所有子测试通过并输出 PASS，总体返回码为 0。
  */
 
 #include <iostream>

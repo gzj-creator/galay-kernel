@@ -1,3 +1,10 @@
+/**
+ * @file T49-channel_wait_registration.cc
+ * @brief 用途：验证 Channel 等待注册状态的 `armed`、`clear` 与重复信号边界。
+ * 关键覆盖点：等待注册、重复 signal 防抖、clear 或 re-arm 之后的重新等待。
+ * 通过条件：等待注册状态转换全部正确，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/WaitRegistration.h"
 
 #include <cstdint>

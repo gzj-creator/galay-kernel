@@ -1,3 +1,10 @@
+/**
+ * @file T64-scheduler_local_followup_passes.cc
+ * @brief 用途：验证调度器在本地 follow-up 任务存在时会继续推进后续轮次。
+ * 关键覆盖点：本地 follow-up 任务产生、额外 pass 推进、避免过早进入 poll。
+ * 通过条件：follow-up 任务在预期轮次内被继续处理，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/SchedulerCore.h"
 
 #include <iostream>

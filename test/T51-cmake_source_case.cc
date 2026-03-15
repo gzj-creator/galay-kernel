@@ -1,3 +1,10 @@
+/**
+ * @file T51-cmake_source_case.cc
+ * @brief 用途：验证 `benchmark/CMakeLists.txt` 中源文件大小写与真实文件一致。
+ * 关键覆盖点：CMake `add_executable` 源文件名扫描、大小写敏感匹配、缺失项报告。
+ * 通过条件：不存在大小写不一致的源文件引用，测试返回 0。
+ */
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>

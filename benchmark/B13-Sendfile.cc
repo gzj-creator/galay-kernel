@@ -1,7 +1,8 @@
 /**
- * @file bench_sendfile.cc
- * @brief SendFile 性能对比测试
- * @details 对比 sendfile 和传统 read+send 的性能差异
+ * @file B13-sendfile.cc
+ * @brief 用途：对比 `sendfile` 与传统 `read+send` 路径的文件传输性能差异。
+ * 关键覆盖点：文件准备、两种传输路径、不同文件尺寸下的吞吐与耗时对比。
+ * 通过条件：两类传输基准都能完成并输出对比数据，进程返回 0。
  */
 
 #include <iostream>

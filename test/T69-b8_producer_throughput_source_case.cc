@@ -1,3 +1,10 @@
+/**
+ * @file T69-b8_producer_throughput_source_case.cc
+ * @brief 用途：验证 B8 生产者吞吐量场景保留采样与中位数统计实现。
+ * 关键覆盖点：单生产者与多生产者分段、样本收集、`medianElement` 汇总。
+ * 通过条件：源码中采样相关 token 全部存在，测试返回 0。
+ */
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>

@@ -1,3 +1,10 @@
+/**
+ * @file T35-readv_array_count_guard.cc
+ * @brief 用途：验证 `readv` 数组接口对元素数量边界的保护逻辑。
+ * 关键覆盖点：数组计数上限、非法计数防御、边界输入下的返回行为。
+ * 通过条件：越界与边界用例都落在预期路径上，测试返回 0。
+ */
+
 #include <array>
 #include <cstdlib>
 #include <iostream>

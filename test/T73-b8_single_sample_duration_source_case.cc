@@ -1,3 +1,10 @@
+/**
+ * @file T73-b8_single_sample_duration_source_case.cc
+ * @brief 用途：验证 B8 单生产者吞吐场景会扩展样本持续时间以稳定结果。
+ * 关键覆盖点：单生产者最小样本时长、样本消息数翻倍、自适应采样窗口。
+ * 通过条件：源码中样本持续时间控制 token 全部存在，测试返回 0。
+ */
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>

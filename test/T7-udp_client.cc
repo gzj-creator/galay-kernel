@@ -1,6 +1,8 @@
 /**
- * @file test_udp_client.cc
- * @brief UDP Echo Client 测试
+ * @file T7-udp_client.cc
+ * @brief 用途：验证 UDP Echo Client 测试路径能够发送报文并收到正确回显。
+ * 关键覆盖点：客户端发包、接收回包、回显内容与来源地址校验。
+ * 通过条件：客户端收到预期回包，测试断言全部成立并返回 0。
  */
 
 #include <atomic>

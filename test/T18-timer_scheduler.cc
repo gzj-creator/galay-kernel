@@ -1,13 +1,8 @@
 /**
- * @file test_timer_scheduler.cc
- * @brief TimerScheduler 多线程测试
- *
- * 测试内容：
- * 1. 基本功能测试
- * 2. 多线程并发添加定时器
- * 3. 高并发压力测试
- * 4. 定时器取消测试
- * 5. 批量添加测试
+ * @file T18-timer_scheduler.cc
+ * @brief 用途：验证 `TimerScheduler` 在多线程与压力场景下的正确性。
+ * 关键覆盖点：基础定时触发、多线程并发添加、取消操作和批量压力用例。
+ * 通过条件：各类定时器用例断言成立，测试进程返回 0。
  */
 
 #include <iostream>

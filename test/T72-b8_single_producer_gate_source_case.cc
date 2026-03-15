@@ -1,3 +1,10 @@
+/**
+ * @file T72-b8_single_producer_gate_source_case.cc
+ * @brief 用途：验证 B8 单生产者吞吐场景使用 `StartGate` 协调统一起跑。
+ * 关键覆盖点：`CompletionLatch` 就绪同步、`StartGate` 放行、统一起跑代码路径。
+ * 通过条件：源码中起跑同步 token 全部存在，测试返回 0。
+ */
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>

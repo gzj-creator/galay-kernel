@@ -1,3 +1,10 @@
+/**
+ * @file T48-scheduler_core_loop_stages.cc
+ * @brief 用途：验证 `SchedulerCore` 单轮循环的固定阶段顺序。
+ * 关键覆盖点：`CollectRemote`、`CollectCompletions`、`RunReady`、`Poll` 阶段顺序。
+ * 通过条件：阶段顺序与预期完全一致，测试打印 PASS 并返回 0。
+ */
+
 #include "galay-kernel/kernel/SchedulerCore.h"
 
 #include <iostream>

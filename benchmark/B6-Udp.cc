@@ -1,3 +1,10 @@
+/**
+ * @file B6-Udp.cc
+ * @brief 用途：执行 UDP 自闭环压测，统计 runtime 模型下的整体收发性能。
+ * 关键覆盖点：同进程 server/client 协作、吞吐与字节统计、完成同步与收尾。
+ * 通过条件：预热与正式压测都能完成，输出结果且进程无异常退出。
+ */
+
 #include <iostream>
 #include <cstring>
 #include <atomic>

@@ -1,3 +1,10 @@
+/**
+ * @file T45-scheduler_ready_budget.cc
+ * @brief 用途：验证调度器每轮 ready 执行预算的限制与推进行为。
+ * 关键覆盖点：单轮 ready budget 上限、剩余任务留待后续轮次、整体完成性。
+ * 通过条件：执行预算行为与预期一致且测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/SchedulerTestAccess.h"
 

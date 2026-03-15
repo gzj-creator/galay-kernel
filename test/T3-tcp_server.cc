@@ -1,6 +1,8 @@
 /**
- * @file test_tcp_server.cc
- * @brief TCP Echo Server 测试
+ * @file T3-tcp_server.cc
+ * @brief 用途：验证 TCP Echo Server 测试路径能够正确监听、收包并回显。
+ * 关键覆盖点：监听与接受连接、请求回显闭环、回包内容与字节数一致性。
+ * 通过条件：Echo 服务端完成一轮有效回显，相关断言成立并返回 0。
  */
 
 #include <iostream>

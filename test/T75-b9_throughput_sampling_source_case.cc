@@ -1,3 +1,10 @@
+/**
+ * @file T75-b9_throughput_sampling_source_case.cc
+ * @brief 用途：验证 B9 吞吐量测试保留多样本采样与中位数汇总逻辑。
+ * 关键覆盖点：样本数量控制、最小时长门限、辅助函数与中位数统计。
+ * 通过条件：源码中采样与汇总 token 全部存在，测试返回 0。
+ */
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>

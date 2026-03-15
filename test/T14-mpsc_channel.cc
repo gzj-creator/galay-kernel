@@ -1,6 +1,8 @@
 /**
- * @file test_mpsc_channel.cc
- * @brief MpscChannel 单元测试
+ * @file T14-mpsc_channel.cc
+ * @brief 用途：验证 `MpscChannel` 在多生产者单消费者场景下的正确性。
+ * 关键覆盖点：跨线程发送、协程接收、消息完整性与顺序、关闭与唤醒行为。
+ * 通过条件：消息不丢失不重复，所有子测试通过并返回 0。
  */
 
 #include <iostream>

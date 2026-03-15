@@ -1,3 +1,10 @@
+/**
+ * @file T63-custom_sequence_awaitable.cc
+ * @brief 用途：验证自定义序列 Awaitable 能按预期完成多步挂起与恢复。
+ * 关键覆盖点：多阶段 Awaitable 状态机、连续挂起恢复、最终结果汇总。
+ * 通过条件：多步序列全部按预期执行，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/IOScheduler.hpp"
 #include "galay-kernel/kernel/Awaitable.h"

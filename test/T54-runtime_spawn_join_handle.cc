@@ -1,3 +1,10 @@
+/**
+ * @file T54-runtime_spawn_join_handle.cc
+ * @brief 用途：验证 `Runtime::spawn` 返回的 `JoinHandle` 可等待任务完成并取回结果。
+ * 关键覆盖点：spawn 提交、JoinHandle 等待、结果读取与完成语义。
+ * 通过条件：`JoinHandle` 正确返回结果且测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <atomic>

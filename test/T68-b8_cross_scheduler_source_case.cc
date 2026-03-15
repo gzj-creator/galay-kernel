@@ -1,3 +1,10 @@
+/**
+ * @file T68-b8_cross_scheduler_source_case.cc
+ * @brief 用途：验证 B8 跨运行时场景采用新的同步采样实现而非忙等逻辑。
+ * 关键覆盖点：源码中存在 `CompletionLatch`、`StartGate`、中位数采样且无 busy-wait token。
+ * 通过条件：源码扫描命中预期标记且未发现禁用模式，测试返回 0。
+ */
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>

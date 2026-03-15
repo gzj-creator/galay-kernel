@@ -1,3 +1,10 @@
+/**
+ * @file E5-udp_echo.cc
+ * @brief 用途：用模块导入方式演示 UDP Echo 的基础收发闭环。
+ * 关键覆盖点：模块导入、端口绑定、`sendTo/recvFrom` 调用与回显验证。
+ * 通过条件：至少完成一轮 UDP 收发并返回 0。
+ */
+
 import galay.kernel;
 
 #include <coroutine>

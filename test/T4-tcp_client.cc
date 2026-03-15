@@ -1,6 +1,8 @@
 /**
- * @file test_tcp_client.cc
- * @brief TCP Echo Client 测试
+ * @file T4-tcp_client.cc
+ * @brief 用途：验证 TCP Echo Client 测试路径能够主动连接并完成请求响应闭环。
+ * 关键覆盖点：客户端建连、发送请求、接收回显响应以及内容一致性校验。
+ * 通过条件：客户端收到预期回显结果，断言成立并返回 0。
  */
 
 #include <iostream>

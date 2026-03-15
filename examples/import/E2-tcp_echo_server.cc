@@ -1,3 +1,10 @@
+/**
+ * @file E2-tcp_echo_server.cc
+ * @brief 用途：用模块导入方式演示 TCP Echo 自闭环服务端路径。
+ * 关键覆盖点：模块导入、监听接受连接、回显处理与闭环验证。
+ * 通过条件：完成至少一轮成功回显并返回 0。
+ */
+
 import galay.kernel;
 
 #include <coroutine>

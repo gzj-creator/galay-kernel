@@ -1,3 +1,10 @@
+/**
+ * @file E7-unsafe_channel.cc
+ * @brief 用途：用模块导入方式演示 `UnsafeChannel` 的协程生产消费流程。
+ * 关键覆盖点：同调度器协程通信、生产者 `co_yield`、消费者累加校验。
+ * 通过条件：收到全部消息且累加结果正确，示例返回 0。
+ */
+
 import galay.kernel;
 
 #include <coroutine>

@@ -1,3 +1,10 @@
+/**
+ * @file T40-io_uring_custom_awaitable_no_null_probe.cc
+ * @brief 用途：验证 io_uring 自定义 Awaitable 不依赖空指针探测也能完成注册。
+ * 关键覆盖点：自定义 Awaitable 注册、io_uring 路径接线、无空探测完成恢复。
+ * 通过条件：io_uring 自定义 Awaitable 路径可用且测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Awaitable.h"
 #include <atomic>

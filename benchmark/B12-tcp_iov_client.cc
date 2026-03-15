@@ -1,8 +1,8 @@
 /**
- * @file bench_tcp_iov_client.cc
- * @brief TCP 压测客户端 - 使用用户自管双段 readv/writev
- *
- * 与 bench_tcp_client.cc 对比，测试 scatter-gather IO 的性能
+ * @file B12-tcp_iov_client.cc
+ * @brief 用途：作为 `readv/writev` 版本的 TCP 压测客户端，评估 scatter-gather IO 客户路径。
+ * 关键覆盖点：双段缓冲请求发送、响应接收、样本同步与吞吐延迟统计。
+ * 通过条件：客户端完成既定负载并输出统计结果，进程干净退出。
  */
 
 #include <iostream>

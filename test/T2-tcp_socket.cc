@@ -1,3 +1,10 @@
+/**
+ * @file T2-tcp_socket.cc
+ * @brief 用途：验证 `TcpSocket` 的基础连接、发送和接收能力。
+ * 关键覆盖点：主动连接、基础收发接口、错误码与连接状态的基本行为。
+ * 通过条件：连接与收发断言全部成立，测试流程正常结束并返回 0。
+ */
+
 #include <exception>
 #include <iostream>
 #include <cstring>

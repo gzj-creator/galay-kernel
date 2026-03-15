@@ -1,3 +1,10 @@
+/**
+ * @file T61-coroutine_then_compat.cc
+ * @brief 用途：验证旧式 coroutine `then` 链式调用在当前实现下仍能正确工作。
+ * 关键覆盖点：`then` 兼容层、链式 continuation、结果顺序与完成通知。
+ * 通过条件：兼容调用链成功执行，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/ComputeScheduler.h"
 #include "galay-kernel/kernel/Coroutine.h"
 

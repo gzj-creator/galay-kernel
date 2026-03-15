@@ -1,3 +1,10 @@
+/**
+ * @file T65-benchmark_start_gate.cc
+ * @brief 用途：验证 benchmark `StartGate` 能同步放行并发工作线程。
+ * 关键覆盖点：起跑门闩等待、统一放行、并发起始时间对齐。
+ * 通过条件：`StartGate` 同步语义成立，测试返回 0。
+ */
+
 #include "benchmark/BenchmarkSync.h"
 
 #include <atomic>

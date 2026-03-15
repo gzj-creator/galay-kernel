@@ -1,3 +1,10 @@
+/**
+ * @file T62-scheduler_reactor_source_case.cc
+ * @brief 用途：验证 scheduler 与各 reactor 后端的源码边界拆分是否到位。
+ * 关键覆盖点：Reactor 文件存在性、scheduler 头源文件引用、后端边界禁用 token。
+ * 通过条件：源码结构满足边界约束且测试返回 0。
+ */
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>

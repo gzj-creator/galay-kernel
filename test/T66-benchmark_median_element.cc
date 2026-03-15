@@ -1,3 +1,10 @@
+/**
+ * @file T66-benchmark_median_element.cc
+ * @brief 用途：验证 benchmark 中位数辅助函数的取值与排序边界。
+ * 关键覆盖点：奇偶样本取中位数、排序后选取、边界输入处理。
+ * 通过条件：`medianElement` 返回值符合预期，测试返回 0。
+ */
+
 #include "benchmark/BenchmarkSync.h"
 
 #include <iostream>

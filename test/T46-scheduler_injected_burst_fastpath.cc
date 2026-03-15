@@ -1,3 +1,10 @@
+/**
+ * @file T46-scheduler_injected_burst_fastpath.cc
+ * @brief 用途：验证注入任务突发到来时调度器的快速消费路径。
+ * 关键覆盖点：burst 注入排队、远端队列批量 drain、完成统计与快速恢复。
+ * 通过条件：突发注入任务都被正确消费，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/SchedulerTestAccess.h"
 

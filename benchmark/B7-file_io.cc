@@ -1,3 +1,10 @@
+/**
+ * @file B7-file_io.cc
+ * @brief 用途：压测并发异步文件读写路径的吞吐、字节量与错误率。
+ * 关键覆盖点：不同 worker 数与块大小、读写操作计数、异常与错误统计。
+ * 通过条件：所有测量轮次正常完成并输出统计结果，进程返回 0。
+ */
+
 #include <iostream>
 #include <atomic>
 #include <chrono>

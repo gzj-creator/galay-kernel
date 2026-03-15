@@ -1,3 +1,10 @@
+/**
+ * @file T47-scheduler_queue_edge_wakeup.cc
+ * @brief 用途：验证队列从空到非空的边沿变化会触发正确的唤醒语义。
+ * 关键覆盖点：空队列边沿检测、首次入队唤醒、重复入队避免冗余 wake。
+ * 通过条件：边沿唤醒语义成立且测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/SchedulerTestAccess.h"
 

@@ -1,6 +1,8 @@
 /**
- * @file T27-RuntimeStress.cc
- * @brief Runtime 压力测试 - 验证无锁轮询在高并发下的正确性
+ * @file T27-runtime_stress.cc
+ * @brief 用途：验证 `Runtime` 在高并发压力下的调度稳定性与正确性。
+ * 关键覆盖点：大量任务提交、跨线程调度、完成统计以及整体收敛行为。
+ * 通过条件：既定压力任务全部完成且统计符合预期，测试返回 0。
  */
 
 #include <iostream>

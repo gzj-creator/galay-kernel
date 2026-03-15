@@ -1,3 +1,10 @@
+/**
+ * @file E9-timer_sleep.cc
+ * @brief 用途：用模块导入方式演示定时休眠 Awaitable 的基础用法。
+ * 关键覆盖点：连续 `sleep` 调用、累计耗时统计、定时恢复路径。
+ * 通过条件：累计耗时落在预期窗口内且示例返回 0。
+ */
+
 import galay.kernel;
 
 #include <coroutine>

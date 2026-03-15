@@ -1,16 +1,8 @@
 /**
- * @file bench_unsafe_channel.cc
- * @brief UnsafeChannel 性能压测
- *
- * 角色定位：
- * - UnsafeChannel 仅用于同线程 / 同调度器协程通信
- * - 本 benchmark 用于评估单线程高性能通道路径
- * - 与 MpscChannel 的对比仅用于展示语义差异下的参考量级，不代表跨线程场景优劣
- *
- * 测试项目：
- * 1. 吞吐量：同调度器内的消息吞吐量
- * 2. 延迟：消息从发送到接收的延迟
- * 3. 与 MpscChannel 的性能对比
+ * @file B9-unsafe_channel.cc
+ * @brief 用途：压测 `UnsafeChannel` 在同线程协程通信场景下的极限性能。
+ * 关键覆盖点：同调度器吞吐、延迟采样、与 `MpscChannel` 的参考量级对照。
+ * 通过条件：所有测量样本完成并输出统计结果，进程无异常退出。
  */
 
 #include <atomic>

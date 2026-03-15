@@ -1,3 +1,10 @@
+/**
+ * @file E4-coroutine_basic.cc
+ * @brief 用途：用模块导入方式演示 `Runtime + Task + blockOn/spawn` 的基础用法。
+ * 关键覆盖点：`galay.kernel` 模块导入、根任务 `blockOn`、任务派生与等待。
+ * 通过条件：关键演示路径全部执行完成并返回 0。
+ */
+
 import galay.kernel;
 
 #include <atomic>

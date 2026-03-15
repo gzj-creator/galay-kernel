@@ -1,3 +1,10 @@
+/**
+ * @file T43-wait_continuation_scheduler_path.cc
+ * @brief 用途：验证 `wait` continuation 会回到正确的 owner scheduler 上恢复。
+ * 关键覆盖点：等待 continuation 绑定、跨调度器完成通知、恢复线程归属。
+ * 通过条件：continuation 恢复到预期调度器且测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Waker.h"
 #include "galay-kernel/kernel/Scheduler.hpp"

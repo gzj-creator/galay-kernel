@@ -1,11 +1,8 @@
 /**
- * @file bench_compute_scheduler.cc
- * @brief ComputeScheduler 性能压测
- *
- * 测试项目：
- * 1. 吞吐量：每秒可处理的协程数
- * 2. 延迟：协程从提交到执行的延迟
- * 3. 扩展性：不同调度器数量下的性能
+ * @file B1-compute_scheduler.cc
+ * @brief 用途：压测 `ComputeScheduler` 在不同负载下的吞吐与延迟表现。
+ * 关键覆盖点：空任务、轻重计算任务、不同调度器数量以及样本中位数统计。
+ * 通过条件：预热与正式统计都能完成，输出性能结果且进程无崩溃、死锁或超时。
  */
 
 #include <iostream>

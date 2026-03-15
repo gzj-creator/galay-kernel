@@ -1,3 +1,10 @@
+/**
+ * @file T57-io_uring_timeout_close_lifetime.cc
+ * @brief 用途：验证 io_uring `timeout/close` 相关 Awaitable 的生命周期边界。
+ * 关键覆盖点：超时请求对象生命周期、关闭操作收尾、资源释放时机。
+ * 通过条件：相关 Awaitable 在生命周期边界下无异常，测试返回 0。
+ */
+
 #include <filesystem>
 #include <iostream>
 #include <string>

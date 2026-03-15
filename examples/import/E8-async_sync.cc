@@ -1,3 +1,10 @@
+/**
+ * @file E8-async_sync.cc
+ * @brief 用途：用模块导入方式演示 `AsyncMutex` 与 `AsyncWaiter` 的协作用法。
+ * 关键覆盖点：异步互斥保护、计算任务通知、跨调度器等待与结果读取。
+ * 通过条件：计数结果和计算结果都符合预期，示例返回 0。
+ */
+
 import galay.kernel;
 
 #include <coroutine>

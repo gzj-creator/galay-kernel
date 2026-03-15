@@ -1,6 +1,8 @@
 /**
- * @file test_udp_server.cc
- * @brief UDP Echo Server 测试
+ * @file T6-udp_server.cc
+ * @brief 用途：验证 UDP Echo Server 测试路径能够接收报文并正确回发。
+ * 关键覆盖点：端口绑定、报文接收与回显、载荷内容保持一致。
+ * 通过条件：服务端完成有效回显，断言成立并返回 0。
  */
 
 #include <atomic>

@@ -1,8 +1,16 @@
+/**
+ * @file B4-udp_server.cc
+ * @brief 用途：作为 UDP 压测服务端，承接高并发报文收发负载。
+ * 关键覆盖点：端口绑定、报文接收与回发、多 worker 协作和字节统计。
+ * 通过条件：服务端可持续响应压测流量并输出统计，停止后干净退出。
+ */
+
 #include <iostream>
 #include <cstring>
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <thread>
 #include "galay-kernel/async/UdpSocket.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/StdoutLog.h"
@@ -95,8 +103,8 @@ Coroutine udpServerWorker(int worker_id) {
     co_return;
 }
 
-// 统计打印协程
-Coroutine statsReporter([[maybe_unused]] IOScheduler* scheduler) {
+// 统计打印线程，避免阻塞单线程调度器的事件循环。
+void statsReporter() {
     auto last_time = std::chrono::steady_clock::now();
     uint64_t last_received = 0;
     uint64_t last_sent = 0;
@@ -134,7 +142,6 @@ Coroutine statsReporter([[maybe_unused]] IOScheduler* scheduler) {
         last_bytes_sent = current_bytes_sent;
     }
 
-    co_return;
 }
 
 int main() {
@@ -169,8 +176,8 @@ int main() {
     }
     LogInfo("Started {} server workers", NUM_SERVER_WORKERS);
 
-    // 启动统计报告协程
-    scheduler.spawn(statsReporter(&scheduler));
+    // 周期统计放到普通线程上，避免阻塞 scheduler 线程。
+    std::thread reporter(statsReporter);
 
     LogInfo("Server is running. Press Ctrl+C to stop.");
 
@@ -182,6 +189,9 @@ int main() {
     // 停止调度器
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     scheduler.stop();
+    if (reporter.joinable()) {
+        reporter.join();
+    }
     LogInfo("Scheduler stopped");
 
     // 打印最终统计

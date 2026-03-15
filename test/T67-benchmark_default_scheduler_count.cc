@@ -1,3 +1,10 @@
+/**
+ * @file T67-benchmark_default_scheduler_count.cc
+ * @brief 用途：验证 benchmark 默认调度器数量推导逻辑与运行时配置一致。
+ * 关键覆盖点：默认数量推导、自定义覆盖、不同硬件线程条件下的返回行为。
+ * 通过条件：调度器数量计算符合预期，测试返回 0。
+ */
+
 #include "benchmark/BenchmarkSync.h"
 
 #include <filesystem>

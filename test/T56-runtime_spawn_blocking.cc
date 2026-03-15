@@ -1,3 +1,10 @@
+/**
+ * @file T56-runtime_spawn_blocking.cc
+ * @brief 用途：验证 `Runtime::spawnBlocking` 可在线程池中执行阻塞任务。
+ * 关键覆盖点：阻塞 callable 提交、异步等待结果、与运行时线程分离执行。
+ * 通过条件：阻塞任务结果正确返回，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Runtime.h"
 #include <cassert>
 #include <chrono>

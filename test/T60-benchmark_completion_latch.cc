@@ -1,3 +1,10 @@
+/**
+ * @file T60-benchmark_completion_latch.cc
+ * @brief 用途：验证 benchmark `CompletionLatch` 的计数与唤醒行为。
+ * 关键覆盖点：倒计数归零、等待线程唤醒、重复 arrive 的边界表现。
+ * 通过条件：`CompletionLatch` 行为符合预期，测试返回 0。
+ */
+
 #include "benchmark/BenchmarkSync.h"
 
 #include <atomic>

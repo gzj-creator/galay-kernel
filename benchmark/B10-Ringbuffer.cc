@@ -1,12 +1,8 @@
 /**
- * @file bench_ringbuffer.cc
- * @brief RingBuffer 性能压测
- *
- * 测试项目：
- * 1. 写入吞吐量：连续写入数据的速度
- * 2. 读写吞吐量：写入后立即消费的速度
- * 3. 环绕性能：频繁环绕时的性能
- * 4. borrowed iovec 获取性能：getWriteIovecs(out)/getReadIovecs(out) 的开销
+ * @file B10-Ringbuffer.cc
+ * @brief 用途：压测 `RingBuffer` 的基础写入、读写混合与环绕场景性能。
+ * 关键覆盖点：连续写入吞吐、写后即读、频繁环绕、借用 `iovec` 接口开销。
+ * 通过条件：各类压测样本均能完成并输出结果，进程返回 0。
  */
 
 #include <atomic>

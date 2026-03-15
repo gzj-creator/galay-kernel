@@ -1,3 +1,10 @@
+/**
+ * @file T71-b8_batch_sample_duration_source_case.cc
+ * @brief 用途：验证 B8 批量接收吞吐场景会动态扩展采样窗口时长。
+ * 关键覆盖点：批量场景最小样本时长、样本消息数扩张、稳定采样控制。
+ * 通过条件：源码中自适应样本时长 token 全部存在，测试返回 0。
+ */
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>

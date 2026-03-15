@@ -1,3 +1,10 @@
+/**
+ * @file T36-task_core_wake_path.cc
+ * @brief 用途：验证 `TaskCore` 在挂起、唤醒与恢复之间的核心调度路径。
+ * 关键覆盖点：任务状态迁移、唤醒入口、continuation 恢复与执行收尾。
+ * 通过条件：核心唤醒路径断言全部成立，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/IOScheduler.hpp"
 #include "galay-kernel/kernel/Runtime.h"

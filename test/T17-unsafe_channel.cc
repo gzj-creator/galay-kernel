@@ -1,6 +1,8 @@
 /**
- * @file test_unsafe_channel.cc
- * @brief UnsafeChannel 单元测试
+ * @file T17-unsafe_channel.cc
+ * @brief 用途：验证 `UnsafeChannel` 在单调度器协程通信场景下的正确性。
+ * 关键覆盖点：协程生产消费、`co_yield` 协作、消息完整性和关闭行为。
+ * 通过条件：消息收发结果符合预期，所有子测试通过并返回 0。
  */
 
 #include <atomic>

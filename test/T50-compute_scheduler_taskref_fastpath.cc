@@ -1,3 +1,10 @@
+/**
+ * @file T50-compute_scheduler_taskref_fastpath.cc
+ * @brief 用途：验证 `ComputeScheduler` 对 `TaskRef` 调度的快速路径。
+ * 关键覆盖点：TaskRef 直接派发、快速入队、恢复执行与完成通知。
+ * 通过条件：TaskRef 快速路径命中预期并返回 0。
+ */
+
 #include "galay-kernel/kernel/ComputeScheduler.h"
 
 #include <atomic>

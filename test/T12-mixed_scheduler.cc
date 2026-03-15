@@ -1,6 +1,8 @@
 /**
- * @file test_mixed_scheduler.cc
- * @brief IOScheduler 和 ComputeScheduler 混合使用测试
+ * @file T12-mixed_scheduler.cc
+ * @brief 用途：验证 `IOScheduler` 与 `ComputeScheduler` 混合协作时的调度正确性。
+ * 关键覆盖点：IO 与计算任务协同、跨调度器通知、混合场景下的恢复顺序。
+ * 通过条件：混合调度断言全部成立，测试输出 PASS 并返回 0。
  */
 
 #include <iostream>

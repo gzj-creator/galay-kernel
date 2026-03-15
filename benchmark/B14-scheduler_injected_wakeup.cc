@@ -1,3 +1,10 @@
+/**
+ * @file B14-scheduler_injected_wakeup.cc
+ * @brief 用途：压测跨线程注入任务后的 scheduler 唤醒吞吐与延迟。
+ * 关键覆盖点：多生产者远端注入、完成计数、延迟采样与唤醒收敛。
+ * 通过条件：压测样本全部完成并输出结果，进程无崩溃、死锁或超时。
+ */
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>

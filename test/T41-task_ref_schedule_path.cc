@@ -1,3 +1,10 @@
+/**
+ * @file T41-task_ref_schedule_path.cc
+ * @brief 用途：验证 `TaskRef` 走调度路径时会进入预期的 scheduler 恢复流程。
+ * 关键覆盖点：TaskRef 调度入口、本地或远端派发、owner scheduler 恢复。
+ * 通过条件：TaskRef 调度路径命中预期断言，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Scheduler.hpp"
 #include "galay-kernel/kernel/Waker.h"
 #include <iostream>

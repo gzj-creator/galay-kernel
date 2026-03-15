@@ -1,3 +1,10 @@
+/**
+ * @file T15-timing_wheel.cc
+ * @brief 用途：验证时间轮定时器的触发、推进和基础调度路径。
+ * 关键覆盖点：定时器注册、到期触发、时间推进以及基础取消或复用语义。
+ * 通过条件：定时事件按预期触发，测试正常结束并返回 0。
+ */
+
 #include <iostream>
 #include <chrono>
 #include <thread>

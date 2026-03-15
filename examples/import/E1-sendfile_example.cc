@@ -1,3 +1,10 @@
+/**
+ * @file E1-sendfile_example.cc
+ * @brief 用途：用模块导入方式演示 `SendFile` 最小闭环传输。
+ * 关键覆盖点：模块门面 `galay.kernel`、文件准备、服务端发送与客户端接收。
+ * 通过条件：文件传输完整跑通，接收结果达预期并返回 0。
+ */
+
 import galay.kernel;
 
 #include <coroutine>

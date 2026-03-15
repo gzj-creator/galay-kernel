@@ -1,3 +1,10 @@
+/**
+ * @file T57-runtime_task_api_surface.cc
+ * @brief 用途：验证 `Runtime`、`Task` 与 `JoinHandle` 的公开 API 形态保持完整。
+ * 关键覆盖点：编译期概念检查、公开成员存在性、关键运行时 API 语义。
+ * 通过条件：编译期与运行期检查全部通过，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Runtime.h"
 
 #include <concepts>

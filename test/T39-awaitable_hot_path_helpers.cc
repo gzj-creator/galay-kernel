@@ -1,3 +1,10 @@
+/**
+ * @file T39-awaitable_hot_path_helpers.cc
+ * @brief 用途：验证 Awaitable 热路径辅助工具的状态传递与快速分支行为。
+ * 关键覆盖点：热路径辅助函数、结果封装、分支裁剪以及状态读取语义。
+ * 通过条件：辅助工具返回结果与状态均符合预期，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Awaitable.h"
 #include <cerrno>
 #include <cstdint>

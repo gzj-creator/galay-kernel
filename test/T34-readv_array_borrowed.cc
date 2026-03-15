@@ -1,3 +1,10 @@
+/**
+ * @file T34-readv_array_borrowed.cc
+ * @brief 用途：验证 `readv` 数组借用视图不会破坏原始缓冲区布局。
+ * 关键覆盖点：借用数组映射、缓冲区指针与长度保持、只读视图一致性。
+ * 通过条件：借用结果与原始数组完全匹配，测试返回 0。
+ */
+
 #include <array>
 #include <atomic>
 #include <chrono>

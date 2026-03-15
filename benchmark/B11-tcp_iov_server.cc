@@ -1,8 +1,8 @@
 /**
- * @file bench_tcp_iov_server.cc
- * @brief TCP Echo 服务器压测 - 使用用户自管双段 readv/writev
- *
- * 与 bench_tcp_server.cc 对比，测试 scatter-gather IO 的性能
+ * @file B11-tcp_iov_server.cc
+ * @brief 用途：作为 `readv/writev` 版本的 TCP 压测服务端，评估 scatter-gather IO 服务路径。
+ * 关键覆盖点：双段缓冲回显、连接接受、服务侧吞吐与字节统计。
+ * 通过条件：服务端可持续承接压测连接并输出统计，停止后干净退出。
  */
 
 #include <iostream>

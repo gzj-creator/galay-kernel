@@ -1,3 +1,10 @@
+/**
+ * @file B2-tcp_server.cc
+ * @brief 用途：作为 TCP 压测服务端，承接连接与回包流量并输出服务侧统计。
+ * 关键覆盖点：监听接受连接、Echo 回包路径、累计请求数与字节数统计。
+ * 通过条件：服务端能持续承压并输出统计，收到停止信号后干净退出。
+ */
+
 #include <iostream>
 #include <atomic>
 #include <chrono>

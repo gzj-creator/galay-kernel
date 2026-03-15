@@ -1,3 +1,10 @@
+/**
+ * @file T33-epoll_accept_rearm.cc
+ * @brief 用途：验证 epoll 后端的 `accept` 事件在处理后能够正确 re-arm。
+ * 关键覆盖点：监听事件重新注册、重复连接接受、边沿触发下无漏接事件。
+ * 通过条件：多次连接均能被持续接受，测试断言成立并返回 0。
+ */
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>

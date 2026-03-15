@@ -1,3 +1,10 @@
+/**
+ * @file T5-udp_socket.cc
+ * @brief 用途：验证 `UdpSocket` 的基础发送、接收与地址处理能力。
+ * 关键覆盖点：无连接报文收发、地址绑定与回传、基础错误路径处理。
+ * 通过条件：UDP 收发结果与预期一致，测试按预期结束并返回 0。
+ */
+
 #include <exception>
 #include <iostream>
 #include <cstring>

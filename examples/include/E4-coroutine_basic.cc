@@ -1,7 +1,8 @@
 /**
- * @file E4-CoroutineBasic.cc
- * @brief Runtime task API basic example
- * @details Demonstrates Task<T>, Runtime::blockOn, Runtime::spawn and RuntimeHandle
+ * @file E4-coroutine_basic.cc
+ * @brief 用途：用头文件方式演示 `Runtime + Task + blockOn/spawn` 的基础用法。
+ * 关键覆盖点：根任务 `blockOn`、任务 `spawn`、`JoinHandle` 与 `RuntimeHandle`。
+ * 通过条件：关键演示路径全部执行完成并返回 0。
  */
 
 #include "galay-kernel/kernel/Coroutine.h"

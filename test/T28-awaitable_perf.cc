@@ -1,6 +1,8 @@
 /**
- * @file T28-AwaitablePerf.cc
- * @brief 对比返回对象 vs 返回引用的性能
+ * @file T28-awaitable_perf.cc
+ * @brief 用途：验证 Awaitable 结果按值返回与按引用返回的性能差异。
+ * 关键覆盖点：热路径 await 开销、不同返回策略的成本对比、基准数据输出。
+ * 通过条件：所有测量轮次顺利完成并输出对比结果，程序返回 0。
  */
 
 #include <iostream>

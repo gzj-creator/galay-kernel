@@ -1,3 +1,10 @@
+/**
+ * @file T53-runtime_block_on_exception.cc
+ * @brief 用途：验证 `Runtime::blockOn` 会向调用方透传根任务抛出的异常。
+ * 关键覆盖点：根任务异常抛出、调用侧捕获、异常信息或类型保持。
+ * 通过条件：预期异常被成功捕获，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <cassert>

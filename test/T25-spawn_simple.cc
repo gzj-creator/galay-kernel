@@ -1,3 +1,10 @@
+/**
+ * @file T25-spawn_simple.cc
+ * @brief 用途：验证基础 `spawn` 提交后任务能够被调度并顺利执行完成。
+ * 关键覆盖点：任务提交、调度器接管执行、简单完成通知与收尾流程。
+ * 通过条件：被提交任务确实执行完成，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <atomic>

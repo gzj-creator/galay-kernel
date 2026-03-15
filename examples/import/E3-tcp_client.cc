@@ -1,3 +1,10 @@
+/**
+ * @file E3-tcp_client.cc
+ * @brief 用途：用模块导入方式演示 TCP 客户端主动连接与收发流程。
+ * 关键覆盖点：模块导入、客户端建连、请求发送与响应接收。
+ * 通过条件：请求响应闭环跑通并返回 0。
+ */
+
 import galay.kernel;
 
 #include <coroutine>

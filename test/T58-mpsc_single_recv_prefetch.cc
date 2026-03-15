@@ -1,3 +1,10 @@
+/**
+ * @file T58-mpsc_single_recv_prefetch.cc
+ * @brief 用途：验证 `MpscChannel` 单条接收路径的预取优化不会破坏语义。
+ * 关键覆盖点：单次接收预取、backlog 消耗、预取上限与最终一致性。
+ * 通过条件：预取优化下消息仍完整可见，测试返回 0。
+ */
+
 #include "galay-kernel/concurrency/MpscChannel.h"
 #include "test/MpscChannelTestAccess.h"
 

@@ -1,6 +1,8 @@
 /**
- * @file E2-TcpEchoServer.cc
- * @brief TCP Echo 自闭环示例
+ * @file E2-tcp_echo_server.cc
+ * @brief 用途：用头文件方式演示 TCP Echo 自闭环服务端路径。
+ * 关键覆盖点：监听与接受连接、回显处理、客户端侧闭环验证。
+ * 通过条件：完成至少一轮成功回显并返回 0。
  */
 
 #include <atomic>

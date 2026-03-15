@@ -1,3 +1,10 @@
+/**
+ * @file T20-ringbuffer_io.cc
+ * @brief 用途：验证 `RingBuffer` 与网络 IO 组合使用时的数据读写闭环。
+ * 关键覆盖点：环形缓冲区读写、`iovec` 借用接口、与 Socket IO 的集成路径。
+ * 通过条件：缓冲区内容与网络收发结果一致，测试返回 0。
+ */
+
 #include <iostream>
 #include <array>
 #include <cstring>

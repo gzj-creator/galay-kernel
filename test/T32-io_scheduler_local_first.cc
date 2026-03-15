@@ -1,3 +1,10 @@
+/**
+ * @file T32-io_scheduler_local_first.cc
+ * @brief 用途：验证 IO 调度器优先处理本地 ready 队列再消费远端注入任务。
+ * 关键覆盖点：本地任务优先级、远端注入排队、同轮与后续轮次的执行顺序。
+ * 通过条件：观察到本地优先语义且断言成立，测试返回 0。
+ */
+
 #include "galay-kernel/concurrency/AsyncWaiter.h"
 #include "galay-kernel/common/TimerManager.hpp"
 #include "galay-kernel/kernel/Coroutine.h"

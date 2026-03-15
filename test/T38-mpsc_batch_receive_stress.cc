@@ -1,3 +1,10 @@
+/**
+ * @file T38-mpsc_batch_receive_stress.cc
+ * @brief 用途：验证 `MpscChannel` 在批量接收压力下的正确性与稳定性。
+ * 关键覆盖点：高并发发送、批量消费、累计计数与唤醒稳定性。
+ * 通过条件：压力下无丢消息或卡死，测试返回 0。
+ */
+
 #include "galay-kernel/concurrency/MpscChannel.h"
 #include "galay-kernel/kernel/ComputeScheduler.h"
 

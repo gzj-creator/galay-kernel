@@ -1,19 +1,8 @@
 /**
- * T26-ConcurrentRecvSend
- *
- * 压测同一个 TcpSocket 上同时进行 recv 和 send（全双工）。
- *
- * 架构：
- *   Server 和 Client 各使用独立的调度器（独立线程），避免单线程饥饿。
- *   Server accept 后，对同一个 client socket 同时 spawn 读协程和写协程。
- *   Client connect 后，也对同一个 socket 同时 spawn 读协程和写协程。
- *
- *   每条消息 256KB，发 200 轮，双向各约 50MB。
- *   同时将 socket 的 SO_SNDBUF/SO_RCVBUF 压到 16KB，
- *   recv 端使用 4KB 小 buffer，制造背压使 send 端 buffer 填满触发 EAGAIN，
- *   从而迫使 fd 真正注册到 epoll/kqueue/io_uring 的读写事件。
- *
- * 预期：所有三个后端（kqueue / epoll / io_uring）均通过。
+ * @file T26-concurrent_recv_send.cc
+ * @brief 用途：验证并发收发场景下的多端点运行时协作与数据正确性。
+ * 关键覆盖点：双向并发发送接收、独立 Runtime 配置、消息闭环与完成同步。
+ * 通过条件：收发两端都完成预期工作负载，断言成立并返回 0。
  */
 
 #include <iostream>

@@ -1,7 +1,8 @@
 /**
- * @file test_sendfile_basic.cc
- * @brief SendFile 基础功能测试
- * @details 测试 sendfile 的基本功能和正确性
+ * @file T23-sendfile_basic.cc
+ * @brief 用途：验证 `sendfile` 基础路径能够完成文件到网络的零拷贝传输。
+ * 关键覆盖点：文件准备、发送端直传、接收端完整读回以及字节数校验。
+ * 通过条件：接收总字节数与源文件一致，测试正常结束并返回 0。
  */
 
 #include <iostream>

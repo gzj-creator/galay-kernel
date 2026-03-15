@@ -1,3 +1,10 @@
+/**
+ * @file B3-tcp_client.cc
+ * @brief 用途：作为 TCP 压测客户端，发起并发连接与请求以评估往返性能。
+ * 关键覆盖点：并发建连、批量请求发送、响应接收以及吞吐与延迟统计。
+ * 通过条件：客户端完成既定负载并输出统计结果，测试结束后干净退出。
+ */
+
 #include <iostream>
 #include <atomic>
 #include <chrono>

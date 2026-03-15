@@ -1,3 +1,10 @@
+/**
+ * @file T44-scheduler_wakeup_coalescing.cc
+ * @brief 用途：验证调度器会合并重复唤醒请求，避免无效的多次唤醒。
+ * 关键覆盖点：重复 wake 请求合并、唤醒计数控制、可运行队列推进。
+ * 通过条件：重复唤醒被成功压缩且任务仍能完整执行，测试返回 0。
+ */
+
 #include "galay-kernel/kernel/Coroutine.h"
 #include "test/SchedulerTestAccess.h"
 

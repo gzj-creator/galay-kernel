@@ -1,6 +1,8 @@
 /**
- * @file E1-SendfileExample.cc
- * @brief SendFile 最小闭环示例
+ * @file E1-sendfile_example.cc
+ * @brief 用途：用头文件方式演示 `SendFile` 最小闭环传输。
+ * 关键覆盖点：测试文件准备、服务端发送、客户端接收与字节数校验。
+ * 通过条件：文件传输完整跑通，接收结果达预期并返回 0。
  */
 
 #include <atomic>

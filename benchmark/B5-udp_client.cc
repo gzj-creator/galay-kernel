@@ -1,3 +1,10 @@
+/**
+ * @file B5-udp_client.cc
+ * @brief 用途：作为 UDP 压测客户端，发起多客户端报文发送并统计回包结果。
+ * 关键覆盖点：多客户端并发、报文大小与时长参数、收发计数与吞吐统计。
+ * 通过条件：客户端完成设定压测周期并输出统计结果，进程干净退出。
+ */
+
 #include <iostream>
 #include <cstring>
 #include <atomic>

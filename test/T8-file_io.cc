@@ -1,3 +1,10 @@
+/**
+ * @file T8-file_io.cc
+ * @brief 用途：验证异步文件读写路径的基础正确性与数据回环。
+ * 关键覆盖点：文件创建与打开、异步读写接口、写入内容回读一致性。
+ * 通过条件：文件 IO 结果与预期一致，测试流程正常结束并返回 0。
+ */
+
 #include <cstring>
 #include <fstream>
 #include <atomic>

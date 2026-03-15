@@ -1,3 +1,10 @@
+/**
+ * @file T70-b1_throughput_sample_source_case.cc
+ * @brief 用途：验证 B1 将单次吞吐采样提取为独立辅助函数实现。
+ * 关键覆盖点：吞吐量样本 helper 定义、benchmark 主流程调用该 helper。
+ * 通过条件：源码扫描命中 helper 定义与调用点，测试返回 0。
+ */
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
