@@ -12,7 +12,7 @@
 #include <csignal>
 #include <thread>
 #include "galay-kernel/async/UdpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -51,7 +51,7 @@ void signalHandler(int signum) {
 }
 
 // UDP Echo服务器工作协程 - 多协程并发处理
-Coroutine udpServerWorker(int worker_id) {
+Task<void> udpServerWorker(int worker_id) {
     UdpSocket socket;
 
     socket.option().handleReuseAddr();
@@ -172,7 +172,7 @@ int main() {
 
     // 启动多个服务器工作协程
     for (int i = 0; i < NUM_SERVER_WORKERS; ++i) {
-        scheduler.spawn(udpServerWorker(i));
+        scheduleTask(scheduler, udpServerWorker(i));
     }
     LogInfo("Started {} server workers", NUM_SERVER_WORKERS);
 

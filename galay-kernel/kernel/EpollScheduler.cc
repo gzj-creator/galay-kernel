@@ -175,7 +175,7 @@ bool EpollScheduler::scheduleImmediately(TaskRef task)
     return true;
 }
 
-void EpollScheduler::processPendingCoroutines()
+void EpollScheduler::processPendingTasks()
 {
     (void)m_core.runReadyPass(
         [this](TaskRef& next) { Scheduler::resume(next); },

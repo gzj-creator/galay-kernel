@@ -15,7 +15,7 @@
 #include <cstring>
 #include "benchmark/BenchmarkSync.h"
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -100,7 +100,7 @@ struct BenchConfig {
 };
 
 // 单个客户端连接的压测协程 - 使用用户自管双段 iovec
-Coroutine benchClient(const BenchConfig& config, [[maybe_unused]] int clientId) {
+Task<void> benchClient(const BenchConfig& config, [[maybe_unused]] int clientId) {
     TcpSocket client;
     client.option().handleNonBlock();
 
@@ -281,7 +281,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Starting " << config.connections << " connections..." << std::endl;
     for (int i = 0; i < config.connections; i++) {
-        scheduler.spawn(benchClient(config, i));
+        scheduleTask(scheduler, benchClient(config, i));
     }
 
     stats.join();

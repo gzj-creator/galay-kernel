@@ -174,7 +174,7 @@ bool IOUringScheduler::scheduleImmediately(TaskRef task)
     return true;
 }
 
-void IOUringScheduler::processPendingCoroutines()
+void IOUringScheduler::processPendingTasks()
 {
     (void)m_core.runReadyPass(
         [this](TaskRef& next) { Scheduler::resume(next); },

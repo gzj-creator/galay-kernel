@@ -9,7 +9,7 @@
 #include <atomic>
 #include <string_view>
 #include "galay-kernel/async/UdpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -35,7 +35,7 @@ std::atomic<bool> g_server_ready{false};
 /**
  * @brief UDP Echo服务器协程
  */
-Coroutine udpServer() {
+Task<void> udpServer() {
     LogInfo("UDP Server starting...");
 
     // 创建UDP socket
@@ -93,7 +93,7 @@ Coroutine udpServer() {
 /**
  * @brief UDP客户端协程
  */
-Coroutine udpClient() {
+Task<void> udpClient() {
     // 等待服务器准备好
     while (!g_server_ready) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -149,8 +149,8 @@ int main() {
     scheduler.start();
 
     // 启动服务器和客户端
-    scheduler.spawn(udpServer());
-    scheduler.spawn(udpClient());
+    scheduleTask(scheduler, udpServer());
+    scheduleTask(scheduler, udpClient());
 
     // 等待执行完成
     std::this_thread::sleep_for(std::chrono::seconds(1));

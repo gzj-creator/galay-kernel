@@ -14,8 +14,9 @@
 #include <thread>
 #include <chrono>
 #include <vector>
+#include "benchmark/BenchmarkSync.h"
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 #include "test/test_result_writer.h"
 
@@ -44,6 +45,9 @@ const uint16_t TEST_PORT = 9091;
 std::atomic<bool> g_server_ready{false};
 std::atomic<bool> g_test_done{false};
 std::atomic<size_t> g_bytes_received{0};
+
+constexpr auto SERVER_READY_TIMEOUT = std::chrono::seconds(5);
+constexpr auto BENCHMARK_COMPLETION_TIMEOUT = std::chrono::seconds(30);
 
 struct BenchmarkResult {
     std::string method;
@@ -79,7 +83,7 @@ void createBenchmarkFile(size_t size) {
 }
 
 // 方法1: 使用 sendfile
-Coroutine serverSendFile(TcpSocket client, size_t file_size) {
+Task<void> serverSendFile(TcpSocket client, size_t file_size) {
     int file_fd = open(TEST_FILE, O_RDONLY);
     if (file_fd < 0) {
         co_await client.close();
@@ -104,7 +108,7 @@ Coroutine serverSendFile(TcpSocket client, size_t file_size) {
 }
 
 // 方法2: 使用传统 read + send
-Coroutine serverReadSend(TcpSocket client, size_t file_size) {
+Task<void> serverReadSend(TcpSocket client, size_t file_size) {
     int file_fd = open(TEST_FILE, O_RDONLY);
     if (file_fd < 0) {
         co_await client.close();
@@ -135,7 +139,7 @@ Coroutine serverReadSend(TcpSocket client, size_t file_size) {
 }
 
 // 服务器
-Coroutine benchmarkServer(bool use_sendfile, size_t file_size) {
+Task<void> benchmarkServer(bool use_sendfile, size_t file_size) {
     TcpSocket listener;
     listener.option().handleReuseAddr();
     listener.option().handleNonBlock();
@@ -157,9 +161,9 @@ Coroutine benchmarkServer(bool use_sendfile, size_t file_size) {
     client.option().handleNonBlock();
 
     if (use_sendfile) {
-        co_await serverSendFile(std::move(client), file_size).wait();
+        co_await serverSendFile(std::move(client), file_size);
     } else {
-        co_await serverReadSend(std::move(client), file_size).wait();
+        co_await serverReadSend(std::move(client), file_size);
     }
 
     co_await listener.close();
@@ -167,9 +171,13 @@ Coroutine benchmarkServer(bool use_sendfile, size_t file_size) {
 }
 
 // 客户端
-Coroutine benchmarkClient(size_t file_size) {
-    while (!g_server_ready.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+Task<void> benchmarkClient(size_t file_size) {
+    if (!galay::benchmark::waitForFlag(g_server_ready,
+                                       SERVER_READY_TIMEOUT,
+                                       std::chrono::milliseconds(10))) {
+        LogError("Client timed out waiting for benchmark server readiness");
+        g_test_done = true;
+        co_return;
     }
 
     TcpSocket socket;
@@ -178,6 +186,8 @@ Coroutine benchmarkClient(size_t file_size) {
     Host serverHost(IPType::IPV4, "127.0.0.1", TEST_PORT);
     auto connectResult = co_await socket.connect(serverHost);
     if (!connectResult) {
+        LogError("Client failed to connect to benchmark server");
+        g_test_done = true;
         co_return;
     }
 
@@ -207,19 +217,25 @@ BenchmarkResult runBenchmark(bool use_sendfile, size_t file_size, const char* me
 
     auto start_time = high_resolution_clock::now();
 
-    scheduler.spawn(benchmarkServer(use_sendfile, file_size));
+    scheduleTask(scheduler, benchmarkServer(use_sendfile, file_size));
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    scheduler.spawn(benchmarkClient(file_size));
+    scheduleTask(scheduler, benchmarkClient(file_size));
 
-    while (!g_test_done.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const bool completed = galay::benchmark::waitForFlag(g_test_done,
+                                                         BENCHMARK_COMPLETION_TIMEOUT,
+                                                         std::chrono::milliseconds(10));
+    if (!completed) {
+        LogError("Benchmark {} timed out waiting for completion", method_name);
     }
 
     auto end_time = high_resolution_clock::now();
     scheduler.stop();
 
     double duration_ms = duration_cast<milliseconds>(end_time - start_time).count();
-    double throughput_mbps = (file_size / (1024.0 * 1024.0)) / (duration_ms / 1000.0);
+    double throughput_mbps = 0.0;
+    if (completed && duration_ms > 0.0) {
+        throughput_mbps = (file_size / (1024.0 * 1024.0)) / (duration_ms / 1000.0);
+    }
 
     BenchmarkResult result;
     result.method = method_name;

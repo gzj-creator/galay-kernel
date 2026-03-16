@@ -5,7 +5,7 @@
  * 通过条件：io_uring sequence 路径可用且测试返回 0。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/Awaitable.h"
 #include <atomic>
 #include <chrono>
@@ -69,7 +69,7 @@ struct TestState {
     std::atomic<int> null_probes{0};
 };
 
-Coroutine sendCoroutine(TestState* state, int fd, const char* msg, size_t len) {
+Task<void> sendCoroutine(TestState* state, int fd, const char* msg, size_t len) {
     IOController controller(GHandle{.fd = fd});
     ProbeFlow flow(msg, len);
     auto sequence = flow.make(&controller);
@@ -131,7 +131,7 @@ int main() {
     TestState state;
     IOUringScheduler scheduler;
     scheduler.start();
-    scheduler.spawn(sendCoroutine(&state, fds[0], payload, sizeof(payload) - 1));
+    scheduleTask(scheduler, sendCoroutine(&state, fds[0], payload, sizeof(payload) - 1));
 
     const bool coroutine_done = waitUntil(state.done);
     scheduler.stop();

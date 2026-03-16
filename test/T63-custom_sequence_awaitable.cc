@@ -5,7 +5,7 @@
  * 通过条件：builder 组合流程全部按预期执行，测试返回 0。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/IOScheduler.hpp"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/common/Host.hpp"
@@ -53,7 +53,7 @@ struct BuilderFlow {
     bool send_ok = false;
 };
 
-Coroutine serverTask(int listen_fd) {
+Task<void> serverTask(int listen_fd) {
     IOController listen_ctrl(GHandle{.fd = listen_fd});
     Host client_host;
     AcceptAwaitable accept_awaitable(&listen_ctrl, &client_host);
@@ -86,7 +86,7 @@ Coroutine serverTask(int listen_fd) {
     close(client_fd);
 }
 
-Coroutine clientTask(const char* ip, int port) {
+Task<void> clientTask(const char* ip, int port) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -159,8 +159,8 @@ int main() {
 
     TestScheduler scheduler;
     scheduler.start();
-    scheduler.spawn(serverTask(listen_fd));
-    scheduler.spawn(clientTask("127.0.0.1", port));
+    scheduleTask(scheduler, serverTask(listen_fd));
+    scheduleTask(scheduler, clientTask("127.0.0.1", port));
     std::this_thread::sleep_for(std::chrono::seconds(2));
     scheduler.stop();
     close(listen_fd);

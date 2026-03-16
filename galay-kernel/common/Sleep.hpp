@@ -34,7 +34,8 @@ struct SleepAwaitable
 
     bool await_ready() { return false; }
 
-    bool await_suspend(std::coroutine_handle<> handle) {
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
         m_timer->setWaker(Waker(handle));
         // 使用全局 TimerScheduler 而不是 IOScheduler 的定时器
         if(!TimerScheduler::getInstance()->addTimer(m_timer)) {

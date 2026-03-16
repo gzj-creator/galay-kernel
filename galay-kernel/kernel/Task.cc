@@ -44,6 +44,20 @@ bool scheduleTaskImmediately(const TaskRef& task) noexcept
     return scheduler != nullptr && scheduler->scheduleImmediately(task);
 }
 
+bool requestTaskResume(const TaskRef& task) noexcept
+{
+    auto* state = task.state();
+    if (!state || !state->m_handle || !state->m_scheduler ||
+        state->m_done.load(std::memory_order_relaxed)) {
+        return false;
+    }
+
+    if (state->m_queued.exchange(true, std::memory_order_acq_rel)) {
+        return false;
+    }
+    return state->m_scheduler->schedule(task);
+}
+
 std::thread::id schedulerThreadId(Scheduler* scheduler) noexcept
 {
     return scheduler ? scheduler->threadId() : std::thread::id{};

@@ -19,7 +19,7 @@
  * @code
  * AsyncMutex mutex;
  *
- * Coroutine task() {
+ * Task<void> task() {
  *     co_await mutex.lock();
  *     // 临界区
  *     mutex.unlock();
@@ -27,7 +27,7 @@
  * }
  *
  * // 使用超时
- * Coroutine task2() {
+ * Task<void> task2() {
  *     bool acquired = co_await mutex.lock().timeout(100ms);
  *     if (acquired) {
  *         // 临界区
@@ -41,8 +41,7 @@
 #ifndef GALAY_KERNEL_ASYNC_MUTEX_H
 #define GALAY_KERNEL_ASYNC_MUTEX_H
 
-#include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/kernel/Scheduler.hpp"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/kernel/Waker.h"
 #include <concurrentqueue/moodycamel/concurrentqueue.h>
@@ -65,7 +64,8 @@ public:
     explicit AsyncMutexAwaitable(AsyncMutex* mutex) : m_mutex(mutex) {}
 
     bool await_ready() const noexcept;
-    bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
     std::expected<void, IOError> await_resume() noexcept { return m_result; }
 
 private:
@@ -77,9 +77,9 @@ private:
 /**
  * @brief 异步互斥锁
  *
- * @details 协程友好的互斥锁实现，使用无锁队列管理等待协程。
- * 当锁被占用时，调用 lock() 的协程会被挂起并加入等待队列，
- * 而不是阻塞当前线程。unlock() 会唤醒队列中的下一个等待协程。
+ * @details Task 友好的互斥锁实现，使用无锁队列管理等待任务。
+ * 当锁被占用时，调用 lock() 的任务会被挂起并加入等待队列，
+ * 而不是阻塞当前线程。unlock() 会唤醒队列中的下一个等待任务。
  *
  * 实现细节：
  * - 使用 atomic<bool> 管理锁状态
@@ -170,7 +170,8 @@ inline bool AsyncMutexAwaitable::await_ready() const noexcept {
     return false;
 }
 
-inline bool AsyncMutexAwaitable::await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
+template <typename Promise>
+inline bool AsyncMutexAwaitable::await_suspend(std::coroutine_handle<Promise> handle) noexcept {
     m_mutex->m_waiters.enqueue(Waker(handle));
     // 再次检查，防止在入队期间锁被释放
     if (m_mutex->tryLock()) {

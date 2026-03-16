@@ -92,43 +92,18 @@ concept HasRuntimeSpawnBlocking = requires(R runtime) {
 };
 
 template <typename C>
-concept HasCoroutineThenLvalue = requires(C left, C right) {
-    { left.then(std::move(right)) } -> std::same_as<Coroutine&>;
+concept HasTaskThenLvalue = requires(C& left, C right) {
+    { left.then(std::move(right)) } -> std::same_as<C&>;
 };
 
 template <typename C>
-concept HasCoroutineThenRvalue = requires(C left, C right) {
-    { std::move(left).then(std::move(right)) } -> std::same_as<Coroutine&&>;
+concept HasTaskThenRvalue = requires(C left, C right) {
+    { std::move(left).then(std::move(right)) } -> std::same_as<C&&>;
 };
 
 template <typename C>
-concept HasCoroutineTaskRef = requires(C co) {
-    co.taskRef();
-};
-
-template <typename C>
-concept HasCoroutineDetachTask = requires(C co) {
-    std::move(co).detachTask();
-};
-
-template <typename C>
-concept HasCoroutineBelongSchedulerGetter = requires(C co) {
-    co.belongScheduler();
-};
-
-template <typename C>
-concept HasCoroutineBelongSchedulerSetter = requires(C co, Scheduler* scheduler) {
-    co.belongScheduler(scheduler);
-};
-
-template <typename C>
-concept HasCoroutineThreadId = requires(C co) {
-    co.threadId();
-};
-
-template <typename C>
-concept HasCoroutineResume = requires(C co) {
-    co.resume();
+concept HasTaskAwaitOperator = requires(C task) {
+    std::move(task).operator co_await();
 };
 
 }  // namespace
@@ -143,14 +118,10 @@ static_assert(HasJoinHandleWait<int>);
 static_assert(HasRuntimeHandleCurrent<>);
 static_assert(HasRuntimeHandleTryCurrent<>);
 static_assert(HasRuntimeSpawnBlocking<Runtime>);
-static_assert(HasCoroutineThenLvalue<Coroutine>);
-static_assert(HasCoroutineThenRvalue<Coroutine>);
-static_assert(!HasCoroutineTaskRef<Coroutine>);
-static_assert(!HasCoroutineDetachTask<Coroutine>);
-static_assert(!HasCoroutineBelongSchedulerGetter<Coroutine>);
-static_assert(!HasCoroutineBelongSchedulerSetter<Coroutine>);
-static_assert(!HasCoroutineThreadId<Coroutine>);
-static_assert(!HasCoroutineResume<Coroutine>);
+static_assert(HasTaskThenLvalue<Task<void>>);
+static_assert(HasTaskThenRvalue<Task<void>>);
+static_assert(HasTaskAwaitOperator<Task<int>>);
+static_assert(HasTaskAwaitOperator<Task<void>>);
 
 int main() {
     Runtime runtime;

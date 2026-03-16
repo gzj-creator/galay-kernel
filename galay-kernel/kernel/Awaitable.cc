@@ -1,181 +1,109 @@
 #include "Awaitable.h"
 #include "galay-kernel/common/Error.h"
+#include "IOScheduler.hpp"
 #include <cerrno>
-
-#ifdef USE_EPOLL
-#include "EpollScheduler.h"
-#elif defined(USE_KQUEUE)
-#include "KqueueScheduler.h"
-#elif defined(USE_IOURING)
-#include "IOUringScheduler.h"
-#endif
 
 namespace galay::kernel
 {
 
-namespace {
+namespace detail
+{
 
-template <typename AwaitableT, IOEventType Event, IOErrorCode ErrorCode, auto RegisterFn>
-inline bool suspendRegisteredAwaitable(AwaitableT& awaitable, std::coroutine_handle<> handle) {
-    awaitable.m_waker = Waker(handle);
-#ifdef USE_IOURING
-    awaitable.m_sqe_type = Event;
-#endif
-    awaitable.m_controller->fillAwaitable(Event, &awaitable);
-    auto* scheduler = awaitable.m_waker.getScheduler();
-    if (scheduler == nullptr || scheduler->type() != kIOScheduler) {
-        awaitable.m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
+int registerIOSchedulerEvent(Scheduler* scheduler,
+                             IOEventType event,
+                             IOController* controller) noexcept
+{
+    auto* io_scheduler = static_cast<IOScheduler*>(scheduler);
+    switch (event) {
+    case ACCEPT:
+        return io_scheduler->addAccept(controller);
+    case CONNECT:
+        return io_scheduler->addConnect(controller);
+    case RECV:
+        return io_scheduler->addRecv(controller);
+    case SEND:
+        return io_scheduler->addSend(controller);
+    case READV:
+        return io_scheduler->addReadv(controller);
+    case WRITEV:
+        return io_scheduler->addWritev(controller);
+    case SENDFILE:
+        return io_scheduler->addSendFile(controller);
+    case FILEREAD:
+        return io_scheduler->addFileRead(controller);
+    case FILEWRITE:
+        return io_scheduler->addFileWrite(controller);
+    case FILEWATCH:
+        return io_scheduler->addFileWatch(controller);
+    case RECVFROM:
+        return io_scheduler->addRecvFrom(controller);
+    case SENDTO:
+        return io_scheduler->addSendTo(controller);
+    case SEQUENCE:
+        return io_scheduler->addSequence(controller);
+    default:
+        return -EINVAL;
     }
-    const int ret = (static_cast<IOScheduler*>(scheduler)->*RegisterFn)(awaitable.m_controller);
-    return detail::finalizeAwaitableAddResult(ret, ErrorCode, awaitable.m_result);
 }
 
-template <auto RegisterFn>
-inline bool suspendSequenceAwaitable(SequenceAwaitableBase& awaitable, std::coroutine_handle<> handle) {
-    awaitable.m_waker = Waker(handle);
-#ifdef USE_IOURING
-    awaitable.m_sqe_type = SEQUENCE;
-#endif
-    awaitable.m_controller->fillAwaitable(SEQUENCE, &awaitable);
-    auto* scheduler = awaitable.m_waker.getScheduler();
-    if (scheduler == nullptr || scheduler->type() != kIOScheduler) {
-        return false;
-    }
-    const int ret = (static_cast<IOScheduler*>(scheduler)->*RegisterFn)(awaitable.m_controller);
-    if (ret == 1) {
-        return false;
-    }
-    if (ret < 0) {
-        awaitable.m_error = IOError(kNotReady, detail::normalizeAwaitableErrno(ret));
-        return false;
-    }
-    return true;
+int registerIOSchedulerClose(Scheduler* scheduler,
+                             IOController* controller) noexcept
+{
+    return static_cast<IOScheduler*>(scheduler)->addClose(controller);
 }
 
-}  // namespace
-
-// ============ await_suspend / await_resume implementations ============
-
-bool AcceptAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    return suspendRegisteredAwaitable<AcceptAwaitable, ACCEPT, kAcceptFailed, &IOScheduler::addAccept>(*this, handle);
-}
+} // namespace detail
 
 std::expected<GHandle, IOError> AcceptAwaitable::await_resume() {
     return detail::resumeIOAwaitable<ACCEPT>(*this);
-}
-
-bool RecvAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    return suspendRegisteredAwaitable<RecvAwaitable, RECV, kRecvFailed, &IOScheduler::addRecv>(*this, handle);
 }
 
 std::expected<size_t, IOError> RecvAwaitable::await_resume() {
     return detail::resumeIOAwaitable<RECV>(*this);
 }
 
-bool SendAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    return suspendRegisteredAwaitable<SendAwaitable, SEND, kSendFailed, &IOScheduler::addSend>(*this, handle);
-}
-
 std::expected<size_t, IOError> SendAwaitable::await_resume() {
     return detail::resumeIOAwaitable<SEND>(*this);
-}
-
-bool ReadvAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    return suspendRegisteredAwaitable<ReadvAwaitable, READV, kRecvFailed, &IOScheduler::addReadv>(*this, handle);
 }
 
 std::expected<size_t, IOError> ReadvAwaitable::await_resume() {
     return detail::resumeIOAwaitable<READV>(*this);
 }
 
-bool WritevAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    return suspendRegisteredAwaitable<WritevAwaitable, WRITEV, kSendFailed, &IOScheduler::addWritev>(*this, handle);
-}
-
 std::expected<size_t, IOError> WritevAwaitable::await_resume() {
     return detail::resumeIOAwaitable<WRITEV>(*this);
-}
-
-bool ConnectAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    return suspendRegisteredAwaitable<ConnectAwaitable, CONNECT, kConnectFailed, &IOScheduler::addConnect>(*this, handle);
 }
 
 std::expected<void, IOError> ConnectAwaitable::await_resume() {
     return detail::resumeIOAwaitable<CONNECT>(*this);
 }
 
-bool CloseAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    m_waker = Waker(handle);
-    auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    int res = io_scheduler->addClose(m_controller);
-    if (res == 0) {
-        m_result = {};
-        return false;
-    }
-    m_result = std::unexpected(IOError(kDisconnectError, errno));
-    return false;
-}
-
 std::expected<void, IOError> CloseAwaitable::await_resume() {
     return std::move(m_result);
-}
-
-bool FileReadAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    return suspendRegisteredAwaitable<FileReadAwaitable, FILEREAD, kReadFailed, &IOScheduler::addFileRead>(*this, handle);
 }
 
 std::expected<size_t, IOError> FileReadAwaitable::await_resume() {
     return detail::resumeIOAwaitable<FILEREAD>(*this);
 }
 
-bool FileWriteAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    return suspendRegisteredAwaitable<FileWriteAwaitable, FILEWRITE, kWriteFailed, &IOScheduler::addFileWrite>(*this, handle);
-}
-
 std::expected<size_t, IOError> FileWriteAwaitable::await_resume() {
     return detail::resumeIOAwaitable<FILEWRITE>(*this);
-}
-
-bool RecvFromAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    return suspendRegisteredAwaitable<RecvFromAwaitable, RECVFROM, kRecvFailed, &IOScheduler::addRecvFrom>(*this, handle);
 }
 
 std::expected<size_t, IOError> RecvFromAwaitable::await_resume() {
     return detail::resumeIOAwaitable<RECVFROM>(*this);
 }
 
-bool SendToAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    return suspendRegisteredAwaitable<SendToAwaitable, SENDTO, kSendFailed, &IOScheduler::addSendTo>(*this, handle);
-}
-
 std::expected<size_t, IOError> SendToAwaitable::await_resume() {
     return detail::resumeIOAwaitable<SENDTO>(*this);
-}
-
-bool FileWatchAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    return suspendRegisteredAwaitable<FileWatchAwaitable, FILEWATCH, kReadFailed, &IOScheduler::addFileWatch>(*this, handle);
 }
 
 std::expected<FileWatchResult, IOError> FileWatchAwaitable::await_resume() {
     return detail::resumeIOAwaitable<FILEWATCH>(*this);
 }
 
-bool SendFileAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    return suspendRegisteredAwaitable<SendFileAwaitable, SENDFILE, kSendFailed, &IOScheduler::addSendFile>(*this, handle);
-}
-
 std::expected<size_t, IOError> SendFileAwaitable::await_resume() {
     return detail::resumeIOAwaitable<SENDFILE>(*this);
-}
-
-bool SequenceAwaitableBase::await_suspend(std::coroutine_handle<> handle) {
-    return suspendSequenceAwaitable<&IOScheduler::addSequence>(*this, handle);
 }
 
 }

@@ -12,7 +12,7 @@
 #include <vector>
 #include <csignal>
 #include "galay-kernel/async/UdpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -56,7 +56,7 @@ void signalHandler(int signum) {
 }
 
 // UDP客户端协程 - 流水线模式
-Coroutine udpBenchmarkClient(int client_id) {
+Task<void> udpBenchmarkClient(int client_id) {
     g_active_clients.fetch_add(1, std::memory_order_relaxed);
 
     UdpSocket socket;
@@ -219,7 +219,7 @@ int main(int argc, char* argv[]) {
     // 启动多个客户端
     LogInfo("Starting {} clients...", g_num_clients);
     for (int i = 0; i < g_num_clients; ++i) {
-        scheduler.spawn(udpBenchmarkClient(i));
+        scheduleTask(scheduler, udpBenchmarkClient(i));
     }
 
     // 运行测试

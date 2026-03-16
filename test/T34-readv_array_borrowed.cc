@@ -12,7 +12,7 @@
 #include <thread>
 
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -35,7 +35,7 @@ namespace {
 std::atomic<bool> g_server_ready{false};
 std::atomic<bool> g_test_passed{false};
 
-Coroutine borrowedServer([[maybe_unused]] IOScheduler* scheduler) {
+Task<void> borrowedServer([[maybe_unused]] IOScheduler* scheduler) {
     TcpSocket listener;
 
     auto opt = listener.option().handleReuseAddr();
@@ -117,7 +117,7 @@ Coroutine borrowedServer([[maybe_unused]] IOScheduler* scheduler) {
     co_return;
 }
 
-Coroutine borrowedClient([[maybe_unused]] IOScheduler* scheduler) {
+Task<void> borrowedClient([[maybe_unused]] IOScheduler* scheduler) {
     while (!g_server_ready.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -187,8 +187,8 @@ int main() {
 #endif
 
     scheduler.start();
-    scheduler.spawn(borrowedServer(&scheduler));
-    scheduler.spawn(borrowedClient(&scheduler));
+    scheduleTask(scheduler, borrowedServer(&scheduler));
+    scheduleTask(scheduler, borrowedClient(&scheduler));
 
     std::this_thread::sleep_for(std::chrono::seconds(3));
     scheduler.stop();

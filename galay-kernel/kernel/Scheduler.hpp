@@ -17,7 +17,7 @@
 #define GALAY_KERNEL_SCHEDULER_HPP
 
 #include "galay-kernel/common/Timer.hpp"
-#include "Coroutine.h"
+#include "Task.h"
 #include <atomic>
 #include <cstdint>
 #include <optional>
@@ -136,12 +136,6 @@ public:
 
 protected:
     bool bindTask(TaskRef& task);
-    /**
-     * @brief 恢复协程执行
-     * @param co 要恢复的协程
-     * @note 仅供调度器内部使用
-     */
-    void resume(Coroutine& co);
     void resume(TaskRef& task);
     bool applyConfiguredAffinity();
     std::thread::id m_threadId;  ///< 调度器所属线程ID，在 start() 时设置
@@ -164,24 +158,6 @@ inline bool Scheduler::bindTask(TaskRef& task) {
 }
 
 
-inline void Scheduler::resume(Coroutine& co) {
-    auto* state = co.m_task.state();
-    if (!state || !state->m_handle || state->m_done.load(std::memory_order_relaxed)) {
-        return;
-    }
-    state->m_queued.store(false, std::memory_order_relaxed);
-    if (state->m_runtime == nullptr) {
-        state->m_handle.resume();
-        return;
-    }
-    if (state->m_runtime == detail::currentRuntime()) {
-        state->m_handle.resume();
-        return;
-    }
-    detail::CurrentRuntimeScope runtime_scope(state->m_runtime);
-    state->m_handle.resume();
-}
-
 inline void Scheduler::resume(TaskRef& task) {
     auto* state = task.state();
     if (!state || !state->m_handle || state->m_done.load(std::memory_order_relaxed)) {
@@ -200,6 +176,41 @@ inline void Scheduler::resume(TaskRef& task) {
     state->m_handle.resume();
 }
 
+template <typename T>
+inline bool scheduleTask(Scheduler& scheduler, Task<T>&& task)
+{
+    return scheduler.schedule(detail::TaskAccess::detachTask(std::move(task)));
+}
+
+template <typename T>
+inline bool scheduleTask(Scheduler* scheduler, Task<T>&& task)
+{
+    return scheduler != nullptr && scheduleTask(*scheduler, std::move(task));
+}
+
+template <typename T>
+inline bool scheduleTaskDeferred(Scheduler& scheduler, Task<T>&& task)
+{
+    return scheduler.scheduleDeferred(detail::TaskAccess::detachTask(std::move(task)));
+}
+
+template <typename T>
+inline bool scheduleTaskDeferred(Scheduler* scheduler, Task<T>&& task)
+{
+    return scheduler != nullptr && scheduleTaskDeferred(*scheduler, std::move(task));
+}
+
+template <typename T>
+inline bool scheduleTaskImmediately(Scheduler& scheduler, Task<T>&& task)
+{
+    return scheduler.scheduleImmediately(detail::TaskAccess::detachTask(std::move(task)));
+}
+
+template <typename T>
+inline bool scheduleTaskImmediately(Scheduler* scheduler, Task<T>&& task)
+{
+    return scheduler != nullptr && scheduleTaskImmediately(*scheduler, std::move(task));
+}
 
 } // namespace galay::kernel
 

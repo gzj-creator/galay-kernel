@@ -170,7 +170,7 @@ bool KqueueScheduler::scheduleImmediately(TaskRef task)
     return true;
 }
 
-void KqueueScheduler::processPendingCoroutines()
+void KqueueScheduler::processPendingTasks()
 {
     (void)m_core.runReadyPass(
         [this](TaskRef& next) { Scheduler::resume(next); },

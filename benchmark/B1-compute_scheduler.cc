@@ -18,7 +18,7 @@
 #include <memory>
 #include "benchmark/BenchmarkSync.h"
 #include "galay-kernel/kernel/ComputeScheduler.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 using namespace galay::kernel;
@@ -54,13 +54,13 @@ void markCompleted(BenchState* state) {
 // ============== 测试协程 ==============
 
 // 空协程（测试调度开销）
-Coroutine emptyTask(BenchState* state) {
+Task<void> emptyTask(BenchState* state) {
     markCompleted(state);
     co_return;
 }
 
 // 轻量计算协程
-Coroutine lightComputeTask(BenchState* state) {
+Task<void> lightComputeTask(BenchState* state) {
     volatile int sum = 0;
     for (int i = 0; i < 100; ++i) {
         sum += i;
@@ -70,7 +70,7 @@ Coroutine lightComputeTask(BenchState* state) {
 }
 
 // 计算密集型协程
-Coroutine heavyComputeTask(BenchState* state) {
+Task<void> heavyComputeTask(BenchState* state) {
     volatile double result = 0;
     for (int i = 0; i < COMPUTE_ITERATIONS; ++i) {
         result += std::sin(i) * std::cos(i);
@@ -80,8 +80,8 @@ Coroutine heavyComputeTask(BenchState* state) {
 }
 
 // 延迟测试协程
-Coroutine latencyTask(BenchState* state,
-                      std::chrono::steady_clock::time_point submitted_at) {
+Task<void> latencyTask(BenchState* state,
+                       std::chrono::steady_clock::time_point submitted_at) {
     auto now = std::chrono::steady_clock::now();
     auto latency = std::chrono::duration_cast<std::chrono::nanoseconds>(
         now - submitted_at).count();
@@ -113,10 +113,10 @@ public:
         }
     }
 
-    void spawn(Coroutine coro) {
+    void spawn(Task<void> task) {
         // 轮询分发
         int idx = m_next.fetch_add(1, std::memory_order_relaxed) % m_count;
-        m_schedulers[idx]->spawn(std::move(coro));
+        scheduleTask(*m_schedulers[idx], std::move(task));
     }
 
     int count() const { return m_count; }
@@ -130,7 +130,7 @@ private:
 ThroughputSample measureThroughputSample(
     int scheduler_count,
     int task_count,
-    const std::function<Coroutine(BenchState*)>& task_factory) {
+    const std::function<Task<void>(BenchState*)>& task_factory) {
     SchedulerPool pool(scheduler_count);
     pool.start();
 
@@ -170,7 +170,7 @@ ThroughputSample measureThroughputSample(
 
 // 吞吐量测试
 void benchThroughput(const std::string& name, int scheduler_count, int task_count,
-                     const std::function<Coroutine(BenchState*)>& task_factory) {
+                     const std::function<Task<void>(BenchState*)>& task_factory) {
     std::vector<ThroughputSample> samples;
     samples.reserve(THROUGHPUT_SAMPLE_COUNT);
     for (std::size_t sample_index = 0; sample_index < THROUGHPUT_SAMPLE_COUNT; ++sample_index) {

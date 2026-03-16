@@ -5,7 +5,7 @@
  * 通过条件：显式 sequence 流程断言全部成立，测试返回 0。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/IOScheduler.hpp"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/common/Host.hpp"
@@ -71,7 +71,7 @@ inline void SendThenRecvFlow::onRecv(SequenceOps<SequenceResult, 4>& ops, RecvIO
     ops.complete(std::move(recv_ctx.m_result));
 }
 
-Coroutine serverCoroutine([[maybe_unused]] IOScheduler* scheduler, int listen_fd)
+Task<void> serverCoroutine([[maybe_unused]] IOScheduler* scheduler, int listen_fd)
 {
     g_total++;
 
@@ -130,7 +130,7 @@ Coroutine serverCoroutine([[maybe_unused]] IOScheduler* scheduler, int listen_fd
     co_return;
 }
 
-Coroutine clientCoroutine([[maybe_unused]] IOScheduler* scheduler, const char* ip, int port)
+Task<void> clientCoroutine([[maybe_unused]] IOScheduler* scheduler, const char* ip, int port)
 {
     g_total++;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -220,8 +220,8 @@ int main()
 
     TestScheduler scheduler;
     scheduler.start();
-    scheduler.spawn(serverCoroutine(&scheduler, listen_fd));
-    scheduler.spawn(clientCoroutine(&scheduler, "127.0.0.1", PORT));
+    scheduleTask(scheduler, serverCoroutine(&scheduler, listen_fd));
+    scheduleTask(scheduler, clientCoroutine(&scheduler, "127.0.0.1", PORT));
     std::this_thread::sleep_for(std::chrono::seconds(3));
     scheduler.stop();
     close(listen_fd);

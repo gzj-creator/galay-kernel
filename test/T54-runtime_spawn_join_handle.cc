@@ -5,7 +5,6 @@
  * 通过条件：`JoinHandle` 正确返回结果且测试返回 0。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <atomic>
 #include <cassert>

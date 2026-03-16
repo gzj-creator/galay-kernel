@@ -6,7 +6,7 @@
  */
 
 #include "galay-kernel/async/FileWatcher.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test_result_writer.h"
 #include "test/StdoutLog.h"
 
@@ -40,7 +40,7 @@ std::atomic<int> g_event_count{0};
 
 // 测试1: 监控所有事件
 std::atomic<int> g_test1_events{0};
-Coroutine watchAllEventsCoroutine([[maybe_unused]] IOScheduler* scheduler, const std::string& path)
+Task<void> watchAllEventsCoroutine([[maybe_unused]] IOScheduler* scheduler, const std::string& path)
 {
     FileWatcher watcher;
 
@@ -68,7 +68,7 @@ Coroutine watchAllEventsCoroutine([[maybe_unused]] IOScheduler* scheduler, const
 // 测试2: 只监控 Modify 事件
 std::atomic<int> g_test2_modify_events{0};
 std::atomic<int> g_test2_attrib_events{0};
-Coroutine watchModifyOnlyCoroutine([[maybe_unused]] IOScheduler* scheduler, const std::string& path)
+Task<void> watchModifyOnlyCoroutine([[maybe_unused]] IOScheduler* scheduler, const std::string& path)
 {
     FileWatcher watcher;
 
@@ -101,7 +101,7 @@ Coroutine watchModifyOnlyCoroutine([[maybe_unused]] IOScheduler* scheduler, cons
 // 测试3: 只监控 Attrib 事件
 std::atomic<int> g_test3_modify_events{0};
 std::atomic<int> g_test3_attrib_events{0};
-Coroutine watchAttribOnlyCoroutine([[maybe_unused]] IOScheduler* scheduler, const std::string& path)
+Task<void> watchAttribOnlyCoroutine([[maybe_unused]] IOScheduler* scheduler, const std::string& path)
 {
     FileWatcher watcher;
 
@@ -249,9 +249,9 @@ int main()
     std::thread opThread(fileOperationThread, testFile1, testFile2, testFile3);
 
     // 启动监控协程
-    scheduler.spawn(watchAllEventsCoroutine(&scheduler, testFile1));
-    scheduler.spawn(watchModifyOnlyCoroutine(&scheduler, testFile2));
-    scheduler.spawn(watchAttribOnlyCoroutine(&scheduler, testFile3));
+    scheduleTask(scheduler, watchAllEventsCoroutine(&scheduler, testFile1));
+    scheduleTask(scheduler, watchModifyOnlyCoroutine(&scheduler, testFile2));
+    scheduleTask(scheduler, watchAttribOnlyCoroutine(&scheduler, testFile3));
 
     opThread.join();
 

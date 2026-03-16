@@ -1,7 +1,6 @@
 #ifndef GALAY_KERNEL_IOURING_SCHEDULER_H
 #define GALAY_KERNEL_IOURING_SCHEDULER_H
 
-#include "Coroutine.h"
 #include "IOScheduler.hpp"
 #include "IOUringReactor.h"
 #include "SchedulerCore.h"
@@ -89,7 +88,7 @@ private:
 
 private:
     void eventLoop();
-    void processPendingCoroutines();
+    void processPendingTasks();
 };
 
 }

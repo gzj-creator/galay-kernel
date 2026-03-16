@@ -5,7 +5,7 @@
  * 通过条件：执行预算行为与预期一致且测试返回 0。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/SchedulerTestAccess.h"
 
 #include <atomic>
@@ -17,7 +17,7 @@ namespace {
 
 std::atomic<int> g_completed{0};
 
-Coroutine countingTask() {
+Task<void> countingTask() {
     g_completed.fetch_add(1, std::memory_order_relaxed);
     co_return;
 }
@@ -30,10 +30,9 @@ bool verifyLocalReadyBudget(const char* label) {
     SchedulerT scheduler;
 
     for (int i = 0; i < kTaskCount; ++i) {
-        Coroutine co = countingTask();
-        detail::CoroutineAccess::setScheduler(co, &scheduler);
-        SchedulerTestAccess::worker(scheduler).scheduleLocal(
-            detail::CoroutineAccess::detachTask(std::move(co)));
+        Task<void> task = countingTask();
+        detail::setTaskScheduler(detail::TaskAccess::taskRef(task), &scheduler);
+        SchedulerTestAccess::worker(scheduler).scheduleLocal(detail::TaskAccess::detachTask(std::move(task)));
         if (!SchedulerTestAccess::worker(scheduler).hasLocalWork()) {
             std::cerr << "[T45] " << label << " failed to enqueue local task " << i << "\n";
             return false;

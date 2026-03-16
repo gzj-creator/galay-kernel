@@ -15,7 +15,7 @@
 #include <thread>
 #include <chrono>
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 #include "test_result_writer.h"
 
@@ -76,7 +76,7 @@ bool verifyFile(size_t expected_size) {
 }
 
 // 服务器处理客户端
-Coroutine handleClient(TcpSocket client, size_t file_size) {
+Task<void> handleClient(TcpSocket client, size_t file_size) {
     int file_fd = open(TEST_FILE, O_RDONLY);
     if (file_fd < 0) {
         LogError("Failed to open file");
@@ -120,7 +120,7 @@ Coroutine handleClient(TcpSocket client, size_t file_size) {
 }
 
 // 服务器
-Coroutine server(size_t file_size) {
+Task<void> server(size_t file_size) {
     TcpSocket listener;
     listener.option().handleReuseAddr();
     listener.option().handleNonBlock();
@@ -151,13 +151,13 @@ Coroutine server(size_t file_size) {
     TcpSocket client(acceptResult.value());
     client.option().handleNonBlock();
 
-    co_await handleClient(std::move(client), file_size).wait();
+    co_await handleClient(std::move(client), file_size);
     co_await listener.close();
     g_test_done = true;
 }
 
 // 客户端
-Coroutine client() {
+Task<void> client() {
     while (!g_server_ready.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -223,9 +223,9 @@ void runTest(size_t file_size, const char* name) {
     IOSchedulerType scheduler;
     scheduler.start();
 
-    scheduler.spawn(server(file_size));
+    scheduleTask(scheduler, server(file_size));
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    scheduler.spawn(client());
+    scheduleTask(scheduler, client());
 
     while (!g_test_done.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));

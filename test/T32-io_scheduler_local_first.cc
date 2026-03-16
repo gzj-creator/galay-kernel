@@ -7,7 +7,7 @@
 
 #include "galay-kernel/concurrency/AsyncWaiter.h"
 #include "galay-kernel/common/TimerManager.hpp"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 
 #if defined(USE_KQUEUE)
 #include "galay-kernel/kernel/KqueueScheduler.h"
@@ -84,7 +84,7 @@ int findTrace(const SameThreadWakeState& state, int value) {
     return -1;
 }
 
-Coroutine sameThreadWaiter(SameThreadWakeState* state) {
+Task<void> sameThreadWaiter(SameThreadWakeState* state) {
     recordTrace(state, kTraceWaiterArmed);
     auto result = co_await state->waiter.wait();
     if (result) {
@@ -94,19 +94,23 @@ Coroutine sameThreadWaiter(SameThreadWakeState* state) {
     co_return;
 }
 
-Coroutine sameThreadOldWork(SameThreadWakeState* state) {
+Task<void> sameThreadOldWork(SameThreadWakeState* state) {
     recordTrace(state, kTraceOldWorkRan);
     state->old_work_ran.store(true, std::memory_order_release);
     co_return;
 }
 
-Coroutine sameThreadDriver(SameThreadWakeState* state) {
-    co_await spawn(sameThreadWaiter(state));
+Task<void> sameThreadDriver(IOSchedulerType* scheduler, SameThreadWakeState* state) {
+    if (!scheduleTask(scheduler, sameThreadWaiter(state))) {
+        throw std::runtime_error("failed to schedule sameThreadWaiter");
+    }
 
     // Let the waiter task run and suspend on AsyncWaiter before we enqueue old work.
     co_yield true;
 
-    co_await spawn(sameThreadOldWork(state));
+    if (!scheduleTask(scheduler, sameThreadOldWork(state))) {
+        throw std::runtime_error("failed to schedule sameThreadOldWork");
+    }
     state->waiter.notify();
     co_return;
 }
@@ -115,7 +119,11 @@ bool runSameThreadWakeScenario() {
     SameThreadWakeState state;
     IOSchedulerType scheduler;
     scheduler.start();
-    scheduler.spawn(sameThreadDriver(&state));
+    if (!scheduleTask(scheduler, sameThreadDriver(&scheduler, &state))) {
+        std::cerr << "[T32] failed to schedule sameThreadDriver\n";
+        scheduler.stop();
+        return false;
+    }
 
     const bool waiter_done = waitUntil(state.waiter_resumed);
     const bool old_done = waitUntil(state.old_work_ran);
@@ -148,7 +156,7 @@ struct CrossThreadWakeState {
     std::atomic<int64_t> executed_ns{0};
 };
 
-Coroutine crossThreadTask(CrossThreadWakeState* state) {
+Task<void> crossThreadTask(CrossThreadWakeState* state) {
     state->executed_ns.store(nowNs(), std::memory_order_release);
     state->done.store(true, std::memory_order_release);
     co_return;
@@ -164,7 +172,11 @@ bool runCrossThreadWakeScenario() {
     std::this_thread::sleep_for(60ms);
 
     state.submitted_ns.store(nowNs(), std::memory_order_release);
-    scheduler.spawn(crossThreadTask(&state));
+    if (!scheduleTask(scheduler, crossThreadTask(&state))) {
+        std::cerr << "[T32] failed to schedule crossThreadTask\n";
+        scheduler.stop();
+        return false;
+    }
 
     const bool done = waitUntil(state.done, 300ms);
     scheduler.stop();
@@ -182,7 +194,7 @@ bool runCrossThreadWakeScenario() {
             std::chrono::nanoseconds(latency_ns)).count();
 
     if (latency_ms > 40) {
-        std::cerr << "[T32] expected cross-thread spawn to wake parked " << kSchedulerName
+        std::cerr << "[T32] expected cross-thread task submission to wake parked " << kSchedulerName
                   << " worker quickly, latency_ms=" << latency_ms << "\n";
         return false;
     }
@@ -196,7 +208,7 @@ struct FairnessState {
     std::atomic<bool> old_after_hot{false};
 };
 
-Coroutine fairnessOldTask(FairnessState* state) {
+Task<void> fairnessOldTask(FairnessState* state) {
     if (state->hot_done.load(std::memory_order_acquire)) {
         state->old_after_hot.store(true, std::memory_order_release);
     }
@@ -204,7 +216,7 @@ Coroutine fairnessOldTask(FairnessState* state) {
     co_return;
 }
 
-Coroutine fairnessHotTask(FairnessState* state, int rounds) {
+Task<void> fairnessHotTask(FairnessState* state, int rounds) {
     for (int i = 0; i < rounds; ++i) {
         co_yield true;
     }
@@ -212,9 +224,13 @@ Coroutine fairnessHotTask(FairnessState* state, int rounds) {
     co_return;
 }
 
-Coroutine fairnessDriver(FairnessState* state) {
-    co_await spawn(fairnessHotTask(state, 32));
-    co_await spawn(fairnessOldTask(state));
+Task<void> fairnessDriver(IOSchedulerType* scheduler, FairnessState* state) {
+    if (!scheduleTask(scheduler, fairnessHotTask(state, 32))) {
+        throw std::runtime_error("failed to schedule fairnessHotTask");
+    }
+    if (!scheduleTask(scheduler, fairnessOldTask(state))) {
+        throw std::runtime_error("failed to schedule fairnessOldTask");
+    }
     co_return;
 }
 
@@ -222,7 +238,11 @@ bool runFairnessScenario() {
     FairnessState state;
     IOSchedulerType scheduler;
     scheduler.start();
-    scheduler.spawn(fairnessDriver(&state));
+    if (!scheduleTask(scheduler, fairnessDriver(&scheduler, &state))) {
+        std::cerr << "[T32] failed to schedule fairnessDriver\n";
+        scheduler.stop();
+        return false;
+    }
 
     const bool old_done = waitUntil(state.old_seen);
     const bool hot_done = waitUntil(state.hot_done);

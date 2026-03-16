@@ -20,7 +20,7 @@
 #include <unistd.h>
 
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_EPOLL
@@ -77,7 +77,7 @@ bool connectOnce(uint16_t port) {
 }
 
 #ifdef USE_EPOLL
-Coroutine acceptTwice() {
+Task<void> acceptTwice() {
     TcpSocket listener;
 
     auto opt = listener.option().handleReuseAddr();
@@ -158,7 +158,7 @@ int main() {
 
     EpollScheduler scheduler;
     scheduler.start();
-    scheduler.spawn(acceptTwice());
+    scheduleTask(scheduler, acceptTwice());
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (!g_listener_ready.load(std::memory_order_acquire) &&

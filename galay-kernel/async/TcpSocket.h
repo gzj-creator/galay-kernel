@@ -11,9 +11,8 @@
  * @example
  * @code
  * // 服务端示例
- * Coroutine server(IOScheduler* scheduler) {
- *     TcpSocket listener(scheduler);
- *     listener.create(IPType::IPV4);
+ * Task<void> server() {
+ *     TcpSocket listener;
  *     listener.option().handleReuseAddr();
  *     listener.option().handleNonBlock();
  *     listener.bind(Host(IPType::IPV4, "0.0.0.0", 8080));
@@ -29,9 +28,8 @@
  * }
  *
  * // 客户端示例
- * Coroutine client(IOScheduler* scheduler) {
- *     TcpSocket socket(scheduler);
- *     socket.create(IPType::IPV4);
+ * Task<void> client() {
+ *     TcpSocket socket;
  *     socket.option().handleNonBlock();
  *
  *     co_await socket.connect(Host(IPType::IPV4, "127.0.0.1", 8080));
@@ -65,7 +63,7 @@ using namespace galay::kernel;
 /**
  * @brief 异步TCP Socket类
  *
- * @details 封装底层socket操作，提供协程友好的异步IO接口。
+ * @details 封装底层 socket 操作，提供 Task 友好的异步 IO 接口。
  * 内部包含：
  * - GHandle: 底层socket句柄
  * - IOScheduler*: IO调度器指针
@@ -74,7 +72,7 @@ using namespace galay::kernel;
  * @note
  * - 不可拷贝，仅支持移动语义
  * - 析构时不会自动关闭socket，需显式调用close()
- * - 所有异步操作需要在协程中使用co_await
+ * - 所有异步操作需要在任务中使用 co_await
  *
  * @see IOScheduler, HandleOption, Host
  */

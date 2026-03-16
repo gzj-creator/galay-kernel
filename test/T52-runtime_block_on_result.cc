@@ -5,7 +5,6 @@
  * 通过条件：`blockOn` 返回值与预期一致且测试返回 0。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <cassert>
 #include <iostream>

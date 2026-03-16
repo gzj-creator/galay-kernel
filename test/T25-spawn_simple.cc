@@ -5,7 +5,6 @@
  * 通过条件：被提交任务确实执行完成，测试返回 0。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <atomic>
 #include <cassert>

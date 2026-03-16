@@ -5,7 +5,7 @@
  * 通过条件：首个半包到达时协程仍未完成，补齐剩余数据后一次成功产出完整帧。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/common/ByteQueueView.h"
 #include <array>
@@ -97,7 +97,7 @@ struct TestState {
     std::atomic<int> parse_calls{0};
 };
 
-Coroutine parserTask(TestState* state, int fd) {
+Task<void> parserTask(TestState* state, int fd) {
     IOController controller(GHandle{.fd = fd});
     NeedMoreFlow flow;
 
@@ -139,7 +139,7 @@ int main() {
     scheduler.start();
 
     TestState state;
-    scheduler.spawn(parserTask(&state, fds[0]));
+    scheduleTask(scheduler, parserTask(&state, fds[0]));
 
     const auto frame = makeFrame("world");
     if (::send(fds[1], frame.data(), 6, 0) != 6) {

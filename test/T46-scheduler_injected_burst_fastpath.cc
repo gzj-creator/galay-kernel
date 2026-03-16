@@ -5,7 +5,7 @@
  * 通过条件：突发注入任务都被正确消费，测试返回 0。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/SchedulerTestAccess.h"
 
 #include <atomic>
@@ -17,7 +17,7 @@ namespace {
 
 std::atomic<int> g_completed{0};
 
-Coroutine countingTask() {
+Task<void> countingTask() {
     g_completed.fetch_add(1, std::memory_order_relaxed);
     co_return;
 }
@@ -30,7 +30,7 @@ bool verifyInjectedBurstFastPath(const char* label) {
     SchedulerT scheduler;
 
     for (int i = 0; i < kTaskCount; ++i) {
-        if (!scheduler.schedule(detail::CoroutineAccess::detachTask(countingTask()))) {
+        if (!scheduler.schedule(detail::TaskAccess::detachTask(countingTask()))) {
             std::cerr << "[T46] " << label << " failed to enqueue injected task " << i << "\n";
             return false;
         }

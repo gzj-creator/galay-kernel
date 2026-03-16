@@ -13,7 +13,7 @@
 #include <thread>
 
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 
 #ifdef USE_KQUEUE
 #include "galay-kernel/kernel/KqueueScheduler.h"
@@ -39,7 +39,7 @@ std::atomic<bool> g_server_ready{false};
 std::atomic<bool> g_done{false};
 std::atomic<bool> g_ok{false};
 
-Coroutine echoServer() {
+Task<void> echoServer() {
     TcpSocket listener;
     listener.option().handleReuseAddr();
     listener.option().handleNonBlock();
@@ -78,7 +78,7 @@ Coroutine echoServer() {
     g_done.store(true, std::memory_order_release);
 }
 
-Coroutine echoClient() {
+Task<void> echoClient() {
     while (!g_server_ready.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -112,8 +112,8 @@ int main() {
     IOSchedulerType scheduler;
     scheduler.start();
 
-    scheduler.spawn(echoServer());
-    scheduler.spawn(echoClient());
+    scheduleTask(scheduler, echoServer());
+    scheduleTask(scheduler, echoClient());
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (!g_done.load(std::memory_order_acquire) &&

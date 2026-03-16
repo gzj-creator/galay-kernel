@@ -20,7 +20,7 @@ namespace {
 std::atomic<bool> g_done{false};
 std::atomic<long long> g_elapsedMs{0};
 
-Coroutine sleepTask() {
+Task<void> sleepTask() {
     const auto start = std::chrono::steady_clock::now();
 
     co_await sleep(120ms);
@@ -40,7 +40,7 @@ int main() {
     runtime.start();
 
     auto* io = runtime.getNextIOScheduler();
-    io->spawn(sleepTask());
+    scheduleTask(io, sleepTask());
 
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (!g_done.load(std::memory_order_acquire) &&

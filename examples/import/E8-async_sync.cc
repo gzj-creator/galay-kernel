@@ -24,7 +24,7 @@ std::atomic<int> g_worker_done{0};
 std::atomic<bool> g_wait_done{false};
 std::atomic<int> g_compute_value{0};
 
-Coroutine guardedWorker(int iterations) {
+Task<void> guardedWorker(int iterations) {
     for (int i = 0; i < iterations; ++i) {
         auto locked = co_await g_mutex.lock().timeout(200ms);
         if (!locked) {
@@ -40,7 +40,7 @@ Coroutine guardedWorker(int iterations) {
     co_return;
 }
 
-Coroutine computeTask(AsyncWaiter<int>* waiter) {
+Task<void> computeTask(AsyncWaiter<int>* waiter) {
     int sum = 0;
     for (int i = 1; i <= 1000; ++i) {
         sum += i;
@@ -49,7 +49,7 @@ Coroutine computeTask(AsyncWaiter<int>* waiter) {
     co_return;
 }
 
-Coroutine waitComputeResult(AsyncWaiter<int>* waiter) {
+Task<void> waitComputeResult(AsyncWaiter<int>* waiter) {
     auto result = co_await waiter->wait().timeout(1s);
     if (result) {
         g_compute_value.store(result.value(), std::memory_order_release);
@@ -70,10 +70,10 @@ int main() {
 
     AsyncWaiter<int> waiter;
 
-    io->spawn(guardedWorker(kIterations));
-    io->spawn(guardedWorker(kIterations));
-    io->spawn(waitComputeResult(&waiter));
-    compute->spawn(computeTask(&waiter));
+    scheduleTask(io, guardedWorker(kIterations));
+    scheduleTask(io, guardedWorker(kIterations));
+    scheduleTask(io, waitComputeResult(&waiter));
+    scheduleTask(compute, computeTask(&waiter));
 
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while ((g_worker_done.load(std::memory_order_acquire) < 2 ||

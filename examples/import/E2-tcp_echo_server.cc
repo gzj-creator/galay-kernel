@@ -25,7 +25,7 @@ std::atomic<bool> g_server_ready{false};
 std::atomic<bool> g_server_done{false};
 std::atomic<bool> g_client_done{false};
 
-Coroutine echoServer() {
+Task<void> echoServer() {
     TcpSocket listener;
 
     auto optResult = listener.option().handleReuseAddr();
@@ -86,7 +86,7 @@ Coroutine echoServer() {
     g_server_done.store(true, std::memory_order_release);
 }
 
-Coroutine echoClient() {
+Task<void> echoClient() {
     while (!g_server_ready.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -128,8 +128,8 @@ int main() {
     runtime.start();
 
     auto* io = runtime.getNextIOScheduler();
-    io->spawn(echoServer());
-    io->spawn(echoClient());
+    scheduleTask(io, echoServer());
+    scheduleTask(io, echoClient());
 
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while ((!g_server_done.load(std::memory_order_acquire) ||

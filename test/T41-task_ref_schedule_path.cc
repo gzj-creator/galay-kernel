@@ -6,6 +6,7 @@
  */
 
 #include "galay-kernel/kernel/Scheduler.hpp"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/Waker.h"
 #include <iostream>
 
@@ -13,7 +14,7 @@ using namespace galay::kernel;
 
 namespace {
 
-Coroutine pendingTask() {
+Task<void> pendingTask() {
     co_return;
 }
 
@@ -52,10 +53,10 @@ public:
 
 bool verifyWakerUsesTaskRefSchedule() {
     CaptureScheduler scheduler;
-    Coroutine co = pendingTask();
-    detail::CoroutineAccess::setScheduler(co, &scheduler);
+    Task<void> task = pendingTask();
+    detail::setTaskScheduler(detail::TaskAccess::taskRef(task), &scheduler);
 
-    Waker waker(detail::CoroutineAccess::taskRef(co));
+    Waker waker(detail::TaskAccess::taskRef(task));
     waker.wakeUp();
 
     if (scheduler.schedule_calls != 1) {
@@ -71,20 +72,23 @@ bool verifyWakerUsesTaskRefSchedule() {
     return true;
 }
 
-bool verifyCoroutineResumeUsesTaskRefSchedule() {
+bool verifyTaskResumeHelperUsesTaskRefSchedule() {
     CaptureScheduler scheduler;
-    Coroutine co = pendingTask();
-    detail::CoroutineAccess::setScheduler(co, &scheduler);
+    Task<void> task = pendingTask();
+    detail::setTaskScheduler(detail::TaskAccess::taskRef(task), &scheduler);
 
-    detail::CoroutineAccess::resume(co);
+    if (!detail::requestTaskResume(detail::TaskAccess::taskRef(task))) {
+        std::cerr << "[T41] expected requestTaskResume to schedule pending task\n";
+        return false;
+    }
 
     if (scheduler.schedule_calls != 1) {
-        std::cerr << "[T41] expected Coroutine::resume to call schedule once, got "
+        std::cerr << "[T41] expected requestTaskResume to call schedule once, got "
                   << scheduler.schedule_calls << "\n";
         return false;
     }
     if (scheduler.schedule_immediately_calls != 0) {
-        std::cerr << "[T41] expected Coroutine::resume not to call scheduleImmediately, got "
+        std::cerr << "[T41] expected requestTaskResume not to call scheduleImmediately, got "
                   << scheduler.schedule_immediately_calls << "\n";
         return false;
     }
@@ -97,7 +101,7 @@ int main() {
     if (!verifyWakerUsesTaskRefSchedule()) {
         return 1;
     }
-    if (!verifyCoroutineResumeUsesTaskRefSchedule()) {
+    if (!verifyTaskResumeHelperUsesTaskRefSchedule()) {
         return 1;
     }
 

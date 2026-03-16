@@ -9,9 +9,9 @@
  *
  * 使用方式：
  * @code
- * // IO 协程中
+ * // IO 任务中
  * AsyncWaiter<int> waiter;
- * computeScheduler.spawn(computeTask(&waiter));
+ * scheduleTask(*computeScheduler, computeTask(&waiter));
  * auto result = co_await waiter.wait();  // 挂起等待
  * if (result) {
  *     // 使用 result.value()
@@ -23,10 +23,10 @@
  *     // 超时或错误
  * }
  *
- * // 计算协程中
- * Coroutine computeTask(AsyncWaiter<int>* waiter) {
+ * // 计算任务中
+ * Task<void> computeTask(AsyncWaiter<int>* waiter) {
  *     int result = heavyCompute();
- *     waiter->notify(result);  // 唤醒等待的协程
+ *     waiter->notify(result);  // 唤醒等待任务
  *     co_return;
  * }
  * @endcode
@@ -35,8 +35,7 @@
 #ifndef GALAY_KERNEL_ASYNC_WAITER_H
 #define GALAY_KERNEL_ASYNC_WAITER_H
 
-#include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/kernel/Scheduler.hpp"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/kernel/Waker.h"
 #include "galay-kernel/common/Error.h"
@@ -65,7 +64,8 @@ public:
     explicit AsyncWaiterAwaitable(AsyncWaiter<T>* waiter) : m_waiter(waiter) {}
 
     bool await_ready() const noexcept;
-    bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
     std::expected<T, IOError> await_resume() noexcept;
 
 private:
@@ -84,7 +84,8 @@ public:
     explicit AsyncWaiterAwaitable(AsyncWaiter<void>* waiter) : m_waiter(waiter) {}
 
     bool await_ready() const noexcept;
-    bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
     std::expected<void, IOError> await_resume() noexcept { return m_result; }
 
 private:
@@ -98,8 +99,8 @@ private:
  *
  * @tparam T 结果类型
  *
- * @details 用于跨线程协程同步。一个协程调用 wait() 挂起，
- * 另一个线程/协程调用 notify() 设置结果并唤醒。
+ * @details 用于跨线程 Task 同步。一个任务调用 wait() 挂起，
+ * 另一个线程/任务调用 notify() 设置结果并唤醒。
  *
  * @note 线程安全，每个 AsyncWaiter 实例只能使用一次
  */
@@ -237,7 +238,8 @@ bool AsyncWaiterAwaitable<T>::await_ready() const noexcept {
 }
 
 template<typename T>
-bool AsyncWaiterAwaitable<T>::await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
+template <typename Promise>
+bool AsyncWaiterAwaitable<T>::await_suspend(std::coroutine_handle<Promise> handle) noexcept {
     m_waiter->m_waker = Waker(handle);
 
     // 设置等待状态
@@ -270,7 +272,8 @@ inline bool AsyncWaiterAwaitable<void>::await_ready() const noexcept {
     return m_waiter->m_ready.load(std::memory_order_acquire);
 }
 
-inline bool AsyncWaiterAwaitable<void>::await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
+template <typename Promise>
+inline bool AsyncWaiterAwaitable<void>::await_suspend(std::coroutine_handle<Promise> handle) noexcept {
     m_waiter->m_waker = Waker(handle);
     bool expected = false;
     if (!m_waiter->m_waiting.compare_exchange_strong(expected, true,

@@ -5,7 +5,6 @@
  * 通过条件：预期异常被成功捕获，测试返回 0。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <cassert>
 #include <iostream>

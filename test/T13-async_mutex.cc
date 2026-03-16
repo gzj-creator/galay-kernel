@@ -11,7 +11,7 @@
 #include <thread>
 #include <vector>
 #include "galay-kernel/concurrency/AsyncMutex.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 #include "test_result_writer.h"
 
@@ -37,7 +37,7 @@ std::atomic<int> g_total{0};
 // ============================================================================
 std::atomic<bool> g_test1_done{false};
 
-Coroutine testBasicLockUnlock(AsyncMutex* mutex) {
+Task<void> testBasicLockUnlock(AsyncMutex* mutex) {
     co_await mutex->lock();
     // 模拟临界区操作（已移除 sleep_for）
     mutex->unlock();
@@ -54,7 +54,7 @@ std::atomic<int> g_test3_current{0};
 std::atomic<int> g_test3_completed{0};
 constexpr int TEST3_COROUTINE_COUNT = 10;
 
-Coroutine testMutualExclusion(AsyncMutex* mutex) {
+Task<void> testMutualExclusion(AsyncMutex* mutex) {
     co_await mutex->lock();
 
     int current = g_test3_current.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -82,7 +82,7 @@ std::mutex g_test4_order_mutex;
 std::atomic<int> g_test4_completed{0};
 constexpr int TEST4_COROUTINE_COUNT = 5;
 
-Coroutine testFairness(AsyncMutex* mutex, int id) {
+Task<void> testFairness(AsyncMutex* mutex, int id) {
     co_await mutex->lock();
 
     {
@@ -105,7 +105,7 @@ std::atomic<int> g_test5_completed{0};
 constexpr int TEST5_COROUTINE_COUNT = 50;
 constexpr int TEST5_INCREMENT_COUNT = 10;
 
-Coroutine testStress(AsyncMutex* mutex) {
+Task<void> testStress(AsyncMutex* mutex) {
     for (int i = 0; i < TEST5_INCREMENT_COUNT; ++i) {
         co_await mutex->lock();
         g_test5_sum++;
@@ -121,7 +121,7 @@ Coroutine testStress(AsyncMutex* mutex) {
 std::atomic<bool> g_test6_locked_inside{false};
 std::atomic<bool> g_test6_done{false};
 
-Coroutine testIsLocked(AsyncMutex* mutex) {
+Task<void> testIsLocked(AsyncMutex* mutex) {
     co_await mutex->lock();
     g_test6_locked_inside = mutex->isLocked();
     mutex->unlock();
@@ -138,7 +138,7 @@ std::atomic<int> g_test8_completed{0};
 constexpr int TEST8_COROUTINE_COUNT = 100;
 constexpr int TEST8_INCREMENT_COUNT = 5;
 
-Coroutine testRaceCondition(AsyncMutex* mutex) {
+Task<void> testRaceCondition(AsyncMutex* mutex) {
     for (int i = 0; i < TEST8_INCREMENT_COUNT; ++i) {
         co_await mutex->lock();
         // 非原子操作，如果互斥失效会导致数据竞争
@@ -156,7 +156,7 @@ Coroutine testRaceCondition(AsyncMutex* mutex) {
 std::atomic<int> g_test9_completed{0};
 constexpr int TEST9_ITERATIONS = 100;
 
-Coroutine testRapidLockUnlock(AsyncMutex* mutex) {
+Task<void> testRapidLockUnlock(AsyncMutex* mutex) {
     for (int i = 0; i < TEST9_ITERATIONS; ++i) {
         co_await mutex->lock();
         // 立即释放，不做任何操作
@@ -172,7 +172,7 @@ Coroutine testRapidLockUnlock(AsyncMutex* mutex) {
 std::atomic<int> g_test12_completed{0};
 constexpr int TEST12_COROUTINE_COUNT = 20;  // 超过初始容量
 
-Coroutine testQueueCapacity(AsyncMutex* mutex) {
+Task<void> testQueueCapacity(AsyncMutex* mutex) {
     co_await mutex->lock();
     // 已移除 sleep_for
     mutex->unlock();
@@ -185,7 +185,7 @@ Coroutine testQueueCapacity(AsyncMutex* mutex) {
 // ============================================================================
 std::atomic<int> g_test13_completed{0};
 
-Coroutine testEarlyExit(AsyncMutex* mutex, bool shouldExit) {
+Task<void> testEarlyExit(AsyncMutex* mutex, bool shouldExit) {
     co_await mutex->lock();
     if (shouldExit) {
         mutex->unlock();
@@ -203,7 +203,7 @@ Coroutine testEarlyExit(AsyncMutex* mutex, bool shouldExit) {
 std::atomic<int> g_test15_completed{0};
 std::atomic<bool> g_test15_long_holder_done{false};
 
-Coroutine testLongHold(AsyncMutex* mutex) {
+Task<void> testLongHold(AsyncMutex* mutex) {
     co_await mutex->lock();
     // 长时间持有（已移除 sleep_for）
     mutex->unlock();
@@ -211,7 +211,7 @@ Coroutine testLongHold(AsyncMutex* mutex) {
     co_return;
 }
 
-Coroutine testLongHoldWaiter(AsyncMutex* mutex) {
+Task<void> testLongHoldWaiter(AsyncMutex* mutex) {
     co_await mutex->lock();
     mutex->unlock();
     g_test15_completed.fetch_add(1, std::memory_order_relaxed);
@@ -227,7 +227,7 @@ std::atomic<int> g_test19_completed{0};
 constexpr int TEST19_SCHEDULER_COUNT = 3;
 constexpr int TEST19_OPS_PER_SCHEDULER = 20;
 
-Coroutine testCrossScheduler(AsyncMutex* mutex) {
+Task<void> testCrossScheduler(AsyncMutex* mutex) {
     for (int i = 0; i < TEST19_OPS_PER_SCHEDULER; ++i) {
         co_await mutex->lock();
         // 非原子操作，验证互斥性
@@ -259,7 +259,7 @@ void runTests() {
         AsyncMutex mutex(8);  // 小容量队列
 
         scheduler.start();
-        scheduler.spawn(testBasicLockUnlock(&mutex));
+        scheduler.schedule(detail::TaskAccess::detachTask(testBasicLockUnlock(&mutex)));
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test1_done) {
@@ -288,7 +288,7 @@ void runTests() {
         scheduler.start();
 
         for (int i = 0; i < TEST3_COROUTINE_COUNT; ++i) {
-            scheduler.spawn(testMutualExclusion(&mutex));
+            scheduler.schedule(detail::TaskAccess::detachTask(testMutualExclusion(&mutex)));
         }
 
         auto start = std::chrono::steady_clock::now();
@@ -326,7 +326,7 @@ void runTests() {
 
         // 按顺序添加协程
         for (int i = 0; i < TEST4_COROUTINE_COUNT; ++i) {
-            scheduler.spawn(testFairness(&mutex, i));
+            scheduler.schedule(detail::TaskAccess::detachTask(testFairness(&mutex, i)));
             // 已移除 sleep_for，确保顺序
         }
 
@@ -367,7 +367,7 @@ void runTests() {
         scheduler.start();
 
         for (int i = 0; i < TEST5_COROUTINE_COUNT; ++i) {
-            scheduler.spawn(testStress(&mutex));
+            scheduler.schedule(detail::TaskAccess::detachTask(testStress(&mutex)));
         }
 
         auto start = std::chrono::steady_clock::now();
@@ -404,7 +404,7 @@ void runTests() {
         bool initially_unlocked = !mutex.isLocked();
 
         scheduler.start();
-        scheduler.spawn(testIsLocked(&mutex));
+        scheduler.schedule(detail::TaskAccess::detachTask(testIsLocked(&mutex)));
 
         auto start = std::chrono::steady_clock::now();
         while (!g_test6_done) {
@@ -439,7 +439,7 @@ void runTests() {
         scheduler.start();
 
         for (int i = 0; i < TEST8_COROUTINE_COUNT; ++i) {
-            scheduler.spawn(testRaceCondition(&mutex));
+            scheduler.schedule(detail::TaskAccess::detachTask(testRaceCondition(&mutex)));
         }
 
         auto start = std::chrono::steady_clock::now();
@@ -476,7 +476,7 @@ void runTests() {
         scheduler.start();
 
         for (int i = 0; i < 5; ++i) {
-            scheduler.spawn(testRapidLockUnlock(&mutex));
+            scheduler.schedule(detail::TaskAccess::detachTask(testRapidLockUnlock(&mutex)));
         }
 
         auto start = std::chrono::steady_clock::now();
@@ -507,7 +507,7 @@ void runTests() {
         scheduler.start();
 
         for (int i = 0; i < TEST12_COROUTINE_COUNT; ++i) {
-            scheduler.spawn(testQueueCapacity(&mutex));
+            scheduler.schedule(detail::TaskAccess::detachTask(testQueueCapacity(&mutex)));
         }
 
         auto start = std::chrono::steady_clock::now();
@@ -539,7 +539,7 @@ void runTests() {
 
         // 一些提前退出，一些正常完成
         for (int i = 0; i < 5; ++i) {
-            scheduler.spawn(testEarlyExit(&mutex, i % 2 == 0));  // 偶数提前退出
+            scheduler.schedule(detail::TaskAccess::detachTask(testEarlyExit(&mutex, i % 2 == 0)));  // 偶数提前退出
         }
 
         auto start = std::chrono::steady_clock::now();
@@ -573,12 +573,12 @@ void runTests() {
 
         scheduler.start();
 
-        scheduler.spawn(testLongHold(&mutex));
+        scheduler.schedule(detail::TaskAccess::detachTask(testLongHold(&mutex)));
         // 已移除 sleep_for
 
         // 添加等待者
         for (int i = 0; i < 3; ++i) {
-            scheduler.spawn(testLongHoldWaiter(&mutex));
+            scheduler.schedule(detail::TaskAccess::detachTask(testLongHoldWaiter(&mutex)));
         }
 
         auto start = std::chrono::steady_clock::now();
@@ -619,7 +619,7 @@ void runTests() {
         // 启动调度器并提交协程
         for (int i = 0; i < TEST19_SCHEDULER_COUNT; ++i) {
             schedulers[i]->start();
-            schedulers[i]->spawn(testCrossScheduler(&mutex));
+            schedulers[i]->schedule(detail::TaskAccess::detachTask(testCrossScheduler(&mutex)));
         }
 
         // 等待所有协程完成

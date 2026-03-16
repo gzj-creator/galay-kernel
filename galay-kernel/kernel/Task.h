@@ -41,6 +41,7 @@ Runtime* swapCurrentRuntime(Runtime* runtime) noexcept;
 bool scheduleTask(const TaskRef& task) noexcept;
 bool scheduleTaskDeferred(const TaskRef& task) noexcept;
 bool scheduleTaskImmediately(const TaskRef& task) noexcept;
+bool requestTaskResume(const TaskRef& task) noexcept;
 std::thread::id schedulerThreadId(Scheduler* scheduler) noexcept;
 void completeTaskState(const TaskRef& task) noexcept;
 void attachTaskContinuation(const TaskRef& task, TaskRef next) noexcept;
@@ -497,8 +498,12 @@ public:
         }
 
         detail::inheritTaskRuntime(childTask, detail::taskRuntime(waitingTask));
-        if (waitingTask.belongScheduler() == nullptr) {
+        auto* scheduler = waitingTask.belongScheduler();
+        if (scheduler == nullptr) {
             throw std::runtime_error("awaited task has no scheduler available");
+        }
+        if (childTask.belongScheduler() == nullptr) {
+            detail::setTaskScheduler(childTask, scheduler);
         }
         if (!detail::scheduleTaskImmediately(childTask)) {
             throw std::runtime_error("failed to schedule awaited task");

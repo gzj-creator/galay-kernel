@@ -54,7 +54,7 @@ bool createTestFile() {
     return true;
 }
 
-Coroutine sendfileServer() {
+Task<void> sendfileServer() {
     TcpSocket listener;
     listener.option().handleReuseAddr();
     listener.option().handleNonBlock();
@@ -107,7 +107,7 @@ Coroutine sendfileServer() {
     g_done.store(true, std::memory_order_release);
 }
 
-Coroutine sendfileClient() {
+Task<void> sendfileClient() {
     while (!g_server_ready.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -146,8 +146,8 @@ int main() {
     runtime.start();
 
     auto* io = runtime.getNextIOScheduler();
-    io->spawn(sendfileServer());
-    io->spawn(sendfileClient());
+    scheduleTask(io, sendfileServer());
+    scheduleTask(io, sendfileClient());
 
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (!g_done.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {

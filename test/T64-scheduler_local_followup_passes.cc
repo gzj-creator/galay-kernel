@@ -6,6 +6,7 @@
  */
 
 #include "galay-kernel/kernel/SchedulerCore.h"
+#include "galay-kernel/kernel/Task.h"
 
 #include <iostream>
 
@@ -13,7 +14,7 @@ using namespace galay::kernel;
 
 namespace {
 
-Coroutine pendingTask() {
+Task<void> pendingTask() {
     co_return;
 }
 
@@ -26,7 +27,7 @@ bool verifyLocalFollowupPassesDrainLocalBacklog() {
     size_t resumed = 0;
 
     for (size_t i = 0; i < kTaskCount; ++i) {
-        worker.scheduleLocal(detail::CoroutineAccess::detachTask(pendingTask()));
+        worker.scheduleLocal(detail::TaskAccess::detachTask(pendingTask()));
     }
 
     const auto summary = core.runLocalFollowupPasses(
@@ -70,7 +71,7 @@ bool verifyRemoteDrainDoesNotNeedFollowupPasses() {
     size_t remote_drained = 0;
 
     for (size_t i = 0; i < kTaskCount; ++i) {
-        worker.scheduleInjected(detail::CoroutineAccess::detachTask(pendingTask()));
+        worker.scheduleInjected(detail::TaskAccess::detachTask(pendingTask()));
     }
 
     const auto summary = core.runLocalFollowupPasses(

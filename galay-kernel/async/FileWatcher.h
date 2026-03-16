@@ -28,8 +28,8 @@ using namespace galay::kernel;
  * - macOS: 使用 kqueue EVFILT_VNODE
  *
  * @code
- * Coroutine watchFile(IOScheduler* scheduler) {
- *     FileWatcher watcher(scheduler);
+ * Task<void> watchFile() {
+ *     FileWatcher watcher;
  *     auto result = watcher.addWatch("/path/to/file", FileWatchEvent::Modify);
  *     if (!result) {
  *         // 处理错误

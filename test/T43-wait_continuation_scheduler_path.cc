@@ -5,9 +5,9 @@
  * 通过条件：continuation 恢复到预期调度器且测试返回 0。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/kernel/Waker.h"
 #include "galay-kernel/kernel/Scheduler.hpp"
+#include "galay-kernel/kernel/Task.h"
+#include "galay-kernel/kernel/Waker.h"
 
 #include <deque>
 #include <iostream>
@@ -80,7 +80,8 @@ struct ChildSuspendAwaitable {
 
     bool await_ready() const noexcept { return false; }
 
-    bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept {
         state->waker = Waker(handle);
         state->armed = true;
         return true;
@@ -89,15 +90,14 @@ struct ChildSuspendAwaitable {
     void await_resume() const noexcept {}
 };
 
-Coroutine childTask(ChildSuspendState* state) {
+Task<void> childTask(ChildSuspendState* state) {
     co_await ChildSuspendAwaitable{state};
     state->child_done = true;
     co_return;
 }
 
-Coroutine parentTask(ChildSuspendState* child_state, ParentState* parent_state) {
-    Coroutine child = childTask(child_state);
-    co_await child.wait();
+Task<void> parentTask(ChildSuspendState* child_state, ParentState* parent_state) {
+    co_await childTask(child_state);
     ++parent_state->parent_resumes;
     parent_state->parent_done = true;
     co_return;
@@ -108,7 +108,7 @@ bool verifyWaitContinuationReturnsThroughScheduler() {
     ChildSuspendState child_state;
     ParentState parent_state;
 
-    if (!scheduler.scheduleImmediately(detail::CoroutineAccess::detachTask(
+    if (!scheduler.scheduleImmediately(detail::TaskAccess::detachTask(
             parentTask(&child_state, &parent_state)))) {
         std::cerr << "[T43] failed to start parent task\n";
         return false;

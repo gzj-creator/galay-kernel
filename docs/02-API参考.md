@@ -35,12 +35,14 @@
 
 - Runtime / 调度：
   - `galay-kernel/kernel/Runtime.h`
+  - `galay-kernel/kernel/Task.h`
+  - `galay-kernel/kernel/Scheduler.hpp`
+  - `galay-kernel/kernel/IOScheduler.hpp`
   - `galay-kernel/kernel/ComputeScheduler.h`
   - `galay-kernel/kernel/EpollScheduler.h`
   - `galay-kernel/kernel/KqueueScheduler.h`
   - `galay-kernel/kernel/IOUringScheduler.h`
   - `galay-kernel/kernel/TimerScheduler.h`
-  - `galay-kernel/kernel/Coroutine.h`
   - `galay-kernel/kernel/Awaitable.h`（仅当你要做底层组合 Awaitable / 协议扩展）
 - 网络与文件：
   - `galay-kernel/async/TcpSocket.h`
@@ -69,8 +71,9 @@
 
 - `galay::kernel`
   - `Runtime` / `RuntimeBuilder` / `RuntimeConfig`
+  - `Task<T>` / `JoinHandle<T>` / `TaskRef`
   - `ComputeScheduler` / `IOScheduler`
-  - `Coroutine` / `spawn(...)` / `sleep(...)`
+  - `sleep(...)`
   - `TimerScheduler`
   - `HandleOption`
   - `AsyncMutex` / `MpscChannel<T>` / `UnsafeChannel<T>` / `AsyncWaiter<T>`
@@ -98,7 +101,7 @@
 `import galay.kernel;` 当前导出面：
 
 - 通用类型：`Defn.hpp`、`Error.h`、`Host.hpp`、`HandleOption.h`、`Bytes.h`、`Buffer.h`、`Sleep.hpp`
-- Runtime：`Coroutine.h`、`Scheduler.hpp`、`IOScheduler.hpp`、`ComputeScheduler.h`、`Runtime.h`、`TimerScheduler.h`
+- Runtime：`Task.h`、`Scheduler.hpp`、`IOScheduler.hpp`、`ComputeScheduler.h`、`Runtime.h`、`TimerScheduler.h`
 - 并发：`MpscChannel.h`、`UnsafeChannel.h`、`AsyncMutex.h`、`AsyncWaiter.h`
 - IO：`TcpSocket.h`、`UdpSocket.h`、`FileWatcher.h`
 - 平台裁剪：
@@ -272,7 +275,7 @@
 - `getWriteIovecs(...)` / `getReadIovecs(...)` 最多返回两段连续内存，专门服务 `readv` / `writev`
 - `consume(...)` 在把可读数据完全耗尽后，会把读写指针都重置到 `0`
 
-## Runtime / Scheduler / Coroutine / Timer
+## Runtime / Scheduler / Task / Timer
 
 头文件：
 
@@ -281,7 +284,9 @@
 - `galay-kernel/kernel/EpollScheduler.h`
 - `galay-kernel/kernel/KqueueScheduler.h`
 - `galay-kernel/kernel/IOUringScheduler.h`
-- `galay-kernel/kernel/Coroutine.h`
+- `galay-kernel/kernel/Task.h`
+- `galay-kernel/kernel/Scheduler.hpp`
+- `galay-kernel/kernel/IOScheduler.hpp`
 - `galay-kernel/kernel/TimerScheduler.h`
 - `galay-kernel/common/Timer.hpp`
 - `galay-kernel/common/Sleep.hpp`
@@ -295,13 +300,11 @@
 - `class RuntimeBuilder`
 - `template <typename T> class Task`
 - `template <typename T> class JoinHandle`
+- `class TaskRef`
 - `class ComputeScheduler`
 - `class EpollScheduler`
 - `class KqueueScheduler`
 - `class IOUringScheduler`
-- `class Coroutine`
-- `struct WaitResult`
-- `struct SpawnAwaitable`
 - `class Timer`
 - `class CBTimer`
 - `class TimerScheduler`
@@ -378,16 +381,17 @@
 - `ComputeScheduler()`
 - `void start()`
 - `void stop()`
-- `bool spawn(Coroutine coro)`
-- `bool spawnImmidiately(Coroutine co)`
+- `bool schedule(TaskRef task)`
+- `bool scheduleDeferred(TaskRef task)`
+- `bool scheduleImmediately(TaskRef task)`
 - `bool isRunning() const`
 - `bool addTimer(Timer::ptr timer)`
 
 语义说明：
 
 - `ComputeScheduler` 是单工作线程调度器，底层队列是 `moodycamel::BlockingConcurrentQueue<ComputeTask>`
-- `spawn(...)` 会把尚未绑定调度器的协程绑定到当前 `ComputeScheduler`；如果协程已绑定到其他调度器，则返回 `false`
-- `spawnImmidiately(...)` 只接受未绑定调度器的协程；它会在当前线程立即 `resume`，不会先入队
+- `schedule(...)` / `scheduleDeferred(...)` 会接收 `TaskRef`；若任务尚未绑定 owner scheduler，会绑定到当前 `ComputeScheduler`
+- `scheduleImmediately(...)` 会在当前线程立即恢复任务；若任务已绑定到其他调度器，则返回 `false`
 - `addTimer(...)` 只是转发到全局 `TimerScheduler::getInstance()->addTimer(...)`
 
 具体 IO 调度器：
@@ -401,7 +405,8 @@
 - 生命周期：`start()`、`stop()`、`notify()`
 - 事件注册：`addAccept(...)`、`addConnect(...)`、`addRecv(...)`、`addSend(...)`、`addReadv(...)`、`addWritev(...)`、`addClose(...)`
 - 文件 / UDP / 监控 / 零拷贝：`addFileRead(...)`、`addFileWrite(...)`、`addRecvFrom(...)`、`addSendTo(...)`、`addFileWatch(...)`、`addSendFile(...)`、`addSequence(...)`
-- 调度：`spawn(...)`、`schedule(...)`、`spawnDeferred(...)`、`scheduleDeferred(...)`、`spawnImmidiately(...)`
+- 调度：`schedule(...)`、`scheduleDeferred(...)`、`scheduleImmediately(...)`
+- 任务辅助：`scheduleTask(...)`、`scheduleTaskDeferred(...)`、`scheduleTaskImmediately(...)`
 - 诊断：`int remove(IOController* controller)`、`std::optional<IOError> lastError() const`
 
 平台边界：
@@ -455,38 +460,38 @@ parse 语义：
 - 半包不提前唤醒：`test/T76-sequence_parser_need_more.cc`
 - 粘包单次恢复尽量吃完：`test/T77-sequence_parser_coalesced_frames.cc`
 
-协程辅助：
+任务辅助：
 
-- `Coroutine`
 - `template <typename T> class Task`
 - `template <typename T> class JoinHandle`
-- `WaitResult Coroutine::wait()`
-- `Coroutine& then(Coroutine co) &`
-- `Coroutine&& then(Coroutine co) &&`
-- `SpawnAwaitable spawn(Coroutine co)`
+- `class TaskRef`
+- `Task<void>& then(Task<void> next) &`
+- `Task<void>&& then(Task<void> next) &&`
+- `template <typename T> bool scheduleTask(Scheduler&, Task<T>&&)`
+- `template <typename T> bool scheduleTaskDeferred(Scheduler&, Task<T>&&)`
+- `template <typename T> bool scheduleTaskImmediately(Scheduler&, Task<T>&&)`
 - `template<concepts::ChronoDuration Duration> SleepAwaitable sleep(Duration duration)`
 
-`Task<T>` / `JoinHandle<T>` / `Coroutine` / `WaitResult` / `SpawnAwaitable`：
+`Task<T>` / `JoinHandle<T>` / `TaskRef`：
 
-- `Task<T>`：runtime 提交单元；通过 `Runtime::blockOn(...)`、`Runtime::spawn(...)`、`RuntimeHandle::spawn(...)` 消费
+- `Task<T>`：公开任务返回类型；可直接 `co_await`，也可通过 `Runtime::blockOn(...)`、`Runtime::spawn(...)`、`RuntimeHandle::spawn(...)` 提交
 - `JoinHandle<T>::wait()`：阻塞到结果就绪，但不提取结果
 - `JoinHandle<T>::join()`：提取结果或重抛异常；结果只能消费一次
-- `Coroutine`：保留 `isValid()`、`done()`、`wait()`、`then(...)`
-- `SpawnAwaitable spawn(Coroutine co)`：把协程提交到当前协程所属调度器
+- `Task<void>::then(...)`：用于根任务链式串接，continuation 生命周期不依赖调用点临时对象
+- `TaskRef`：轻量任务引用；主要供 scheduler/runtime 内核和低层测试使用
 
 内部说明：
 
 - `TaskRef`、`ComputeTask`、调度器绑定 / resume plumbing 已降级为 runtime/scheduler 内核实现细节，不再作为公开工作流 API 描述
-- 需要排障或读实现时，以 `galay-kernel/kernel/Coroutine.h` 与相关测试为准，不建议业务代码直接依赖这些内部类型
+- 需要排障或读实现时，以 `galay-kernel/kernel/Task.h`、`Scheduler.hpp` 与相关测试为准，不建议业务代码直接依赖这些内部类型
 
 语义说明：
 
-- `Coroutine` 拷贝后仍共享同一任务状态；`done()` 读取的是共享的原子完成位
-- `Coroutine::then(...)` 用于根协程链式串接，continuation 生命周期不依赖调用点临时对象
-- `co_await coro.wait()` 会先尝试把被等待协程 `spawnImmidiately(...)` 到当前等待者所属调度器；若目标协程尚未完成，则把等待者挂到目标协程 continuation
-- 当前 `wait()` 仍是单 waiter 语义；同一个 `Coroutine` 不应被多个协程并发 `wait()`
+- `Task<T>` move 后仍共享同一底层任务状态；完成位和 continuation 挂接都在共享的 `TaskState` 上
+- `co_await childTask()` 会先尝试把子任务立即提交到当前等待者所属调度器；若子任务尚未完成，则把等待者挂到子任务 continuation
+- `Task<void>::then(...)` 仅承接根任务串接语义；当前没有泛型 `map/flatMap` 一类 combinator
 - 被等待协程完成后，waiter 会通过其所属 `Scheduler::schedule(...)` 路径恢复，而不是直接跨线程恢复底层句柄
-- `co_await spawn(child)` 只负责把 `child` 提交到当前协程所属调度器；`await_suspend(...)` 返回 `false`，因此当前协程不会因为这个 awaitable 被挂起
+- 低层直接调度 task 时，推荐通过 `scheduleTask(...)` / `scheduleTaskDeferred(...)` / `scheduleTaskImmediately(...)` 包装辅助函数，而不是手工拆 `TaskRef`
 
 `Timer` / `CBTimer` / `TimerScheduler`：
 
@@ -722,15 +727,15 @@ parse 语义：
 - package consumer：`test/package-consumer/`
 - 测试入口统一通过 `test/` 与 package consumer 夹具交叉验证公开 API 面
 - 调度 / 运行时：`test/T11-compute_scheduler.cc`、`test/T12-mixed_scheduler.cc`
-- 协程 / sleep：`test/T1-coroutine_chain.cc`
+- task / sleep：`test/T1-task_chain.cc`
 - 并发：`test/T13-async_mutex.cc`、`test/T14-mpsc_channel.cc`、`test/T17-unsafe_channel.cc`
 - 定时器：`test/T15-timing_wheel.cc`、`test/T18-timer_scheduler.cc`
 - 真实示例总览：`docs/04-示例代码.md`
 
 ## 专题问题优先落点
 
-- `galay.kernel` / `Runtime` / `RuntimeBuilder` / `IOScheduler` / `ComputeScheduler` / `Coroutine` / `TimerScheduler`：
-  - 先看本页 `模块门面 galay.kernel`、`Runtime / Scheduler / Coroutine / Timer`
+- `galay.kernel` / `Runtime` / `RuntimeBuilder` / `IOScheduler` / `ComputeScheduler` / `Task` / `TimerScheduler`：
+  - 先看本页 `模块门面 galay.kernel`、`Runtime / Scheduler / Task / Timer`
   - 再看 `docs/01-架构设计.md` 与 `docs/03-使用指南.md`
 - `Bytes` / `StringMetaData` / `Buffer` / `RingBuffer` / `IOError` / `Host` / `IPType`：
   - 先看本页 `地址、错误与字节缓冲工具`

@@ -1,7 +1,6 @@
 #ifndef GALAY_KERNEL_EPOLL_SCHEDULER_H
 #define GALAY_KERNEL_EPOLL_SCHEDULER_H
 
-#include "Coroutine.h"
 #include "EpollReactor.h"
 #include "IOScheduler.hpp"
 #include "SchedulerCore.h"
@@ -101,7 +100,7 @@ protected:
 
 private:
     void eventLoop();
-    void processPendingCoroutines();
+    void processPendingTasks();
 };
 
 }

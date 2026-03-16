@@ -12,7 +12,7 @@
 #include <csignal>
 #include <vector>
 #include <cstring>
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -52,7 +52,7 @@ struct BenchConfig {
 
 #if defined(USE_EPOLL)
 // Epoll/AIO 压测 - 支持批量操作
-Coroutine benchmarkWorkerAIO(galay::async::AioFile* file, int worker_id, const BenchConfig& config) {
+Task<void> benchmarkWorkerAIO(galay::async::AioFile* file, int worker_id, const BenchConfig& config) {
     char* read_buffer = galay::async::AioFile::allocAlignedBuffer(config.block_size * config.batch_size);
     char* write_buffer = galay::async::AioFile::allocAlignedBuffer(config.block_size * config.batch_size);
 
@@ -147,7 +147,7 @@ void runEpollBenchmark(const BenchConfig& config) {
 
     // 启动所有 worker
     for (size_t i = 0; i < files.size(); ++i) {
-        scheduler.spawn(benchmarkWorkerAIO(files[i], i, config));
+        scheduleTask(scheduler, benchmarkWorkerAIO(files[i], i, config));
     }
 
     // 等待所有 worker 完成
@@ -211,7 +211,7 @@ void runEpollBenchmark(const BenchConfig& config) {
 
 #if defined(USE_KQUEUE) || defined(USE_IOURING)
 // Kqueue/io_uring 压测 - 单次操作
-Coroutine benchmarkWorkerAsync(galay::async::AsyncFile* file, int worker_id, const BenchConfig& config) {
+Task<void> benchmarkWorkerAsync(galay::async::AsyncFile* file, int worker_id, const BenchConfig& config) {
     char read_buffer[8192];
     char write_buffer[8192];
 
@@ -278,7 +278,7 @@ void runKqueueBenchmark(const BenchConfig& config) {
 
     // 启动所有 worker
     for (size_t i = 0; i < files.size(); ++i) {
-        scheduler.spawn(benchmarkWorkerAsync(files[i], i, config));
+        scheduleTask(scheduler, benchmarkWorkerAsync(files[i], i, config));
     }
 
     // 等待所有 worker 完成
@@ -362,7 +362,7 @@ void runIOUringBenchmark(const BenchConfig& config) {
 
     // 启动所有 worker
     for (size_t i = 0; i < files.size(); ++i) {
-        scheduler.spawn(benchmarkWorkerAsync(files[i], i, config));
+        scheduleTask(scheduler, benchmarkWorkerAsync(files[i], i, config));
     }
 
     // 等待所有 worker 完成

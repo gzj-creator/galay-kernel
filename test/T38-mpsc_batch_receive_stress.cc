@@ -38,7 +38,7 @@ bool waitUntil(const std::atomic<bool>& flag,
     return flag.load(std::memory_order_acquire);
 }
 
-Coroutine batchConsumer(MpscChannel<int64_t>* channel) {
+Task<void> batchConsumer(MpscChannel<int64_t>* channel) {
     int64_t received = 0;
     while (received < kMessageCount) {
         auto batch = co_await channel->recvBatch(256);
@@ -59,7 +59,7 @@ int main() {
     MpscChannel<int64_t> channel;
     ComputeScheduler scheduler;
     scheduler.start();
-    scheduler.spawn(batchConsumer(&channel));
+    scheduler.schedule(detail::TaskAccess::detachTask(batchConsumer(&channel)));
 
     std::thread producer([&]() {
         for (int64_t i = 0; i < kMessageCount; ++i) {

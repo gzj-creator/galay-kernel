@@ -11,7 +11,7 @@
 #include <thread>
 #include <csignal>
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -59,7 +59,7 @@ void signalHandler([[maybe_unused]] int signum) {
 }
 
 // 处理单个客户端连接
-Coroutine handleClient(GHandle clientHandle) {
+Task<void> handleClient(GHandle clientHandle) {
     TcpSocket client(clientHandle);
     client.option().handleNonBlock();
 
@@ -92,7 +92,7 @@ Coroutine handleClient(GHandle clientHandle) {
 }
 
 // 接受连接的协程
-Coroutine acceptLoop(IOScheduler* scheduler, TcpSocket* listener) {
+Task<void> acceptLoop(IOScheduler* scheduler, TcpSocket* listener) {
     while (g_running.load(std::memory_order_relaxed)) {
         Host clientHost;
         auto acceptResult = co_await listener->accept(&clientHost);
@@ -106,7 +106,7 @@ Coroutine acceptLoop(IOScheduler* scheduler, TcpSocket* listener) {
         g_total_connections.fetch_add(1, std::memory_order_relaxed);
 
         // 启动处理协程
-        scheduler->spawn(handleClient(acceptResult.value()));
+        scheduleTask(scheduler, handleClient(acceptResult.value()));
     }
     co_return;
 }
@@ -199,7 +199,7 @@ int main(int argc, char* argv[]) {
     std::thread stats(statsThread);
 
     // 启动接受连接协程
-    scheduler.spawn(acceptLoop(&scheduler, &listener));
+    scheduleTask(scheduler, acceptLoop(&scheduler, &listener));
 
     // 等待信号
     while (g_running.load(std::memory_order_relaxed)) {

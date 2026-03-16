@@ -90,8 +90,15 @@ struct RecvFromIOContext;
 struct SendToIOContext;
 struct FileWatchIOContext;
 struct SendFileIOContext;
+struct SequenceAwaitableBase;
 
 namespace detail {
+
+int registerIOSchedulerEvent(Scheduler* scheduler,
+                             IOEventType event,
+                             IOController* controller) noexcept;
+int registerIOSchedulerClose(Scheduler* scheduler,
+                             IOController* controller) noexcept;
 
 inline uint32_t normalizeAwaitableErrno(int ret) noexcept {
     return (ret < 0 && ret != -1)
@@ -118,6 +125,26 @@ inline auto resumeIOAwaitable(AwaitableT& awaitable) -> decltype(std::move(await
     awaitable.m_controller->removeAwaitable(Event);
     return std::move(awaitable.m_result);
 }
+
+template <typename AwaitableT, IOEventType Event, IOErrorCode ErrorCode, typename Promise>
+inline bool suspendRegisteredAwaitable(AwaitableT& awaitable, std::coroutine_handle<Promise> handle) {
+    awaitable.m_waker = Waker(handle);
+#ifdef USE_IOURING
+    awaitable.m_sqe_type = Event;
+#endif
+    awaitable.m_controller->fillAwaitable(Event, &awaitable);
+    auto* scheduler = awaitable.m_waker.getScheduler();
+    if (scheduler == nullptr || scheduler->type() != kIOScheduler) {
+        awaitable.m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    const int ret = registerIOSchedulerEvent(scheduler, Event, awaitable.m_controller);
+    return finalizeAwaitableAddResult(ret, ErrorCode, awaitable.m_result);
+}
+
+template <typename Promise>
+inline bool suspendSequenceAwaitable(SequenceAwaitableBase& awaitable,
+                                     std::coroutine_handle<Promise> handle);
 
 template <typename ContextT>
 constexpr IOEventType customAwaitableDefaultEvent() {
@@ -194,7 +221,11 @@ struct AcceptAwaitable: public AcceptIOContext, public TimeoutSupport<AcceptAwai
         : AcceptIOContext(host), m_controller(controller) {}
 
     bool await_ready() { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        return detail::suspendRegisteredAwaitable<AcceptAwaitable, ACCEPT, kAcceptFailed>(
+            *this, handle);
+    }
     std::expected<GHandle, IOError> await_resume();
 
     IOController* m_controller;
@@ -223,7 +254,11 @@ struct RecvAwaitable: public RecvIOContext, public TimeoutSupport<RecvAwaitable>
         : RecvIOContext(buffer, length), m_controller(controller) {}
 
     bool await_ready() { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        return detail::suspendRegisteredAwaitable<RecvAwaitable, RECV, kRecvFailed>(
+            *this, handle);
+    }
     std::expected<size_t, IOError> await_resume();
 
     IOController* m_controller;
@@ -252,7 +287,11 @@ struct SendAwaitable: public SendIOContext, public TimeoutSupport<SendAwaitable>
         : SendIOContext(buffer, length), m_controller(controller) {}
 
     bool await_ready() { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        return detail::suspendRegisteredAwaitable<SendAwaitable, SEND, kSendFailed>(
+            *this, handle);
+    }
     std::expected<size_t, IOError> await_resume();
 
     IOController* m_controller;
@@ -319,7 +358,11 @@ struct ReadvAwaitable: public ReadvIOContext, public TimeoutSupport<ReadvAwaitab
         : ReadvIOContext(iovecs, count), m_controller(controller) {}
 
     bool await_ready() { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        return detail::suspendRegisteredAwaitable<ReadvAwaitable, READV, kRecvFailed>(
+            *this, handle);
+    }
     std::expected<size_t, IOError> await_resume();
 
     IOController* m_controller;
@@ -386,7 +429,11 @@ struct WritevAwaitable: public WritevIOContext, public TimeoutSupport<WritevAwai
         : WritevIOContext(iovecs, count), m_controller(controller) {}
 
     bool await_ready() { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        return detail::suspendRegisteredAwaitable<WritevAwaitable, WRITEV, kSendFailed>(
+            *this, handle);
+    }
     std::expected<size_t, IOError> await_resume();
 
     IOController* m_controller;
@@ -414,7 +461,11 @@ struct ConnectAwaitable: public ConnectIOContext, public TimeoutSupport<ConnectA
         : ConnectIOContext(host), m_controller(controller) {}
 
     bool await_ready() { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        return detail::suspendRegisteredAwaitable<ConnectAwaitable, CONNECT, kConnectFailed>(
+            *this, handle);
+    }
     std::expected<void, IOError> await_resume();
 
     IOController* m_controller;
@@ -428,7 +479,22 @@ struct CloseAwaitable: public AwaitableBase, public TimeoutSupport<CloseAwaitabl
         : m_controller(controller) {}
 
     bool await_ready() { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        m_waker = Waker(handle);
+        auto scheduler = m_waker.getScheduler();
+        if (scheduler == nullptr || scheduler->type() != kIOScheduler) {
+            m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+            return false;
+        }
+        int res = detail::registerIOSchedulerClose(scheduler, m_controller);
+        if (res == 0) {
+            m_result = {};
+            return false;
+        }
+        m_result = std::unexpected(IOError(kDisconnectError, detail::normalizeAwaitableErrno(res)));
+        return false;
+    }
     std::expected<void, IOError> await_resume();
 
     IOController* m_controller;
@@ -465,7 +531,11 @@ struct RecvFromAwaitable: public RecvFromIOContext, public TimeoutSupport<RecvFr
         : RecvFromIOContext(buffer, length, from), m_controller(controller) {}
 
     bool await_ready() { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        return detail::suspendRegisteredAwaitable<RecvFromAwaitable, RECVFROM, kRecvFailed>(
+            *this, handle);
+    }
     std::expected<size_t, IOError> await_resume();
 
     IOController* m_controller;
@@ -500,7 +570,11 @@ struct SendToAwaitable: public SendToIOContext, public TimeoutSupport<SendToAwai
         : SendToIOContext(buffer, length, to), m_controller(controller) {}
 
     bool await_ready() { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        return detail::suspendRegisteredAwaitable<SendToAwaitable, SENDTO, kSendFailed>(
+            *this, handle);
+    }
     std::expected<size_t, IOError> await_resume();
 
     IOController* m_controller;
@@ -554,7 +628,11 @@ struct FileReadAwaitable: public FileReadIOContext, public TimeoutSupport<FileRe
 #endif
 
     bool await_ready() { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        return detail::suspendRegisteredAwaitable<FileReadAwaitable, FILEREAD, kReadFailed>(
+            *this, handle);
+    }
     std::expected<size_t, IOError> await_resume();
 
     IOController* m_controller;
@@ -608,7 +686,11 @@ struct FileWriteAwaitable: public FileWriteIOContext, public TimeoutSupport<File
 #endif
 
     bool await_ready() { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        return detail::suspendRegisteredAwaitable<FileWriteAwaitable, FILEWRITE, kWriteFailed>(
+            *this, handle);
+    }
     std::expected<size_t, IOError> await_resume();
 
     IOController* m_controller;
@@ -655,7 +737,11 @@ struct FileWatchAwaitable: public FileWatchIOContext, public TimeoutSupport<File
 #endif
 
     bool await_ready() { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        return detail::suspendRegisteredAwaitable<FileWatchAwaitable, FILEWATCH, kReadFailed>(
+            *this, handle);
+    }
     std::expected<FileWatchResult, IOError> await_resume();
 
     IOController* m_controller;
@@ -685,7 +771,11 @@ struct SendFileAwaitable: public SendFileIOContext, public TimeoutSupport<SendFi
         : SendFileIOContext(file_fd, offset, count), m_controller(controller) {}
 
     bool await_ready() { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        return detail::suspendRegisteredAwaitable<SendFileAwaitable, SENDFILE, kSendFailed>(
+            *this, handle);
+    }
     std::expected<size_t, IOError> await_resume();
 
     IOController* m_controller;
@@ -730,7 +820,10 @@ struct SequenceAwaitableBase: public AwaitableBase {
         m_controller->removeAwaitable(SEQUENCE);
     }
 
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        return detail::suspendSequenceAwaitable(*this, handle);
+    }
 
 #ifdef USE_IOURING
     virtual SequenceProgress prepareForSubmit() = 0;
@@ -744,6 +837,33 @@ struct SequenceAwaitableBase: public AwaitableBase {
     IOController* m_controller;
     Waker m_waker;
 };
+
+namespace detail {
+
+template <typename Promise>
+inline bool suspendSequenceAwaitable(SequenceAwaitableBase& awaitable,
+                                     std::coroutine_handle<Promise> handle) {
+    awaitable.m_waker = Waker(handle);
+#ifdef USE_IOURING
+    awaitable.m_sqe_type = SEQUENCE;
+#endif
+    awaitable.m_controller->fillAwaitable(SEQUENCE, &awaitable);
+    auto* scheduler = awaitable.m_waker.getScheduler();
+    if (scheduler == nullptr || scheduler->type() != kIOScheduler) {
+        return false;
+    }
+    const int ret = registerIOSchedulerEvent(scheduler, SEQUENCE, awaitable.m_controller);
+    if (ret == 1) {
+        return false;
+    }
+    if (ret < 0) {
+        awaitable.m_error = IOError(kNotReady, normalizeAwaitableErrno(ret));
+        return false;
+    }
+    return true;
+}
+
+}  // namespace detail
 
 template <typename ResultT, size_t InlineN = 4>
 class SequenceAwaitable;

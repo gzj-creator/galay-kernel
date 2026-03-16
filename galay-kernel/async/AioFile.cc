@@ -26,40 +26,6 @@ AioCommitAwaitable::AioCommitAwaitable(IOController* controller,
 {
 }
 
-bool AioCommitAwaitable::await_suspend(std::coroutine_handle<> handle)
-{
-    m_waker = Waker(handle);
-
-    if (m_pending_count == 0) {
-        m_result = std::vector<ssize_t>{};
-        return false;
-    }
-
-    // 提交 AIO 请求
-    int ret = io_submit(m_aio_ctx, m_pending_count, m_pending_ptrs.data());
-    if (ret < 0) {
-        m_result = std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(-ret)));
-        return false;
-    }
-
-    // 设置 controller 的 handle 为 eventfd，这样 epoll 才能监听到 AIO 完成事件
-    m_controller->m_handle.fd = m_event_fd;
-
-    // 注册到 epoll 等待完成
-    m_controller->fillAwaitable(FILEREAD, this);
-    auto scheduler = m_waker.getScheduler();
-    if(scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
-        return false;
-    }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
-    if (io_scheduler->addFileRead(m_controller) < 0) {
-        m_result = std::unexpected(IOError(kReadFailed, errno));
-        return false;
-    }
-    return true;
-}
-
 std::expected<std::vector<ssize_t>, IOError> AioCommitAwaitable::await_resume()
 {
     return std::move(m_result);

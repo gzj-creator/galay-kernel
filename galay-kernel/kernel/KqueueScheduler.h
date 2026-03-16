@@ -1,7 +1,6 @@
 #ifndef GALAY_KERNEL_KQUEUE_SCHEDULER_H
 #define GALAY_KERNEL_KQUEUE_SCHEDULER_H
 
-#include "Coroutine.h"
 #include "IOScheduler.hpp"
 #include "KqueueReactor.h"
 #include "SchedulerCore.h"
@@ -97,7 +96,7 @@ protected:
 private:
     // Main controller loop
     void eventLoop();
-    void processPendingCoroutines();
+    void processPendingTasks();
 };
 
 }

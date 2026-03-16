@@ -25,7 +25,7 @@ std::atomic<bool> g_server_ready{false};
 std::atomic<bool> g_server_done{false};
 std::atomic<bool> g_client_done{false};
 
-Coroutine tinyServer() {
+Task<void> tinyServer() {
     TcpSocket listener;
 
     auto optResult = listener.option().handleReuseAddr();
@@ -86,7 +86,7 @@ Coroutine tinyServer() {
     g_server_done.store(true, std::memory_order_release);
 }
 
-Coroutine tcpClient() {
+Task<void> tcpClient() {
     while (!g_server_ready.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -128,8 +128,8 @@ int main() {
     runtime.start();
 
     auto* io = runtime.getNextIOScheduler();
-    io->spawn(tinyServer());
-    io->spawn(tcpClient());
+    scheduleTask(io, tinyServer());
+    scheduleTask(io, tcpClient());
 
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while ((!g_server_done.load(std::memory_order_acquire) ||

@@ -6,6 +6,7 @@
  */
 
 #include "galay-kernel/kernel/Awaitable.h"
+#include "galay-kernel/kernel/Task.h"
 #include <cerrno>
 #include <cstdint>
 #include <iostream>
@@ -14,30 +15,24 @@ using namespace galay::kernel;
 
 namespace {
 
-Coroutine noopTask() {
+Task<void> noopTask() {
     co_return;
 }
 
 bool verifyPromiseDirectAccessors() {
-    Coroutine co = noopTask();
-    auto task = detail::CoroutineAccess::taskRef(co);
+    Task<void> task_wrapper = noopTask();
+    auto task = detail::TaskAccess::taskRef(task_wrapper);
     auto erased_handle = task.state()->m_handle;
     if (!erased_handle) {
-        std::cerr << "[T39] coroutine handle is invalid\n";
+        std::cerr << "[T39] task handle is invalid\n";
         return false;
     }
-    auto handle = std::coroutine_handle<Coroutine::promise_type>::from_address(
+    auto handle = std::coroutine_handle<TaskPromise<void>>::from_address(
         erased_handle.address());
 
     const TaskRef& promise_task = handle.promise().taskRefView();
     if (!promise_task.isValid() || promise_task.state() != task.state()) {
-        std::cerr << "[T39] promise taskRefView does not match coroutine task state\n";
-        return false;
-    }
-
-    auto& promise_coro = handle.promise().coroutineRef();
-    if (!promise_coro.isValid() || detail::CoroutineAccess::taskRef(promise_coro).state() != task.state()) {
-        std::cerr << "[T39] promise coroutineRef does not match coroutine task state\n";
+        std::cerr << "[T39] promise taskRefView does not match task state\n";
         return false;
     }
 

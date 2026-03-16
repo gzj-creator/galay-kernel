@@ -25,7 +25,7 @@ std::atomic<int> g_received{0};
 std::atomic<long long> g_sum{0};
 std::atomic<bool> g_done{false};
 
-Coroutine consumer(MpscChannel<int>* channel) {
+Task<void> consumer(MpscChannel<int>* channel) {
     while (g_received.load(std::memory_order_acquire) < kExpectedTotal) {
         auto value = co_await channel->recv();
         if (!value) {
@@ -52,7 +52,7 @@ int main() {
     ComputeScheduler scheduler;
     scheduler.start();
 
-    scheduler.spawn(consumer(&channel));
+    scheduleTask(scheduler, consumer(&channel));
 
     std::vector<std::thread> producers;
     producers.reserve(kProducerCount);

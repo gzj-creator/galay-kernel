@@ -12,7 +12,7 @@
 #include <vector>
 #include "benchmark/BenchmarkSync.h"
 #include "galay-kernel/async/UdpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -49,7 +49,7 @@ constexpr auto CLIENT_RECV_TIMEOUT = std::chrono::milliseconds(50);
 constexpr auto CLIENT_DRAIN_TIMEOUT = std::chrono::milliseconds(250);
 
 // UDP Echo服务器工作协程 - 多协程并发处理
-Coroutine udpServerWorker(int worker_id) {
+Task<void> udpServerWorker(int worker_id) {
     UdpSocket socket;
 
     socket.option().handleReuseAddr();
@@ -107,7 +107,7 @@ Coroutine udpServerWorker(int worker_id) {
 }
 
 // UDP客户端协程 - 流水线模式
-Coroutine udpBenchmarkClient(int client_id) {
+Task<void> udpBenchmarkClient(int client_id) {
     UdpSocket socket;
 
     socket.option().handleNonBlock();
@@ -244,7 +244,7 @@ int main() {
 
     // 启动多个服务器工作协程
     for (int i = 0; i < NUM_SERVER_WORKERS; ++i) {
-        scheduler.spawn(udpServerWorker(i));
+        scheduleTask(scheduler, udpServerWorker(i));
     }
     LogInfo("Started {} server workers", NUM_SERVER_WORKERS);
 
@@ -258,7 +258,7 @@ int main() {
     // 启动多个客户端
     LogInfo("Starting {} clients...", NUM_CLIENTS);
     for (int i = 0; i < NUM_CLIENTS; ++i) {
-        scheduler.spawn(udpBenchmarkClient(i));
+        scheduleTask(scheduler, udpBenchmarkClient(i));
     }
 
     // 运行测试

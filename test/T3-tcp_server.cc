@@ -6,11 +6,14 @@
  */
 
 #include <iostream>
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <string_view>
+#include <thread>
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/TestPortConfig.h"
 #include "test/StdoutLog.h"
 #include "test_result_writer.h"
@@ -32,11 +35,30 @@ using IOSchedulerType = galay::kernel::IOUringScheduler;
 
 using namespace galay::async;
 using namespace galay::kernel;
+using namespace std::chrono_literals;
 
 namespace {
 
 uint16_t tcpTestPort() {
     return galay::test::resolvePortFromEnv("GALAY_TEST_TCP_PORT", 8080);
+}
+
+constexpr std::array<std::string_view, 3> kMessages{
+    "Hello, Server!",
+    "This is message 2",
+    "Final message",
+};
+
+bool waitForFlag(const std::atomic<bool>& flag, std::chrono::milliseconds timeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (flag.load(std::memory_order_acquire)) {
+            return true;
+        }
+        std::this_thread::sleep_for(5ms);
+    }
+    return flag.load(std::memory_order_acquire);
 }
 
 }
@@ -48,7 +70,7 @@ std::atomic<bool> g_server_ready{false};
 std::atomic<bool> g_test_done{false};
 
 // Echo服务器协程
-Coroutine echoServer() {
+Task<void> echoServer() {
     g_total++;
     LogInfo("TCP Server starting...");
     TcpSocket listener;
@@ -155,6 +177,42 @@ Coroutine echoServer() {
     co_return;
 }
 
+Task<void> peerEchoClient() {
+    TcpSocket client;
+    client.option().handleNonBlock();
+
+    Host serverHost(IPType::IPV4, "127.0.0.1", tcpTestPort());
+    auto connectResult = co_await client.connect(serverHost);
+    if (!connectResult) {
+        LogError("Peer client failed to connect: {}", connectResult.error().message());
+        g_failed++;
+        g_test_done = true;
+        co_return;
+    }
+
+    char buffer[1024];
+    for (const auto message : kMessages) {
+        auto sendResult = co_await client.send(message.data(), message.size());
+        if (!sendResult) {
+            LogError("Peer client send failed: {}", sendResult.error().message());
+            g_failed++;
+            g_test_done = true;
+            co_return;
+        }
+
+        auto recvResult = co_await client.recv(buffer, sizeof(buffer));
+        if (!recvResult || std::string_view(buffer, recvResult.value()) != message) {
+            LogError("Peer client echo verification failed");
+            g_failed++;
+            g_test_done = true;
+            co_return;
+        }
+    }
+
+    co_await client.close();
+    co_return;
+}
+
 int main() {
     LogInfo("========================================");
     LogInfo("TCP Echo Server Test");
@@ -168,21 +226,27 @@ int main() {
     LogDebug("Scheduler started");
 
     // 启动服务器
-    scheduler.spawn(echoServer());
-    LogDebug("Server coroutine spawned");
+    scheduleTask(scheduler, echoServer());
+    LogDebug("Server task submitted");
 
-    // 等待服务器准备就绪
-    while (!g_server_ready.load() && !g_test_done.load()) {
-        // 使用调度器的空闲等待，而不是 sleep
+    if (!waitForFlag(g_server_ready, 5s) && !g_test_done.load()) {
+        LogError("Server did not become ready in time");
+        g_failed++;
+        g_test_done = true;
     }
 
     if (!g_test_done.load()) {
-        LogInfo("Server is ready, waiting for client connection...");
+        LogInfo("Server is ready, scheduling async peer client...");
+        if (!scheduleTask(scheduler, peerEchoClient())) {
+            LogError("Failed to schedule async peer client");
+            g_failed++;
+            g_test_done = true;
+        }
     }
 
-    // 等待测试完成
-    while (!g_test_done.load()) {
-        // 使用调度器的空闲等待
+    if (!waitForFlag(g_test_done, 5s)) {
+        LogError("TCP server test timed out waiting for completion");
+        g_failed++;
     }
 
     scheduler.stop();

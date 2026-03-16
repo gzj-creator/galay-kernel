@@ -6,6 +6,7 @@
  */
 
 #include "galay-kernel/kernel/ComputeScheduler.h"
+#include "galay-kernel/kernel/Task.h"
 
 #include <atomic>
 #include <concepts>
@@ -21,7 +22,7 @@ static_assert(std::same_as<decltype(ComputeTask{}.task), TaskRef>,
 
 std::atomic<int> g_completed{0};
 
-Coroutine countingTask() {
+Task<void> countingTask() {
     g_completed.fetch_add(1, std::memory_order_relaxed);
     co_return;
 }
@@ -32,9 +33,9 @@ bool verifyTaskRefFastPath() {
     ComputeScheduler scheduler;
     scheduler.start();
 
-    Coroutine co = countingTask();
-    detail::CoroutineAccess::setScheduler(co, &scheduler);
-    if (!scheduler.schedule(detail::CoroutineAccess::taskRef(co))) {
+    Task<void> task = countingTask();
+    detail::setTaskScheduler(detail::TaskAccess::taskRef(task), &scheduler);
+    if (!scheduler.schedule(detail::TaskAccess::taskRef(task))) {
         std::cerr << "[T50] schedule(TaskRef) rejected valid compute task\n";
         scheduler.stop();
         return false;

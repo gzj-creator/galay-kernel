@@ -7,10 +7,12 @@
 
 #include <cstring>
 #include <fstream>
+#include <chrono>
 #include <atomic>
 #include <string_view>
+#include <thread>
 #include "galay-kernel/common/Defn.hpp"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 #include "test_result_writer.h"
 
@@ -38,6 +40,25 @@ std::atomic<int> g_passed{0};
 std::atomic<int> g_failed{0};
 std::atomic<int> g_total{0};
 
+template <typename Rep, typename Period>
+bool waitForDone(const std::atomic<bool>& done,
+                 std::chrono::duration<Rep, Period> timeout,
+                 std::chrono::milliseconds poll_interval = std::chrono::milliseconds(1)) {
+    if (done.load(std::memory_order_acquire)) {
+        return true;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(poll_interval);
+        if (done.load(std::memory_order_acquire)) {
+            return true;
+        }
+    }
+
+    return done.load(std::memory_order_acquire);
+}
+
 // 创建测试文件
 void createTestFile() {
     std::ofstream ofs(TEST_FILE);
@@ -54,7 +75,7 @@ void cleanupTestFile() {
 
 #ifdef USE_KQUEUE
 // Kqueue 平台测试 - 所有测试在一个协程中完成
-Coroutine testKqueueFileIO(std::atomic<bool>* done) {
+Task<void> testKqueueFileIO(std::atomic<bool>* done) {
     LogInfo("=== Kqueue (macOS) File IO Test ===");
 
     // 测试1: 读取已有文件
@@ -151,11 +172,11 @@ void runKqueueTest() {
     scheduler.start();
 
     std::atomic<bool> done{false};
-    scheduler.spawn(testKqueueFileIO(&done));
+    scheduleTask(scheduler, testKqueueFileIO(&done));
 
-    // 等待协程完成
-    while (!done.load()) {
-        // 使用调度器的空闲等待，而不是 sleep
+    if (!waitForDone(done, std::chrono::seconds(5))) {
+        LogError("[Kqueue] Test timed out waiting for file IO task completion");
+        g_failed++;
     }
 
     scheduler.stop();
@@ -164,7 +185,7 @@ void runKqueueTest() {
 
 #ifdef USE_EPOLL
 // Epoll 平台测试 - 所有测试在一个协程中完成
-Coroutine testEpollFileIO(std::atomic<bool>* done) {
+Task<void> testEpollFileIO(std::atomic<bool>* done) {
     LogInfo("=== Epoll (Linux libaio) File IO Test ===");
 
     // 创建测试文件用于 O_DIRECT
@@ -262,8 +283,16 @@ Coroutine testEpollFileIO(std::atomic<bool>* done) {
             for (size_t i = 0; i < results.size(); ++i) {
                 LogInfo("[Epoll/AIO] Result[{}]: {} bytes", i, results[i]);
             }
-            LogInfo("[Epoll/AIO] Test 2 PASSED");
-            g_passed++;
+            if (results.size() == 3 &&
+                results[0] == 4096 &&
+                results[1] == 4096 &&
+                results[2] == 4096) {
+                LogInfo("[Epoll/AIO] Test 2 PASSED");
+                g_passed++;
+            } else {
+                LogError("[Epoll/AIO] Test 2 FAILED: expected 3 full results, got {}", results.size());
+                g_failed++;
+            }
         }
 
         galay::async::AioFile::freeAlignedBuffer(buffer1);
@@ -330,11 +359,11 @@ void runEpollTest() {
     scheduler.start();
 
     std::atomic<bool> done{false};
-    scheduler.spawn(testEpollFileIO(&done));
+    scheduleTask(scheduler, testEpollFileIO(&done));
 
-    // 等待协程完成
-    while (!done.load()) {
-        // 使用调度器的空闲等待，而不是 sleep
+    if (!waitForDone(done, std::chrono::seconds(5))) {
+        LogError("[Epoll/AIO] Test timed out waiting for file IO task completion");
+        g_failed++;
     }
 
     scheduler.stop();
@@ -343,7 +372,7 @@ void runEpollTest() {
 
 #ifdef USE_IOURING
 // io_uring 平台测试 - 所有测试在一个协程中完成
-Coroutine testIOUringFileIO(std::atomic<bool>* done) {
+Task<void> testIOUringFileIO(std::atomic<bool>* done) {
     LogInfo("=== io_uring (Linux) File IO Test ===");
 
     // 测试1: 读取已有文件
@@ -440,11 +469,11 @@ void runIOUringTest() {
     scheduler.start();
 
     std::atomic<bool> done{false};
-    scheduler.spawn(testIOUringFileIO(&done));
+    scheduleTask(scheduler, testIOUringFileIO(&done));
 
-    // 等待协程完成
-    while (!done.load()) {
-        // 使用调度器的空闲等待，而不是 sleep
+    if (!waitForDone(done, std::chrono::seconds(5))) {
+        LogError("[io_uring] Test timed out waiting for file IO task completion");
+        g_failed++;
     }
 
     scheduler.stop();
@@ -490,5 +519,5 @@ int main() {
     LogInfo("All File IO Tests Completed");
     LogInfo("========================================");
 
-    return 0;
+    return g_failed.load() == 0 ? 0 : 1;
 }

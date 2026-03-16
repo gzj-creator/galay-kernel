@@ -10,7 +10,7 @@
 #include <cstring>
 #include <string_view>
 #include "galay-kernel/async/UdpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/TestPortConfig.h"
 #include "test/StdoutLog.h"
 
@@ -38,7 +38,7 @@ uint16_t udpTestPort() {
 }
 
 // UDP Echo服务器协程
-Coroutine udpEchoServer() {
+Task<void> udpEchoServer() {
     LogInfo("UDP Server starting...");
     UdpSocket socket;
     LogDebug("Socket created, fd={}", socket.handle().fd);
@@ -96,7 +96,7 @@ Coroutine udpEchoServer() {
 }
 
 // UDP客户端协程
-Coroutine udpEchoClient() {
+Task<void> udpEchoClient() {
     LogInfo("UDP Client starting...");
     UdpSocket socket;
     LogDebug("Client socket created, fd={}", socket.handle().fd);
@@ -152,14 +152,14 @@ int main() {
     LogDebug("Scheduler started");
 
     // 启动服务器
-    scheduler.spawn(udpEchoServer());
+    scheduleTask(scheduler, udpEchoServer());
     LogDebug("Server coroutine spawned");
 
     // 等待一下让服务器启动
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // 启动客户端
-    scheduler.spawn(udpEchoClient());
+    scheduleTask(scheduler, udpEchoClient());
     LogDebug("Client coroutine spawned");
 
     // 运行一段时间
@@ -174,14 +174,14 @@ int main() {
     LogDebug("Scheduler started");
 
     // 启动服务器
-    scheduler.spawn(udpEchoServer());
+    scheduleTask(scheduler, udpEchoServer());
     LogDebug("Server coroutine spawned");
 
     // 等待一下让服务器启动
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // 启动客户端
-    scheduler.spawn(udpEchoClient());
+    scheduleTask(scheduler, udpEchoClient());
     LogDebug("Client coroutine spawned");
 
     // 运行一段时间
@@ -196,14 +196,14 @@ int main() {
     LogDebug("Scheduler started");
 
     // 启动服务器
-    scheduler.spawn(udpEchoServer());
+    scheduleTask(scheduler, udpEchoServer());
     LogDebug("Server coroutine spawned");
 
     // 等待一下让服务器启动
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // 启动客户端
-    scheduler.spawn(udpEchoClient());
+    scheduleTask(scheduler, udpEchoClient());
     LogDebug("Client coroutine spawned");
 
     // 运行一段时间

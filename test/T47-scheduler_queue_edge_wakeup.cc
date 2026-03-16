@@ -5,7 +5,7 @@
  * 通过条件：边沿唤醒语义成立且测试返回 0。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/SchedulerTestAccess.h"
 
 #include <cerrno>
@@ -18,7 +18,7 @@ using namespace galay::kernel;
 
 namespace {
 
-Coroutine pendingTask() {
+Task<void> pendingTask() {
     co_return;
 }
 
@@ -28,9 +28,9 @@ bool injectBurstFromEmptyQueue(SchedulerT& scheduler, int count) {
     SchedulerTestAccess::wakeupPending(scheduler).store(false, std::memory_order_release);
 
     for (int i = 0; i < count; ++i) {
-        Coroutine co = pendingTask();
-        detail::CoroutineAccess::setScheduler(co, &scheduler);
-        if (!scheduler.schedule(detail::CoroutineAccess::taskRef(co))) {
+        Task<void> task = pendingTask();
+        detail::setTaskScheduler(detail::TaskAccess::taskRef(task), &scheduler);
+        if (!scheduler.schedule(detail::TaskAccess::taskRef(task))) {
             std::cerr << "[T47] failed to inject task " << i << "\n";
             return false;
         }

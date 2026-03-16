@@ -13,7 +13,6 @@
 #include <map>
 #include "galay-kernel/kernel/Runtime.h"
 #include "galay-kernel/kernel/ComputeScheduler.h"
-#include "galay-kernel/kernel/Coroutine.h"
 #include "test/StdoutLog.h"
 #include "test_result_writer.h"
 
@@ -134,7 +133,7 @@ void test_concurrent_get_scheduler() {
 // ============== 测试2: 高并发任务提交 ==============
 std::atomic<int> g_task_completed{0};
 
-Coroutine simpleTask() {
+Task<void> simpleTask() {
     g_task_completed.fetch_add(1, std::memory_order_relaxed);
     co_return;
 }
@@ -166,7 +165,7 @@ void test_high_concurrency_spawn() {
         threads.emplace_back([&runtime]() {
             for (int i = 0; i < TASKS_PER_THREAD; ++i) {
                 auto* scheduler = runtime.getNextIOScheduler();
-                scheduler->spawn(simpleTask());
+                scheduleTask(scheduler, simpleTask());
             }
         });
     }

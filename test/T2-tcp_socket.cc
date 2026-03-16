@@ -10,7 +10,7 @@
 #include <cstring>
 #include <string_view>
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/TestPortConfig.h"
 #include "test/StdoutLog.h"
 
@@ -38,7 +38,7 @@ uint16_t tcpTestPort() {
 }
 
 // Echo服务器协程
-Coroutine echoServer([[maybe_unused]] IOScheduler* scheduler) {
+Task<void> echoServer([[maybe_unused]] IOScheduler* scheduler) {
     LogInfo("Server starting...");
     TcpSocket listener;
     // 设置选项
@@ -120,7 +120,7 @@ Coroutine echoServer([[maybe_unused]] IOScheduler* scheduler) {
 }
 
 // 客户端协程
-Coroutine echoClient([[maybe_unused]] IOScheduler* scheduler) {
+Task<void> echoClient([[maybe_unused]] IOScheduler* scheduler) {
     LogInfo("Client starting...");
     TcpSocket client;
     LogDebug("Client socket created, fd={}", client.handle().fd);
@@ -174,14 +174,14 @@ int main() {
     LogDebug("Scheduler started");
 
     // 启动服务器
-    scheduler.spawn(echoServer(&scheduler));
+    scheduleTask(scheduler, echoServer(&scheduler));
     LogDebug("Server coroutine spawned");
 
     // 等待一下让服务器启动
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // 启动客户端
-    scheduler.spawn(echoClient(&scheduler));
+    scheduleTask(scheduler, echoClient(&scheduler));
     LogDebug("Client coroutine spawned");
 
     // 运行一段时间
@@ -196,14 +196,14 @@ int main() {
     LogDebug("Scheduler started");
 
     // 启动服务器
-    scheduler.spawn(echoServer(&scheduler));
+    scheduleTask(scheduler, echoServer(&scheduler));
     LogDebug("Server coroutine spawned");
 
     // 等待一下让服务器启动
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // 启动客户端
-    scheduler.spawn(echoClient(&scheduler));
+    scheduleTask(scheduler, echoClient(&scheduler));
     LogDebug("Client coroutine spawned");
 
     // 运行一段时间
@@ -218,14 +218,14 @@ int main() {
     LogDebug("Scheduler started");
 
     // 启动服务器
-    scheduler.spawn(echoServer(&scheduler));
+    scheduleTask(scheduler, echoServer(&scheduler));
     LogDebug("Server coroutine spawned");
 
     // 等待一下让服务器启动
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // 启动客户端
-    scheduler.spawn(echoClient(&scheduler));
+    scheduleTask(scheduler, echoClient(&scheduler));
     LogDebug("Client coroutine spawned");
 
     // 运行一段时间

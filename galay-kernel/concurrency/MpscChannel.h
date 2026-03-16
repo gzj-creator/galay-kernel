@@ -6,8 +6,7 @@
 #ifndef GALAY_KERNEL_MPSC_CHANNEL_H
 #define GALAY_KERNEL_MPSC_CHANNEL_H
 
-#include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/kernel/Scheduler.hpp"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/kernel/WaitRegistration.h"
 #include "galay-kernel/kernel/Waker.h"
@@ -44,7 +43,8 @@ public:
     explicit MpscRecvAwaitable(MpscChannel<T>* channel) : m_channel(channel) {}
 
     bool await_ready() noexcept;
-    bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
     std::expected<T, IOError> await_resume() noexcept;
 
 private:
@@ -53,7 +53,7 @@ private:
 
     MpscChannel<T>* m_channel;
     std::optional<T> m_readyValue;
-    void* m_waiterAddress = nullptr;
+    TaskState* m_waiterState = nullptr;
 };
 
 /**
@@ -68,7 +68,8 @@ public:
         : m_channel(channel), m_maxCount(max_count){}
 
     bool await_ready() noexcept;
-    bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
     std::expected<std::vector<T>, IOError> await_resume() noexcept;
 
 private:
@@ -78,7 +79,7 @@ private:
     MpscChannel<T>* m_channel;
     size_t m_maxCount;
     std::optional<std::vector<T>> m_readyValues;
-    void* m_waiterAddress = nullptr;
+    TaskState* m_waiterState = nullptr;
 };
 
 /**
@@ -231,26 +232,24 @@ private:
     friend class MpscRecvBatchAwaitable;
     friend struct MpscChannelTestAccess;
 
-    using WaiterHandle = std::coroutine_handle<Coroutine::promise_type>;
-
     bool hasWaiter() const noexcept {
         return m_waiter_registration.hasWaiter();
     }
 
-    void publishWaiter(void* waiterAddress) noexcept {
-        (void)m_waiter_registration.arm(waiterAddress);
+    void publishWaiter(TaskState* waiterState) noexcept {
+        (void)m_waiter_registration.arm(static_cast<void*>(waiterState));
     }
 
-    bool clearWaiter(void* waiterAddress) noexcept {
-        return m_waiter_registration.clear(waiterAddress);
+    bool clearWaiter(TaskState* waiterState) noexcept {
+        return m_waiter_registration.clear(static_cast<void*>(waiterState));
     }
 
     void wakePublishedWaiter() noexcept {
-        void* waiterAddress = m_waiter_registration.consumeWake();
-        if (!waiterAddress) {
+        auto* waiterState = static_cast<TaskState*>(m_waiter_registration.consumeWake());
+        if (!waiterState) {
             return;
         }
-        Waker(WaiterHandle::from_address(waiterAddress)).wakeUp();
+        Waker(TaskRef(waiterState, true)).wakeUp();
     }
 
     size_t prefetchedCount() const noexcept {
@@ -325,20 +324,21 @@ inline bool MpscRecvAwaitable<T>::await_ready() noexcept {
 }
 
 template <typename T>
+template <typename Promise>
 inline bool MpscRecvAwaitable<T>::await_suspend(
-    std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
+    std::coroutine_handle<Promise> handle) noexcept {
     if (tryReceiveNow()) {
         return false;
     }
 
-    m_waiterAddress = handle.address();
-    m_channel->publishWaiter(m_waiterAddress);
+    m_waiterState = handle.promise().taskRefView().state();
+    m_channel->publishWaiter(m_waiterState);
 
     if (!tryReceiveNow()) {
         return true;
     }
 
-    if (m_channel->clearWaiter(m_waiterAddress)) {
+    if (m_channel->clearWaiter(m_waiterState)) {
         return false;
     }
 
@@ -347,10 +347,10 @@ inline bool MpscRecvAwaitable<T>::await_suspend(
 
 template <typename T>
 inline std::expected<T, IOError> MpscRecvAwaitable<T>::await_resume() noexcept {
-    if (m_waiterAddress != nullptr) {
-        void* waiterAddress = m_waiterAddress;
-        m_channel->clearWaiter(waiterAddress);
-        m_waiterAddress = nullptr;
+    if (m_waiterState != nullptr) {
+        TaskState* waiterState = m_waiterState;
+        m_channel->clearWaiter(waiterState);
+        m_waiterState = nullptr;
     }
 
     if (m_readyValue.has_value()) {
@@ -386,20 +386,21 @@ inline bool MpscRecvBatchAwaitable<T>::await_ready() noexcept {
 }
 
 template <typename T>
+template <typename Promise>
 inline bool MpscRecvBatchAwaitable<T>::await_suspend(
-    std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
+    std::coroutine_handle<Promise> handle) noexcept {
     if (tryReceiveNow()) {
         return false;
     }
 
-    m_waiterAddress = handle.address();
-    m_channel->publishWaiter(m_waiterAddress);
+    m_waiterState = handle.promise().taskRefView().state();
+    m_channel->publishWaiter(m_waiterState);
 
     if (!tryReceiveNow()) {
         return true;
     }
 
-    if (m_channel->clearWaiter(m_waiterAddress)) {
+    if (m_channel->clearWaiter(m_waiterState)) {
         return false;
     }
 
@@ -408,10 +409,10 @@ inline bool MpscRecvBatchAwaitable<T>::await_suspend(
 
 template <typename T>
 inline std::expected<std::vector<T>, IOError> MpscRecvBatchAwaitable<T>::await_resume() noexcept {
-    if (m_waiterAddress != nullptr) {
-        void* waiterAddress = m_waiterAddress;
-        m_channel->clearWaiter(waiterAddress);
-        m_waiterAddress = nullptr;
+    if (m_waiterState != nullptr) {
+        TaskState* waiterState = m_waiterState;
+        m_channel->clearWaiter(waiterState);
+        m_waiterState = nullptr;
     }
 
     if (m_readyValues.has_value()) {

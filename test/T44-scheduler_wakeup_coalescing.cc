@@ -5,7 +5,7 @@
  * 通过条件：重复唤醒被成功压缩且任务仍能完整执行，测试返回 0。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/SchedulerTestAccess.h"
 
 #include <cerrno>
@@ -18,15 +18,15 @@ using namespace galay::kernel;
 
 namespace {
 
-Coroutine pendingTask() {
+Task<void> pendingTask() {
     co_return;
 }
 
 bool scheduleInjectedTasks(IOScheduler& scheduler, int count) {
     for (int i = 0; i < count; ++i) {
-        Coroutine co = pendingTask();
-        detail::CoroutineAccess::setScheduler(co, &scheduler);
-        if (!scheduler.schedule(detail::CoroutineAccess::taskRef(co))) {
+        Task<void> task = pendingTask();
+        detail::setTaskScheduler(detail::TaskAccess::taskRef(task), &scheduler);
+        if (!scheduler.schedule(detail::TaskAccess::taskRef(task))) {
             std::cerr << "[T44] failed to inject task " << i << "\n";
             return false;
         }

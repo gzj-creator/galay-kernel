@@ -13,7 +13,7 @@
 #include <vector>
 #include <sys/socket.h>
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -69,9 +69,9 @@ static void shrinkSocketBuf(int fd) {
 // ==================== 通用收发协程 ====================
 
 // recv 端：用小 buffer 接收，制造背压
-Coroutine recvLoop(std::shared_ptr<TcpSocket> sock,
-                   std::atomic<int64_t>& counter,
-                   const char* label) {
+Task<void> recvLoop(std::shared_ptr<TcpSocket> sock,
+                    std::atomic<int64_t>& counter,
+                    const char* label) {
     char buffer[kRecvBuf];
     int64_t totalBytes = 0;
     while (totalBytes < kExpectedBytes) {
@@ -93,10 +93,10 @@ Coroutine recvLoop(std::shared_ptr<TcpSocket> sock,
 }
 
 // send 端：每轮发 256KB，处理 partial write
-Coroutine sendLoop(std::shared_ptr<TcpSocket> sock,
-                   std::atomic<int>& counter,
-                   const char* label,
-                   char tag) {
+Task<void> sendLoop(std::shared_ptr<TcpSocket> sock,
+                    std::atomic<int>& counter,
+                    const char* label,
+                    char tag) {
     auto buf = makeSendBuf(tag);
     for (int i = 0; i < kRounds; ++i) {
         size_t sent = 0;
@@ -117,7 +117,7 @@ Coroutine sendLoop(std::shared_ptr<TcpSocket> sock,
 
 // ==================== Server ====================
 
-Coroutine serverMain(IOScheduler* scheduler) {
+Task<void> serverMain(IOScheduler* scheduler) {
     g_server_listener = std::make_shared<TcpSocket>();
     g_server_listener->option().handleReuseAddr();
     g_server_listener->option().handleNonBlock();
@@ -150,15 +150,15 @@ Coroutine serverMain(IOScheduler* scheduler) {
     g_server_client->option().handleNonBlock();
     shrinkSocketBuf(g_server_client->handle().fd);
 
-    // 关键：同一个 socket 同时 spawn 读和写
-    scheduler->spawn(recvLoop(g_server_client, g_server_recv_bytes, "S-Recv"));
-    scheduler->spawn(sendLoop(g_server_client, g_server_send_rounds, "S-Send", 'S'));
+    // 关键：同一个 socket 同时提交读和写任务
+    scheduleTask(scheduler, recvLoop(g_server_client, g_server_recv_bytes, "S-Recv"));
+    scheduleTask(scheduler, sendLoop(g_server_client, g_server_send_rounds, "S-Send", 'S'));
     co_return;
 }
 
 // ==================== Client ====================
 
-Coroutine clientMain(IOScheduler* scheduler) {
+Task<void> clientMain(IOScheduler* scheduler) {
     while (!g_server_ready.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -176,9 +176,9 @@ Coroutine clientMain(IOScheduler* scheduler) {
 
     LogInfo("[Client] connected");
 
-    // 关键：同一个 socket 同时 spawn 读和写
-    scheduler->spawn(recvLoop(g_client_sock, g_client_recv_bytes, "C-Recv"));
-    scheduler->spawn(sendLoop(g_client_sock, g_client_send_rounds, "C-Send", 'C'));
+    // 关键：同一个 socket 同时提交读和写任务
+    scheduleTask(scheduler, recvLoop(g_client_sock, g_client_recv_bytes, "C-Recv"));
+    scheduleTask(scheduler, sendLoop(g_client_sock, g_client_send_rounds, "C-Send", 'C'));
     co_return;
 }
 
@@ -207,8 +207,8 @@ int main() {
     serverScheduler.start();
     clientScheduler.start();
 
-    serverScheduler.spawn(serverMain(&serverScheduler));
-    clientScheduler.spawn(clientMain(&clientScheduler));
+    scheduleTask(serverScheduler, serverMain(&serverScheduler));
+    scheduleTask(clientScheduler, clientMain(&clientScheduler));
 
     // 在 main 线程等待
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);

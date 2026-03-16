@@ -11,9 +11,8 @@
  * @example
  * @code
  * // 服务端示例
- * Coroutine server(IOScheduler* scheduler) {
- *     UdpSocket socket(scheduler);
- *     socket.create(IPType::IPV4);
+ * Task<void> server() {
+ *     UdpSocket socket;
  *     socket.option().handleReuseAddr();
  *     socket.option().handleNonBlock();
  *     socket.bind(Host(IPType::IPV4, "0.0.0.0", 8080));
@@ -30,9 +29,8 @@
  * }
  *
  * // 客户端示例
- * Coroutine client(IOScheduler* scheduler) {
- *     UdpSocket socket(scheduler);
- *     socket.create(IPType::IPV4);
+ * Task<void> client() {
+ *     UdpSocket socket;
  *     socket.option().handleNonBlock();
  *
  *     Host server(IPType::IPV4, "127.0.0.1", 8080);
@@ -66,7 +64,7 @@ using namespace galay::kernel;
 /**
  * @brief 异步UDP Socket类
  *
- * @details 封装底层UDP socket操作，提供协程友好的异步IO接口。
+ * @details 封装底层 UDP socket 操作，提供 Task 友好的异步 IO 接口。
  * 内部包含：
  * - GHandle: 底层socket句柄
  * - IOScheduler*: IO调度器指针
@@ -75,7 +73,7 @@ using namespace galay::kernel;
  * @note
  * - 不可拷贝，仅支持移动语义
  * - 析构时不会自动关闭socket，需显式调用close()
- * - 所有异步操作需要在协程中使用co_await
+ * - 所有异步操作需要在任务中使用 co_await
  * - UDP是无连接协议，不需要listen/accept/connect操作
  *
  * @see IOScheduler, HandleOption, Host

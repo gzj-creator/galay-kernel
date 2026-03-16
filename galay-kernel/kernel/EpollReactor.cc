@@ -331,18 +331,27 @@ void EpollReactor::processEvent(struct epoll_event& ev) {
                 uint64_t completed = 0;
                 const ssize_t n = read(controller->m_handle.fd, &completed, sizeof(completed));
                 if (n == static_cast<ssize_t>(sizeof(completed)) && completed > 0) {
-                    std::vector<struct io_event> events(aio_awaitable->m_pending_count);
-                    const int num_events = io_getevents(aio_awaitable->m_aio_ctx,
-                                                        1,
-                                                        aio_awaitable->m_pending_count,
-                                                        events.data(),
-                                                        nullptr);
-                    if (num_events > 0) {
-                        std::vector<ssize_t> results;
-                        results.reserve(static_cast<size_t>(num_events));
+                    const size_t expected_events = aio_awaitable->m_pending_count;
+                    std::vector<ssize_t> results;
+                    results.reserve(expected_events);
+
+                    while (results.size() < expected_events) {
+                        std::vector<struct io_event> events(expected_events - results.size());
+                        const int num_events = io_getevents(aio_awaitable->m_aio_ctx,
+                                                            1,
+                                                            static_cast<long>(events.size()),
+                                                            events.data(),
+                                                            nullptr);
+                        if (num_events <= 0) {
+                            aio_awaitable->m_result = std::unexpected(IOError(kReadFailed, errno));
+                            break;
+                        }
                         for (int i = 0; i < num_events; ++i) {
                             results.push_back(events[static_cast<size_t>(i)].res);
                         }
+                    }
+
+                    if (results.size() == expected_events) {
                         aio_awaitable->m_result = std::move(results);
                     } else {
                         aio_awaitable->m_result = std::unexpected(IOError(kReadFailed, errno));
@@ -351,7 +360,10 @@ void EpollReactor::processEvent(struct epoll_event& ev) {
                     aio_awaitable->m_result = std::unexpected(IOError(kReadFailed, errno));
                 }
 
-                (void)epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, controller->m_handle.fd, nullptr);
+                if (applyEvents(controller, EPOLLET) < 0 && errno != ENOENT) {
+                    detail::storeBackendError(
+                        m_last_error_code, kNotReady, static_cast<uint32_t>(errno));
+                }
                 aio_awaitable->m_waker.wakeUp();
             }
         } else if (t & FILEWATCH) {

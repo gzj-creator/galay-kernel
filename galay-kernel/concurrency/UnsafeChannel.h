@@ -9,8 +9,9 @@
 #ifndef GALAY_KERNEL_UNSAFE_CHANNEL_H
 #define GALAY_KERNEL_UNSAFE_CHANNEL_H
 
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/Timeout.hpp"
+#include "galay-kernel/kernel/Waker.h"
 #include "galay-kernel/common/Error.h"
 #include <concepts>
 #include <deque>
@@ -44,7 +45,8 @@ public:
     explicit UnsafeRecvAwaitable(UnsafeChannel<T>* channel) : m_channel(channel) {}
 
     bool await_ready() const noexcept;
-    bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
     std::expected<T, IOError> await_resume() noexcept;
 
 private:
@@ -65,7 +67,8 @@ public:
         : m_channel(channel), m_maxCount(maxCount) {}
 
     bool await_ready() const noexcept;
-    bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
     std::expected<std::vector<T>, IOError> await_resume() noexcept;
 
 private:
@@ -90,7 +93,8 @@ public:
         : m_channel(channel), m_limit(limit) {}
 
     bool await_ready() const noexcept;
-    bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept;
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
     std::expected<std::vector<T>, IOError> await_resume() noexcept;
 
 private:
@@ -273,13 +277,11 @@ private:
             m_wakeThreshold = 1;
             auto handle = m_waiterHandle;
             m_waiterHandle = {};
+            TaskRef waiterTask = std::move(m_waiterTask);
             if (handle) {
-                if (m_wake_mode == UnsafeChannelWakeMode::Deferred) {
-                    auto& waiter = handle.promise().coroutineRef();
-                    if (detail::CoroutineAccess::belongScheduler(waiter)) {
-                        detail::CoroutineAccess::resume(waiter);
-                        return;
-                    }
+                if (m_wake_mode == UnsafeChannelWakeMode::Deferred && waiterTask.isValid()) {
+                    Waker(std::move(waiterTask)).wakeUp();
+                    return;
                 }
                 // 默认保持内联恢复，避免影响现有通道语义
                 handle.resume();
@@ -292,7 +294,8 @@ private:
     size_t m_wakeThreshold = 1;
     bool m_hasWaiter = false;
     UnsafeChannelWakeMode m_wake_mode = UnsafeChannelWakeMode::Inline;
-    std::coroutine_handle<Coroutine::promise_type> m_waiterHandle;
+    std::coroutine_handle<> m_waiterHandle;
+    TaskRef m_waiterTask;
 };
 
 // ============================================================================
@@ -305,14 +308,16 @@ inline bool UnsafeRecvAwaitable<T>::await_ready() const noexcept {
 }
 
 template <typename T>
+template <typename Promise>
 inline bool UnsafeRecvAwaitable<T>::await_suspend(
-    std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
+    std::coroutine_handle<Promise> handle) noexcept {
     // 再次检查，避免竞态
     if (m_channel->m_size > 0) {
         return false;
     }
 
     m_channel->m_waiterHandle = handle;
+    m_channel->m_waiterTask = handle.promise().taskRefView();
     m_channel->m_hasWaiter = true;
 
     return true;
@@ -320,6 +325,9 @@ inline bool UnsafeRecvAwaitable<T>::await_suspend(
 
 template <typename T>
 inline std::expected<T, IOError> UnsafeRecvAwaitable<T>::await_resume() noexcept {
+    m_channel->m_hasWaiter = false;
+    m_channel->m_waiterHandle = {};
+    m_channel->m_waiterTask = {};
     if (m_channel->m_size == 0) {
         return std::unexpected(IOError(kTimeout, 0));
     }
@@ -339,14 +347,16 @@ inline bool UnsafeRecvBatchAwaitable<T>::await_ready() const noexcept {
 }
 
 template <typename T>
+template <typename Promise>
 inline bool UnsafeRecvBatchAwaitable<T>::await_suspend(
-    std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
+    std::coroutine_handle<Promise> handle) noexcept {
     // 再次检查，避免竞态
     if (m_channel->m_size > 0) {
         return false;
     }
 
     m_channel->m_waiterHandle = handle;
+    m_channel->m_waiterTask = handle.promise().taskRefView();
     m_channel->m_hasWaiter = true;
 
     return true;
@@ -354,6 +364,9 @@ inline bool UnsafeRecvBatchAwaitable<T>::await_suspend(
 
 template <typename T>
 inline std::expected<std::vector<T>, IOError> UnsafeRecvBatchAwaitable<T>::await_resume() noexcept {
+    m_channel->m_hasWaiter = false;
+    m_channel->m_waiterHandle = {};
+    m_channel->m_waiterTask = {};
     if (m_channel->m_size == 0) {
         return std::unexpected(IOError(kTimeout, 0));
     }
@@ -381,14 +394,16 @@ inline bool UnsafeRecvBatchedAwaitable<T>::await_ready() const noexcept {
 }
 
 template <typename T>
+template <typename Promise>
 inline bool UnsafeRecvBatchedAwaitable<T>::await_suspend(
-    std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
+    std::coroutine_handle<Promise> handle) noexcept {
     // 再次检查，避免竞态
     if (m_channel->m_size >= m_limit) {
         return false;
     }
 
     m_channel->m_waiterHandle = handle;
+    m_channel->m_waiterTask = handle.promise().taskRefView();
     m_channel->m_hasWaiter = true;
     m_channel->m_wakeThreshold = m_limit;
 
@@ -399,6 +414,8 @@ template <typename T>
 inline std::expected<std::vector<T>, IOError> UnsafeRecvBatchedAwaitable<T>::await_resume() noexcept {
     m_channel->m_wakeThreshold = 1;
     m_channel->m_hasWaiter = false;
+    m_channel->m_waiterHandle = {};
+    m_channel->m_waiterTask = {};
 
     // 如果 m_result 已经被 WithTimeout 设置为超时错误，直接返回
     if (!m_result.has_value()) {

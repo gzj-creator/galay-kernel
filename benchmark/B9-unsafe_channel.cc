@@ -11,7 +11,7 @@
 #include "benchmark/BenchmarkSync.h"
 #include "galay-kernel/concurrency/UnsafeChannel.h"
 #include "galay-kernel/concurrency/MpscChannel.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/ComputeScheduler.h"
 #include "test/StdoutLog.h"
 
@@ -93,7 +93,7 @@ ThroughputSample measureThroughputSample(int64_t message_count, Runner&& runner)
 
 // ============== UnsafeChannel 消费者协程 ==============
 
-Coroutine unsafeSimpleConsumer(UnsafeChannel<int64_t>* channel, int64_t expected_count) {
+Task<void> unsafeSimpleConsumer(UnsafeChannel<int64_t>* channel, int64_t expected_count) {
     int64_t received = 0;
     int64_t sum = 0;
     while (received < expected_count) {
@@ -109,7 +109,7 @@ Coroutine unsafeSimpleConsumer(UnsafeChannel<int64_t>* channel, int64_t expected
     co_return;
 }
 
-Coroutine unsafeBatchConsumer(UnsafeChannel<int64_t>* channel, int64_t expected_count) {
+Task<void> unsafeBatchConsumer(UnsafeChannel<int64_t>* channel, int64_t expected_count) {
     int64_t received = 0;
     int64_t sum = 0;
     while (received < expected_count) {
@@ -127,7 +127,7 @@ Coroutine unsafeBatchConsumer(UnsafeChannel<int64_t>* channel, int64_t expected_
     co_return;
 }
 
-Coroutine unsafeBatchedConsumer(UnsafeChannel<int64_t>* channel, int64_t expected_count, int64_t batch_limit) {
+Task<void> unsafeBatchedConsumer(UnsafeChannel<int64_t>* channel, int64_t expected_count, int64_t batch_limit) {
     int64_t received = 0;
     int64_t sum = 0;
     while (received < expected_count) {
@@ -146,7 +146,7 @@ Coroutine unsafeBatchedConsumer(UnsafeChannel<int64_t>* channel, int64_t expecte
     co_return;
 }
 
-Coroutine unsafeLatencyConsumer(UnsafeChannel<TimestampedMessage>* channel, int64_t expected_count) {
+Task<void> unsafeLatencyConsumer(UnsafeChannel<TimestampedMessage>* channel, int64_t expected_count) {
     int64_t received = 0;
     int64_t latency_sum_ns = 0;
     while (received < expected_count) {
@@ -168,7 +168,7 @@ Coroutine unsafeLatencyConsumer(UnsafeChannel<TimestampedMessage>* channel, int6
 
 // ============== UnsafeChannel 生产者协程 ==============
 
-Coroutine unsafeSimpleProducer(UnsafeChannel<int64_t>* channel, int64_t count) {
+Task<void> unsafeSimpleProducer(UnsafeChannel<int64_t>* channel, int64_t count) {
     for (int64_t i = 0; i < count; ++i) {
         channel->send(i);
         if (i % 1000 == 0) {
@@ -180,7 +180,7 @@ Coroutine unsafeSimpleProducer(UnsafeChannel<int64_t>* channel, int64_t count) {
     co_return;
 }
 
-Coroutine unsafeLatencyProducer(UnsafeChannel<TimestampedMessage>* channel, int64_t count) {
+Task<void> unsafeLatencyProducer(UnsafeChannel<TimestampedMessage>* channel, int64_t count) {
     for (int64_t i = 0; i < count; ++i) {
         TimestampedMessage msg;
         msg.id = i;
@@ -197,7 +197,7 @@ Coroutine unsafeLatencyProducer(UnsafeChannel<TimestampedMessage>* channel, int6
 
 // ============== MpscChannel 消费者协程（用于对比）==============
 
-Coroutine mpscSimpleConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
+Task<void> mpscSimpleConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
     int64_t received = 0;
     int64_t sum = 0;
     while (received < expected_count) {
@@ -215,7 +215,7 @@ Coroutine mpscSimpleConsumer(MpscChannel<int64_t>* channel, int64_t expected_cou
 
 // ============== MpscChannel 生产者协程（用于对比）==============
 
-Coroutine mpscSimpleProducer(MpscChannel<int64_t>* channel, int64_t count) {
+Task<void> mpscSimpleProducer(MpscChannel<int64_t>* channel, int64_t count) {
     for (int64_t i = 0; i < count; ++i) {
         channel->send(i);
         if (i % 1000 == 0) {
@@ -248,8 +248,8 @@ void benchUnsafeChannelThroughput(int64_t message_count) {
 
             const auto start = std::chrono::steady_clock::now();
 
-            scheduler.spawn(unsafeSimpleConsumer(&channel, sample_message_count));
-            scheduler.spawn(unsafeSimpleProducer(&channel, sample_message_count));
+            scheduleTask(scheduler, unsafeSimpleConsumer(&channel, sample_message_count));
+            scheduleTask(scheduler, unsafeSimpleProducer(&channel, sample_message_count));
 
             while (!g_consumer_done) {
                 std::this_thread::sleep_for(1ms);
@@ -298,8 +298,8 @@ void benchUnsafeChannelBatchThroughput(int64_t message_count) {
 
             const auto start = std::chrono::steady_clock::now();
 
-            scheduler.spawn(unsafeBatchConsumer(&channel, sample_message_count));
-            scheduler.spawn(unsafeSimpleProducer(&channel, sample_message_count));
+            scheduleTask(scheduler, unsafeBatchConsumer(&channel, sample_message_count));
+            scheduleTask(scheduler, unsafeSimpleProducer(&channel, sample_message_count));
 
             while (!g_consumer_done) {
                 std::this_thread::sleep_for(1ms);
@@ -349,8 +349,8 @@ void benchUnsafeChannelBatchedThroughput(int64_t message_count, int64_t batch_li
 
             const auto start = std::chrono::steady_clock::now();
 
-            scheduler.spawn(unsafeBatchedConsumer(&channel, sample_message_count, batch_limit));
-            scheduler.spawn(unsafeSimpleProducer(&channel, sample_message_count));
+            scheduleTask(scheduler, unsafeBatchedConsumer(&channel, sample_message_count, batch_limit));
+            scheduleTask(scheduler, unsafeSimpleProducer(&channel, sample_message_count));
 
             while (!g_consumer_done) {
                 std::this_thread::sleep_for(1ms);
@@ -390,8 +390,8 @@ void benchUnsafeChannelLatency(int64_t message_count) {
 
     scheduler.start();
 
-    scheduler.spawn(unsafeLatencyConsumer(&channel, message_count));
-    scheduler.spawn(unsafeLatencyProducer(&channel, message_count));
+    scheduleTask(scheduler, unsafeLatencyConsumer(&channel, message_count));
+    scheduleTask(scheduler, unsafeLatencyProducer(&channel, message_count));
 
     while (!g_consumer_done) {
         std::this_thread::sleep_for(1ms);
@@ -423,8 +423,8 @@ void benchMpscChannelThroughput(int64_t message_count) {
 
             const auto start = std::chrono::steady_clock::now();
 
-            scheduler.spawn(mpscSimpleConsumer(&channel, sample_message_count));
-            scheduler.spawn(mpscSimpleProducer(&channel, sample_message_count));
+            scheduleTask(scheduler, mpscSimpleConsumer(&channel, sample_message_count));
+            scheduleTask(scheduler, mpscSimpleProducer(&channel, sample_message_count));
 
             while (!g_consumer_done) {
                 std::this_thread::sleep_for(1ms);
@@ -465,8 +465,8 @@ void benchComparison(int64_t message_count) {
 
     scheduler1.start();
     auto start1 = std::chrono::steady_clock::now();
-    scheduler1.spawn(unsafeSimpleConsumer(&unsafeChannel, message_count));
-    scheduler1.spawn(unsafeSimpleProducer(&unsafeChannel, message_count));
+    scheduleTask(scheduler1, unsafeSimpleConsumer(&unsafeChannel, message_count));
+    scheduleTask(scheduler1, unsafeSimpleProducer(&unsafeChannel, message_count));
     while (!g_consumer_done) {
         std::this_thread::sleep_for(1ms);
     }
@@ -481,8 +481,8 @@ void benchComparison(int64_t message_count) {
 
     scheduler2.start();
     auto start2 = std::chrono::steady_clock::now();
-    scheduler2.spawn(mpscSimpleConsumer(&mpscChannel, message_count));
-    scheduler2.spawn(mpscSimpleProducer(&mpscChannel, message_count));
+    scheduleTask(scheduler2, mpscSimpleConsumer(&mpscChannel, message_count));
+    scheduleTask(scheduler2, mpscSimpleProducer(&mpscChannel, message_count));
     while (!g_consumer_done) {
         std::this_thread::sleep_for(1ms);
     }

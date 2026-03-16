@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "benchmark/BenchmarkSync.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -40,7 +40,7 @@ struct BenchState {
     galay::benchmark::CompletionLatch* completion_latch = nullptr;
 };
 
-Coroutine throughputTask(BenchState* state) {
+Task<void> throughputTask(BenchState* state) {
     state->completed.fetch_add(1, std::memory_order_relaxed);
     if (state->completion_latch) {
         state->completion_latch->arrive();
@@ -48,8 +48,8 @@ Coroutine throughputTask(BenchState* state) {
     co_return;
 }
 
-Coroutine latencyTask(BenchState* state,
-                      std::chrono::steady_clock::time_point submitted_at) {
+Task<void> latencyTask(BenchState* state,
+                       std::chrono::steady_clock::time_point submitted_at) {
     const auto now = std::chrono::steady_clock::now();
     const auto latency_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(now - submitted_at).count();
@@ -77,7 +77,7 @@ void runThroughputBenchmark() {
     for (int producer = 0; producer < kProducerCount; ++producer) {
         producers.emplace_back([&scheduler, &state]() {
             for (int i = 0; i < kTasksPerProducer; ++i) {
-                scheduler.spawn(throughputTask(&state));
+                scheduleTask(scheduler, throughputTask(&state));
             }
         });
     }
@@ -112,7 +112,7 @@ void runLatencyBenchmark() {
         BenchState warmup_state;
         galay::benchmark::CompletionLatch warmup_latch(1);
         warmup_state.completion_latch = &warmup_latch;
-        scheduler.spawn(throughputTask(&warmup_state));
+        scheduleTask(scheduler, throughputTask(&warmup_state));
         warmup_latch.wait();
     }
 
@@ -122,7 +122,7 @@ void runLatencyBenchmark() {
         BenchState state;
         galay::benchmark::CompletionLatch completion_latch(1);
         state.completion_latch = &completion_latch;
-        scheduler.spawn(latencyTask(&state, std::chrono::steady_clock::now()));
+        scheduleTask(scheduler, latencyTask(&state, std::chrono::steady_clock::now()));
         completion_latch.wait();
         latency_sum_ns += state.latency_sum_ns.load(std::memory_order_relaxed);
     }

@@ -5,9 +5,9 @@
  * 通过条件：核心唤醒路径断言全部成立，测试返回 0。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/IOScheduler.hpp"
 #include "galay-kernel/kernel/Runtime.h"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/Waker.h"
 
 #include <atomic>
@@ -20,8 +20,6 @@
 using namespace galay::kernel;
 using namespace std::chrono_literals;
 
-static_assert(sizeof(Coroutine) == sizeof(void*),
-              "Coroutine must stay pointer-sized once the lightweight task core lands");
 static_assert(sizeof(TaskRef) == sizeof(void*),
               "TaskRef must stay pointer-sized once the lightweight task core lands");
 static_assert(sizeof(Waker) == sizeof(void*),
@@ -65,7 +63,8 @@ struct ManualSuspendAwaitable {
 
     bool await_ready() const noexcept { return false; }
 
-    bool await_suspend(std::coroutine_handle<Coroutine::promise_type> handle) noexcept {
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept {
         state->waker = Waker(handle);
         state->armed.store(true, std::memory_order_release);
         return true;
@@ -74,13 +73,13 @@ struct ManualSuspendAwaitable {
     void await_resume() const noexcept {}
 };
 
-Coroutine sameThreadWaiter(ManualWakeState* state) {
+Task<void> sameThreadWaiter(ManualWakeState* state) {
     co_await ManualSuspendAwaitable{state};
     state->resumed.fetch_add(1, std::memory_order_relaxed);
     co_return;
 }
 
-Coroutine sameThreadProducer(ManualWakeState* state) {
+Task<void> sameThreadProducer(ManualWakeState* state) {
     while (!state->armed.load(std::memory_order_acquire)) {
         co_yield true;
     }
@@ -103,8 +102,8 @@ bool runSameThreadDoubleWake() {
         return false;
     }
 
-    scheduler->spawn(sameThreadWaiter(&state));
-    scheduler->spawn(sameThreadProducer(&state));
+    scheduler->schedule(detail::TaskAccess::detachTask(sameThreadWaiter(&state)));
+    scheduler->schedule(detail::TaskAccess::detachTask(sameThreadProducer(&state)));
 
     const bool producer_done = waitUntil(state.producer_done);
 
@@ -142,15 +141,15 @@ struct WaitChainState {
     std::atomic<bool> done{false};
 };
 
-Coroutine waitChild(WaitChainState* state) {
+Task<void> waitChild(WaitChainState* state) {
     state->child_steps.fetch_add(1, std::memory_order_relaxed);
     co_yield true;
     state->child_steps.fetch_add(1, std::memory_order_relaxed);
     co_return;
 }
 
-Coroutine waitParent(WaitChainState* state) {
-    co_await waitChild(state).wait();
+Task<void> waitParent(WaitChainState* state) {
+    co_await waitChild(state);
     state->waiter_resumes.fetch_add(1, std::memory_order_relaxed);
     state->done.store(true, std::memory_order_release);
     co_return;
@@ -168,7 +167,7 @@ bool runWaitChainResumeOnce() {
         return false;
     }
 
-    scheduler->spawn(waitParent(&state));
+    scheduler->schedule(detail::TaskAccess::detachTask(waitParent(&state)));
     const bool done = waitUntil(state.done);
     runtime.stop();
 

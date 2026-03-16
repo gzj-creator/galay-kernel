@@ -5,7 +5,7 @@
  * 通过条件：单次 recv 解析出两帧，且无需第二次底层 recv。
  */
 
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/common/ByteQueueView.h"
 #include <array>
@@ -101,7 +101,7 @@ struct TestState {
     std::atomic<int> parse_calls{0};
 };
 
-Coroutine parserTask(TestState* state, int fd) {
+Task<void> parserTask(TestState* state, int fd) {
     IOController controller(GHandle{.fd = fd});
     CoalescedFlow flow;
 
@@ -147,7 +147,7 @@ int main() {
     scheduler.start();
 
     TestState state;
-    scheduler.spawn(parserTask(&state, fds[0]));
+    scheduleTask(scheduler, parserTask(&state, fds[0]));
 
     const auto payload = makeTwoFrames();
     if (::send(fds[1], payload.data(), payload.size(), 0) != static_cast<ssize_t>(payload.size())) {

@@ -38,7 +38,8 @@ struct AioCommitAwaitable {
                        std::vector<struct iocb*>&& pending_ptrs, size_t pending_count);
 
     bool await_ready() { return m_pending_count == 0; }
-    bool await_suspend(std::coroutine_handle<> handle);
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle);
     std::expected<std::vector<ssize_t>, IOError> await_resume();
 
     IOController* m_controller;
@@ -140,6 +141,37 @@ private:
 };
 
 } // namespace galay::async
+
+template <typename Promise>
+inline bool galay::async::AioCommitAwaitable::await_suspend(std::coroutine_handle<Promise> handle)
+{
+    m_waker = Waker(handle);
+
+    if (m_pending_count == 0) {
+        m_result = std::vector<ssize_t>{};
+        return false;
+    }
+
+    int ret = io_submit(m_aio_ctx, m_pending_count, m_pending_ptrs.data());
+    if (ret < 0) {
+        m_result = std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(-ret)));
+        return false;
+    }
+
+    m_controller->m_handle.fd = m_event_fd;
+    m_controller->fillAwaitable(FILEREAD, this);
+    auto scheduler = m_waker.getScheduler();
+    if (scheduler->type() != kIOScheduler) {
+        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+        return false;
+    }
+    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    if (io_scheduler->addFileRead(m_controller) < 0) {
+        m_result = std::unexpected(IOError(kReadFailed, errno));
+        return false;
+    }
+    return true;
+}
 
 #endif // USE_EPOLL
 

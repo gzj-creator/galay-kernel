@@ -16,7 +16,7 @@
 #include <sys/stat.h>
 
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 
 #ifdef USE_KQUEUE
 #include "galay-kernel/kernel/KqueueScheduler.h"
@@ -67,7 +67,7 @@ bool createTestFile() {
     return true;
 }
 
-Coroutine sendfileServer() {
+Task<void> sendfileServer() {
     TcpSocket listener;
     listener.option().handleReuseAddr();
     listener.option().handleNonBlock();
@@ -120,7 +120,7 @@ Coroutine sendfileServer() {
     g_done.store(true, std::memory_order_release);
 }
 
-Coroutine sendfileClient() {
+Task<void> sendfileClient() {
     while (!g_server_ready.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -158,8 +158,8 @@ int main() {
     IOSchedulerType scheduler;
     scheduler.start();
 
-    scheduler.spawn(sendfileServer());
-    scheduler.spawn(sendfileClient());
+    scheduleTask(scheduler, sendfileServer());
+    scheduleTask(scheduler, sendfileClient());
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (!g_done.load(std::memory_order_acquire) &&

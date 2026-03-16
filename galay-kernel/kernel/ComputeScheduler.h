@@ -11,7 +11,7 @@
  * @code
  * ComputeScheduler scheduler;
  * scheduler.start();
- * scheduler.spawn(myComputeCoroutine());
+ * scheduler.schedule(myComputeTask());
  * // ...
  * scheduler.stop();
  * @endcode
@@ -20,7 +20,6 @@
 #ifndef GALAY_KERNEL_COMPUTE_SCHEDULER_H
 #define GALAY_KERNEL_COMPUTE_SCHEDULER_H
 
-#include "Coroutine.h"
 #include "Scheduler.hpp"
 #include "galay-kernel/kernel/TimerScheduler.h"
 #include <thread>

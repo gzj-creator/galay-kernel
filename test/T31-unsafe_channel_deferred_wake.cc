@@ -19,7 +19,7 @@ static std::atomic<bool> g_done{false};
 static int g_batch_size = 0;
 static int g_sum = 0;
 
-Coroutine batchConsumer(UnsafeChannel<int>* channel) {
+Task<void> batchConsumer(UnsafeChannel<int>* channel) {
     auto batch = co_await channel->recvBatch(8);
     if (batch) {
         g_batch_size = static_cast<int>(batch->size());
@@ -31,7 +31,7 @@ Coroutine batchConsumer(UnsafeChannel<int>* channel) {
     co_return;
 }
 
-Coroutine batchProducer(UnsafeChannel<int>* channel) {
+Task<void> batchProducer(UnsafeChannel<int>* channel) {
     channel->send(1);
     channel->send(2);
     co_return;
@@ -49,8 +49,8 @@ int main() {
     }
 
     UnsafeChannel<int> channel{UnsafeChannelWakeMode::Deferred};
-    scheduler->spawn(batchConsumer(&channel));
-    scheduler->spawn(batchProducer(&channel));
+    scheduler->schedule(detail::TaskAccess::detachTask(batchConsumer(&channel)));
+    scheduler->schedule(detail::TaskAccess::detachTask(batchProducer(&channel)));
 
     for (int i = 0; i < 40; ++i) {
         if (g_done.load(std::memory_order_acquire)) {

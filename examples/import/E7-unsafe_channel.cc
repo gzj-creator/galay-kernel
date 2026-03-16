@@ -21,7 +21,7 @@ std::atomic<int> g_received{0};
 std::atomic<long long> g_sum{0};
 std::atomic<bool> g_done{false};
 
-Coroutine producer(UnsafeChannel<int>* channel) {
+Task<void> producer(UnsafeChannel<int>* channel) {
     for (int i = 1; i <= kMessageCount; ++i) {
         channel->send(i);
         co_yield true;
@@ -29,7 +29,7 @@ Coroutine producer(UnsafeChannel<int>* channel) {
     co_return;
 }
 
-Coroutine consumer(UnsafeChannel<int>* channel) {
+Task<void> consumer(UnsafeChannel<int>* channel) {
     while (g_received.load(std::memory_order_acquire) < kMessageCount) {
         auto value = co_await channel->recv();
         if (!value) {
@@ -49,8 +49,8 @@ int main() {
     ComputeScheduler scheduler;
     scheduler.start();
 
-    scheduler.spawn(consumer(&channel));
-    scheduler.spawn(producer(&channel));
+    scheduleTask(scheduler, consumer(&channel));
+    scheduleTask(scheduler, producer(&channel));
 
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (!g_done.load(std::memory_order_acquire) &&

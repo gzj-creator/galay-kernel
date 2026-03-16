@@ -1,7 +1,7 @@
 /**
  * @file T11-compute_scheduler.cc
- * @brief 用途：验证 `ComputeScheduler` 在基础、并发和链式任务场景下的正确性。
- * 关键覆盖点：任务执行、并发提交、计算密集任务、`then` 链式恢复与等待通知。
+ * @brief 用途：验证 `ComputeScheduler` 在基础、并发和等待通知场景下的正确性。
+ * 关键覆盖点：任务执行、并发提交、计算密集任务、调度器启停与等待通知恢复。
  * 通过条件：所有子测试通过并输出 PASS，总体返回码为 0。
  */
 
@@ -11,8 +11,8 @@
 #include <vector>
 #include <cmath>
 #include "galay-kernel/kernel/ComputeScheduler.h"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/concurrency/AsyncWaiter.h"
-#include "galay-kernel/kernel/Coroutine.h"
 #include "test/StdoutLog.h"
 #include "test_result_writer.h"
 
@@ -22,20 +22,28 @@ using namespace std::chrono_literals;
 std::atomic<int> g_passed{0};
 std::atomic<int> g_total{0};
 
-// 测试1：基本协程执行
+template <typename SchedulerT, typename T>
+void requireSchedule(SchedulerT& scheduler, Task<T>&& task)
+{
+    const bool scheduled = scheduler.schedule(detail::TaskAccess::detachTask(std::move(task)));
+    if (!scheduled) {
+        throw std::runtime_error("failed to schedule task in T11");
+    }
+}
+
+// 测试1：基本任务执行
 std::atomic<bool> g_test1_done{false};
 
-Coroutine testBasicExecution(ComputeScheduler* scheduler) {
-    (void)scheduler;
+Task<void> testBasicExecution() {
     g_test1_done = true;
     co_return;
 }
 
-// 测试2：多个协程并发执行
+// 测试2：多个任务并发执行
 std::atomic<int> g_test2_counter{0};
 constexpr int TEST2_COUNT = 100;
 
-Coroutine testConcurrentTask() {
+Task<void> testConcurrentTask() {
     g_test2_counter.fetch_add(1, std::memory_order_relaxed);
     co_return;
 }
@@ -44,7 +52,7 @@ Coroutine testConcurrentTask() {
 std::atomic<int> g_test3_counter{0};
 constexpr int TEST3_COUNT = 10;
 
-Coroutine testComputeIntensive() {
+Task<void> testComputeIntensive() {
     // 模拟 CPU 密集型计算
     volatile double result = 0;
     for (int i = 0; i < 100000; ++i) {
@@ -54,28 +62,11 @@ Coroutine testComputeIntensive() {
     co_return;
 }
 
-// 测试4：协程链式执行（使用 then）
-std::vector<int> g_test4_sequence;
-std::mutex g_test4_mutex;
-
-Coroutine testChainTask(int id) {
-    {
-        std::lock_guard<std::mutex> lock(g_test4_mutex);
-        g_test4_sequence.push_back(id);
-    }
-    co_return;
-}
-
 // 测试5：调度器启停
 std::atomic<int> g_test5_counter{0};
 
-Coroutine testStartStop() {
+Task<void> testStartStop() {
     g_test5_counter.fetch_add(1, std::memory_order_relaxed);
-    co_return;
-}
-
-// 测试6：空闲时线程等待（不忙等待）
-Coroutine testIdleWait() {
     co_return;
 }
 
@@ -83,7 +74,7 @@ Coroutine testIdleWait() {
 std::atomic<int> g_test8_result{0};
 
 // 计算任务 - 在 ComputeScheduler 中执行
-Coroutine computeTask(AsyncWaiter<int>* waiter) {
+Task<void> computeTask(AsyncWaiter<int>* waiter) {
     // 模拟计算
     volatile int sum = 0;
     for (int i = 0; i < 10000; ++i) {
@@ -97,7 +88,7 @@ Coroutine computeTask(AsyncWaiter<int>* waiter) {
 // 测试9：AsyncWaiter<void> 无返回值
 std::atomic<bool> g_test9_done{false};
 
-Coroutine computeTaskVoid(AsyncWaiter<void>* waiter) {
+Task<void> computeTaskVoid(AsyncWaiter<void>* waiter) {
     // 模拟计算
     volatile int sum = 0;
     for (int i = 0; i < 10000; ++i) {
@@ -111,28 +102,28 @@ Coroutine computeTaskVoid(AsyncWaiter<void>* waiter) {
 void runTests() {
     LogInfo("=== ComputeScheduler Test Suite ===");
 
-    // 测试1：基本协程执行
+    // 测试1：基本任务执行
     {
-        LogInfo("[Test 1] Basic coroutine execution...");
+        LogInfo("[Test 1] Basic task execution...");
         g_total++;
 
         ComputeScheduler scheduler;
         scheduler.start();
-        scheduler.spawn(testBasicExecution(&scheduler));
+        requireSchedule(scheduler, testBasicExecution());
         // 使用调度器的空闲等待
         scheduler.stop();
 
         if (g_test1_done) {
-            LogInfo("[Test 1] PASSED: Coroutine executed successfully");
+            LogInfo("[Test 1] PASSED: Task executed successfully");
             g_passed++;
         } else {
-            LogError("[Test 1] FAILED: Coroutine did not execute");
+            LogError("[Test 1] FAILED: Task did not execute");
         }
     }
 
-    // 测试2：多个协程并发执行
+    // 测试2：多个任务并发执行
     {
-        LogInfo("[Test 2] Concurrent coroutine execution ({} tasks)...", TEST2_COUNT);
+        LogInfo("[Test 2] Concurrent task execution ({} tasks)...", TEST2_COUNT);
         g_total++;
 
         ComputeScheduler scheduler1, scheduler2, scheduler3, scheduler4;
@@ -144,10 +135,10 @@ void runTests() {
         for (int i = 0; i < TEST2_COUNT; ++i) {
             // 轮询分发到4个调度器
             switch (i % 4) {
-                case 0: scheduler1.spawn(testConcurrentTask()); break;
-                case 1: scheduler2.spawn(testConcurrentTask()); break;
-                case 2: scheduler3.spawn(testConcurrentTask()); break;
-                case 3: scheduler4.spawn(testConcurrentTask()); break;
+                case 0: requireSchedule(scheduler1, testConcurrentTask()); break;
+                case 1: requireSchedule(scheduler2, testConcurrentTask()); break;
+                case 2: requireSchedule(scheduler3, testConcurrentTask()); break;
+                case 3: requireSchedule(scheduler4, testConcurrentTask()); break;
             }
         }
 
@@ -180,10 +171,10 @@ void runTests() {
 
         for (int i = 0; i < TEST3_COUNT; ++i) {
             switch (i % 4) {
-                case 0: scheduler1.spawn(testComputeIntensive()); break;
-                case 1: scheduler2.spawn(testComputeIntensive()); break;
-                case 2: scheduler3.spawn(testComputeIntensive()); break;
-                case 3: scheduler4.spawn(testComputeIntensive()); break;
+                case 0: requireSchedule(scheduler1, testComputeIntensive()); break;
+                case 1: requireSchedule(scheduler2, testComputeIntensive()); break;
+                case 2: requireSchedule(scheduler3, testComputeIntensive()); break;
+                case 3: requireSchedule(scheduler4, testComputeIntensive()); break;
             }
         }
 
@@ -208,8 +199,8 @@ void runTests() {
         }
     }
 
-    // 测试4：协程链式执行（兼容 then）
-    // focused 验证已迁移到 T61-coroutine_then_compat，避免这个旧套件把停机时机噪声混入 then 语义回归
+    // 测试4：链式任务 focused 验证已迁移到 T61-task_then_compat，
+    // 避免这个套件把停机时机噪声混入 then 语义回归
 
     // 测试5：调度器启停
     {
@@ -220,7 +211,7 @@ void runTests() {
 
         // 第一次启停
         scheduler.start();
-        scheduler.spawn(testStartStop());
+        requireSchedule(scheduler, testStartStop());
         // 使用调度器的空闲等待
         scheduler.stop();
 
@@ -228,7 +219,7 @@ void runTests() {
 
         // 第二次启停
         scheduler.start();
-        scheduler.spawn(testStartStop());
+        requireSchedule(scheduler, testStartStop());
         // 使用调度器的空闲等待
         scheduler.stop();
 
@@ -294,7 +285,7 @@ void runTests() {
         computeScheduler.start();
 
         AsyncWaiter<int> waiter;
-        computeScheduler.spawn(computeTask(&waiter));
+        requireSchedule(computeScheduler, computeTask(&waiter));
 
         // 等待结果（简单轮询，实际使用中应在协程内 co_await）
         while (!waiter.isReady()) {
@@ -321,7 +312,7 @@ void runTests() {
         computeScheduler.start();
 
         AsyncWaiter<void> waiter;
-        computeScheduler.spawn(computeTaskVoid(&waiter));
+        requireSchedule(computeScheduler, computeTaskVoid(&waiter));
 
         while (!waiter.isReady()) {
             // 使用调度器的空闲等待

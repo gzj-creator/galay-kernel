@@ -6,10 +6,12 @@
  */
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <string_view>
+#include <thread>
 #include "galay-kernel/async/UdpSocket.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/TestPortConfig.h"
 #include "test/StdoutLog.h"
 #include "test_result_writer.h"
@@ -31,6 +33,7 @@ using IOSchedulerType = galay::kernel::IOUringScheduler;
 
 using namespace galay::async;
 using namespace galay::kernel;
+using namespace std::chrono_literals;
 
 namespace {
 
@@ -38,15 +41,28 @@ uint16_t udpTestPort() {
     return galay::test::resolvePortFromEnv("GALAY_TEST_UDP_PORT", 8080);
 }
 
+bool waitForFlag(const std::atomic<bool>& flag, std::chrono::milliseconds timeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (flag.load(std::memory_order_acquire)) {
+            return true;
+        }
+        std::this_thread::sleep_for(5ms);
+    }
+    return flag.load(std::memory_order_acquire);
+}
+
 }
 
 std::atomic<int> g_passed{0};
 std::atomic<int> g_failed{0};
 std::atomic<int> g_total{0};
+std::atomic<bool> g_server_ready{false};
 std::atomic<bool> g_test_done{false};
 
 // UDP客户端协程
-Coroutine udpEchoClient() {
+Task<void> udpEchoClient() {
     g_total++;
     LogInfo("UDP Client starting...");
     UdpSocket socket;
@@ -115,6 +131,46 @@ Coroutine udpEchoClient() {
     co_return;
 }
 
+Task<void> peerUdpServer() {
+    UdpSocket socket;
+    socket.option().handleReuseAddr();
+    socket.option().handleNonBlock();
+
+    Host bindHost(IPType::IPV4, "127.0.0.1", udpTestPort());
+    auto bindResult = socket.bind(bindHost);
+    if (!bindResult) {
+        LogError("Peer UDP server failed to bind");
+        g_failed++;
+        g_test_done = true;
+        co_return;
+    }
+
+    g_server_ready = true;
+
+    char buffer[1024];
+    for (int i = 0; i < 3; ++i) {
+        Host from;
+        auto recvResult = co_await socket.recvfrom(buffer, sizeof(buffer), &from);
+        if (!recvResult) {
+            LogError("Peer UDP server recv failed");
+            g_failed++;
+            g_test_done = true;
+            co_return;
+        }
+
+        auto sendResult = co_await socket.sendto(buffer, recvResult.value(), from);
+        if (!sendResult) {
+            LogError("Peer UDP server send failed");
+            g_failed++;
+            g_test_done = true;
+            co_return;
+        }
+    }
+
+    co_await socket.close();
+    co_return;
+}
+
 int main() {
     LogInfo("========================================");
     LogInfo("UDP Echo Client Test");
@@ -127,13 +183,27 @@ int main() {
     scheduler.start();
     LogDebug("Scheduler started");
 
-    // 启动客户端
-    scheduler.spawn(udpEchoClient());
-    LogDebug("Client coroutine spawned");
+    if (!scheduleTask(scheduler, peerUdpServer())) {
+        LogError("Failed to schedule async peer UDP server");
+        g_failed++;
+        g_test_done = true;
+    }
 
-    // 等待测试完成
-    while (!g_test_done.load()) {
-        // 使用调度器的空闲等待
+    if (!waitForFlag(g_server_ready, 5s) && !g_test_done.load()) {
+        LogError("Peer UDP server did not become ready in time");
+        g_failed++;
+        g_test_done = true;
+    }
+
+    // 启动客户端
+    if (!g_test_done.load()) {
+        scheduleTask(scheduler, udpEchoClient());
+        LogDebug("Client task submitted");
+    }
+
+    if (!waitForFlag(g_test_done, 5s)) {
+        LogError("UDP client test timed out waiting for completion");
+        g_failed++;
     }
 
     scheduler.stop();

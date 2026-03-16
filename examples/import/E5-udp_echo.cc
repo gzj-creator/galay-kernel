@@ -25,7 +25,7 @@ std::atomic<bool> g_server_ready{false};
 std::atomic<bool> g_server_done{false};
 std::atomic<bool> g_client_done{false};
 
-Coroutine udpServer() {
+Task<void> udpServer() {
     UdpSocket socket;
 
     auto optResult = socket.option().handleReuseAddr();
@@ -63,7 +63,7 @@ Coroutine udpServer() {
     g_server_done.store(true, std::memory_order_release);
 }
 
-Coroutine udpClient() {
+Task<void> udpClient() {
     while (!g_server_ready.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -101,8 +101,8 @@ int main() {
     runtime.start();
 
     auto* io = runtime.getNextIOScheduler();
-    io->spawn(udpServer());
-    io->spawn(udpClient());
+    scheduleTask(io, udpServer());
+    scheduleTask(io, udpClient());
 
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while ((!g_server_done.load(std::memory_order_acquire) ||

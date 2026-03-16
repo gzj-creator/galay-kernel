@@ -18,7 +18,7 @@
 - IO 调度：`EpollScheduler` / `IOUringScheduler` / `KqueueScheduler` / `IOCP`
 - 计算调度：`ComputeScheduler`
 - 运行时编排：`Runtime`、`RuntimeBuilder`、`RuntimeHandle`
-- 协程与任务：`Coroutine`、`Task<T>`、`JoinHandle<T>::join()/wait()`、`blockOn()`、`spawn()`、`spawnBlocking()`、`sleep(...)`
+- 任务模型：`Task<T>`、`Task<void>::then(...)`、`JoinHandle<T>::join()/wait()`、`blockOn()`、`spawn()`、`spawnBlocking()`、`sleep(...)`
 - 网络 IO：`galay::async::TcpSocket`、`galay::async::UdpSocket`
 - 文件 IO：`galay::async::AsyncFile`；Linux epoll 下额外提供 `galay::async::AioFile`
 - 低层组合扩展：`SequenceAwaitable<ResultT, InlineN>`、`AwaitableBuilder<ResultT, InlineN, FlowT>`、`ParseStatus`、`ByteQueueView`
@@ -124,7 +124,7 @@ cmake --build build --parallel
 
 bash scripts/run_test_matrix.sh "$PWD/build" "$PWD/build/test_matrix_logs_2026_03_15_v310_final_rerun"
 
-for name in E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-CoroutineBasic E5-UdpEcho; do
+for name in E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-TaskBasic E5-UdpEcho; do
   ./build/bin/$name
 done
 
@@ -141,7 +141,7 @@ bash scripts/run_benchmark_matrix.sh \
   - `E1-SendfileExample`：PASS
   - `E2-TcpEchoServer`：PASS
   - `E3-TcpClient`：PASS
-  - `E4-CoroutineBasic`：PASS
+  - `E4-TaskBasic`：PASS
   - `E5-UdpEcho`：PASS
 - benchmark：
   - `B1` ~ `B14` fresh 跑完并生成当前机器日志
@@ -174,7 +174,7 @@ bash scripts/run_benchmark_matrix.sh \
 
 优先落到主干页的查询类型：
 
-- `galay.kernel` / Runtime / Scheduler / Coroutine / TimerScheduler：先看 `docs/01-架构设计.md`、`docs/02-API参考.md`、`docs/03-使用指南.md`
+- `galay.kernel` / Runtime / Scheduler / Task / TimerScheduler：先看 `docs/01-架构设计.md`、`docs/02-API参考.md`、`docs/03-使用指南.md`
 - `Bytes` / `StringMetaData` / `Buffer` / `RingBuffer` / `Host` / `IOError`：先看 `docs/02-API参考.md`、`docs/07-常见问题.md`
 - TcpSocket / UdpSocket / AsyncFile / FileWatcher：先看 `docs/02-API参考.md`、`docs/03-使用指南.md`
 - MpscChannel / UnsafeChannel / AsyncMutex / AsyncWaiter：先看 `docs/02-API参考.md`、`docs/03-使用指南.md`、`docs/07-常见问题.md`

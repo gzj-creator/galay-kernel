@@ -12,7 +12,7 @@
 #include <atomic>
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Buffer.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -221,7 +221,7 @@ void testMoveSemantics() {
 // ============ 集成测试（网络 IO）============
 
 // 服务器协程 - 使用 RingBuffer + readv 接收数据
-Coroutine ringBufferServer([[maybe_unused]] IOScheduler* scheduler) {
+Task<void> ringBufferServer([[maybe_unused]] IOScheduler* scheduler) {
     LogInfo("[Server] Starting...");
     TcpSocket listener;
 
@@ -314,7 +314,7 @@ Coroutine ringBufferServer([[maybe_unused]] IOScheduler* scheduler) {
 }
 
 // 客户端协程 - 使用 RingBuffer + writev 发送数据
-Coroutine ringBufferClient([[maybe_unused]] IOScheduler* scheduler) {
+Task<void> ringBufferClient([[maybe_unused]] IOScheduler* scheduler) {
     // 等待服务器就绪
     while (!g_server_ready) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -406,10 +406,10 @@ int main() {
     scheduler.start();
 
     // 启动服务器
-    scheduler.spawn(ringBufferServer(&scheduler));
+    scheduleTask(scheduler, ringBufferServer(&scheduler));
 
     // 启动客户端
-    scheduler.spawn(ringBufferClient(&scheduler));
+    scheduleTask(scheduler, ringBufferClient(&scheduler));
 
     // 等待测试完成
     std::this_thread::sleep_for(std::chrono::seconds(3));

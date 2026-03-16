@@ -10,7 +10,7 @@ namespace galay::kernel {
 struct SchedulerTestAccess {
     template <typename SchedulerT>
     static void processPending(SchedulerT& scheduler) {
-        scheduler.processPendingCoroutines();
+        scheduler.processPendingTasks();
     }
 
     template <typename SchedulerT>

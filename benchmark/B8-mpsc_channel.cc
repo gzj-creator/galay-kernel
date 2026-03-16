@@ -15,7 +15,7 @@
 #include <numeric>
 #include "benchmark/BenchmarkSync.h"
 #include "galay-kernel/concurrency/MpscChannel.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/ComputeScheduler.h"
 #include "test/StdoutLog.h"
 
@@ -33,6 +33,7 @@ constexpr std::size_t BATCH_SAMPLE_COUNT = 5;
 constexpr auto BATCH_MIN_SAMPLE_DURATION = 300ms;
 constexpr std::size_t LATENCY_SAMPLE_COUNT = 5;
 constexpr std::size_t CROSS_SCHEDULER_SAMPLE_COUNT = 5;
+constexpr auto CORRECTNESS_WAIT_TIMEOUT = 10s;
 
 // ============== 全局计数器 ==============
 std::atomic<int64_t> g_sent{0};
@@ -81,7 +82,7 @@ struct LatencySample {
 // ============== 消费者协程 ==============
 
 // 简单消费者（吞吐量测试）
-Coroutine simpleConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
+Task<void> simpleConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
     g_consumer_ready.store(true, std::memory_order_release);
     int64_t received = 0;
     int64_t sum = 0;
@@ -102,7 +103,7 @@ Coroutine simpleConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) 
 }
 
 // 批量消费者
-Coroutine batchConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
+Task<void> batchConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
     g_consumer_ready.store(true, std::memory_order_release);
     int64_t received = 0;
     int64_t sum = 0;
@@ -125,7 +126,7 @@ Coroutine batchConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
 }
 
 // 延迟测试消费者
-Coroutine latencyConsumer(MpscChannel<TimestampedMessage>* channel, int64_t expected_count) {
+Task<void> latencyConsumer(MpscChannel<TimestampedMessage>* channel, int64_t expected_count) {
     int64_t received = 0;
     int64_t latency_sum_ns = 0;
     g_consumer_ready.store(true, std::memory_order_release);
@@ -150,7 +151,7 @@ Coroutine latencyConsumer(MpscChannel<TimestampedMessage>* channel, int64_t expe
 }
 
 // 正确性验证消费者
-Coroutine correctnessConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
+Task<void> correctnessConsumer(MpscChannel<int64_t>* channel, int64_t expected_count) {
     while (g_received < expected_count) {
         auto value = co_await channel->recv();
         if (value) {
@@ -197,9 +198,9 @@ void latencyProducer(MpscChannel<TimestampedMessage>* channel, int64_t count) {
     g_sent.store(count, std::memory_order_relaxed);
 }
 
-Coroutine crossSchedulerProducer(MpscChannel<int64_t>* channel,
-                                 int64_t count,
-                                 galay::benchmark::CompletionLatch* completion_latch) {
+Task<void> crossSchedulerProducer(MpscChannel<int64_t>* channel,
+                                  int64_t count,
+                                  galay::benchmark::CompletionLatch* completion_latch) {
     for (int64_t i = 0; i < count; ++i) {
         channel->send(i);
         if (i != 0 && (i % 100) == 0) {
@@ -235,7 +236,7 @@ void benchSingleProducerThroughput(int64_t message_count) {
             galay::benchmark::CompletionLatch consumer_done_latch(1);
             g_consumer_done_latch = &consumer_done_latch;
 
-            scheduler.spawn(simpleConsumer(&channel, sample_message_count));
+            scheduleTask(scheduler, simpleConsumer(&channel, sample_message_count));
             if (!galay::benchmark::waitForFlag(g_consumer_ready, 2s)) {
                 LogError("  consumer did not become ready before throughput run");
                 g_consumer_done_latch = nullptr;
@@ -325,7 +326,7 @@ void benchMultiProducerThroughput(int producer_count, int64_t total_messages) {
         scheduler.start();
         galay::benchmark::CompletionLatch consumer_done_latch(1);
         g_consumer_done_latch = &consumer_done_latch;
-        scheduler.spawn(simpleConsumer(&channel, total_messages));
+        scheduleTask(scheduler, simpleConsumer(&channel, total_messages));
         if (!galay::benchmark::waitForFlag(g_consumer_ready, 2s)) {
             LogError("  consumer did not become ready before multi-producer run");
             g_consumer_done_latch = nullptr;
@@ -395,7 +396,7 @@ void benchBatchReceiveThroughput(int64_t message_count) {
             scheduler.start();
             galay::benchmark::CompletionLatch consumer_done_latch(1);
             g_consumer_done_latch = &consumer_done_latch;
-            scheduler.spawn(batchConsumer(&channel, sample_message_count));
+            scheduleTask(scheduler, batchConsumer(&channel, sample_message_count));
             if (!galay::benchmark::waitForFlag(g_consumer_ready, 2s)) {
                 LogError("  consumer did not become ready before batch run");
                 g_consumer_done_latch = nullptr;
@@ -468,7 +469,7 @@ void benchLatency(int64_t message_count) {
         scheduler.start();
         galay::benchmark::CompletionLatch consumer_done_latch(1);
         g_consumer_done_latch = &consumer_done_latch;
-        scheduler.spawn(latencyConsumer(&channel, message_count));
+        scheduleTask(scheduler, latencyConsumer(&channel, message_count));
 
         if (!galay::benchmark::waitForFlag(g_consumer_ready, 2s)) {
             LogError("  consumer did not become ready before latency run");
@@ -513,7 +514,7 @@ void benchCorrectness(int producer_count, int64_t total_messages) {
     ComputeScheduler scheduler;
 
     scheduler.start();
-    scheduler.spawn(correctnessConsumer(&channel, total_messages));
+    scheduleTask(scheduler, correctnessConsumer(&channel, total_messages));
 
     int64_t per_producer = total_messages / producer_count;
 
@@ -528,8 +529,8 @@ void benchCorrectness(int producer_count, int64_t total_messages) {
         t.join();
     }
 
-    while (!g_consumer_done) {
-        std::this_thread::sleep_for(1ms);
+    if (!galay::benchmark::waitForFlag(g_consumer_done, CORRECTNESS_WAIT_TIMEOUT, 1ms)) {
+        LogError("  correctness consumer timed out after {}s", CORRECTNESS_WAIT_TIMEOUT.count());
     }
 
     scheduler.stop();
@@ -578,7 +579,7 @@ void benchCrossScheduler(int64_t message_count) {
         consumerScheduler.start();
         galay::benchmark::CompletionLatch consumer_done_latch(1);
         g_consumer_done_latch = &consumer_done_latch;
-        consumerScheduler.spawn(simpleConsumer(&channel, message_count));
+        scheduleTask(consumerScheduler, simpleConsumer(&channel, message_count));
         if (!galay::benchmark::waitForFlag(g_consumer_ready, 2s)) {
             LogError("  consumer did not become ready before cross-scheduler run");
             g_consumer_done_latch = nullptr;
@@ -595,7 +596,8 @@ void benchCrossScheduler(int64_t message_count) {
             producerScheduler.start();
             producer_ready_latch.arrive();
             start_gate.wait();
-            producerScheduler.spawn(
+            scheduleTask(
+                producerScheduler,
                 crossSchedulerProducer(&channel, message_count, &producer_done_latch));
             producer_done_latch.wait();
             producerScheduler.stop();
@@ -661,7 +663,7 @@ void benchSustained(int duration_sec) {
     std::atomic<bool> running{true};
 
     // 消费者协程
-    auto sustainedConsumer = [](MpscChannel<int64_t>* ch, std::atomic<bool>* run) -> Coroutine {
+    auto sustainedConsumer = [](MpscChannel<int64_t>* ch, std::atomic<bool>* run) -> Task<void> {
         while (*run || ch->size() > 0) {
             auto value = co_await ch->recv();
             if (value) {
@@ -673,7 +675,7 @@ void benchSustained(int duration_sec) {
     };
 
     scheduler.start();
-    scheduler.spawn(sustainedConsumer(&channel, &running));
+    scheduleTask(scheduler, sustainedConsumer(&channel, &running));
 
     auto start = std::chrono::steady_clock::now();
     auto end_time = start + std::chrono::seconds(duration_sec);
@@ -707,8 +709,11 @@ void benchSustained(int duration_sec) {
     }
 
     // 等待消费者处理完剩余消息
-    while (!g_consumer_done && channel.size() > 0) {
-        std::this_thread::sleep_for(10ms);
+    const auto drain_timeout = std::chrono::seconds(std::max(duration_sec * 2, 10));
+    if (!galay::benchmark::waitForFlag(g_consumer_done, drain_timeout, 10ms) && channel.size() > 0) {
+        LogError("  consumer drain timed out after {}s with {} queued messages remaining",
+                 drain_timeout.count(),
+                 channel.size());
     }
     std::this_thread::sleep_for(100ms);
 
