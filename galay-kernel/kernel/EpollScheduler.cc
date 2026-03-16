@@ -134,55 +134,14 @@ std::optional<IOError> EpollScheduler::lastError() const
     return detail::loadBackendError(m_last_error_code);
 }
 
-bool EpollScheduler::spawn(Coroutine co)
-{
-    auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
-    if (!scheduler) {
-        detail::CoroutineAccess::setScheduler(co, this);
-    } else if (scheduler != this) {
-        return false;
-    }
-
-    TaskRef task = detail::CoroutineAccess::detachTask(std::move(co));
-    if (std::this_thread::get_id() == m_threadId) {
-        m_worker.scheduleLocal(std::move(task));
-        return true;
-    }
-
-    const bool queue_was_empty = m_worker.scheduleInjected(std::move(task));
-    m_wake_coordinator.requestWake(queue_was_empty, [this]() { notify(); });
-    return true;
-}
-
 bool EpollScheduler::schedule(TaskRef task)
 {
-    auto* state = task.state();
-    if (!state || state->m_scheduler != this) {
+    if (!bindTask(task)) {
         return false;
     }
 
     if (std::this_thread::get_id() == m_threadId) {
         m_worker.scheduleLocal(std::move(task));
-        return true;
-    }
-
-    const bool queue_was_empty = m_worker.scheduleInjected(std::move(task));
-    m_wake_coordinator.requestWake(queue_was_empty, [this]() { notify(); });
-    return true;
-}
-
-bool EpollScheduler::spawnDeferred(Coroutine co)
-{
-    auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
-    if (!scheduler) {
-        detail::CoroutineAccess::setScheduler(co, this);
-    } else if (scheduler != this) {
-        return false;
-    }
-
-    TaskRef task = detail::CoroutineAccess::detachTask(std::move(co));
-    if (std::this_thread::get_id() == m_threadId) {
-        m_worker.scheduleLocalDeferred(std::move(task));
         return true;
     }
 
@@ -193,8 +152,7 @@ bool EpollScheduler::spawnDeferred(Coroutine co)
 
 bool EpollScheduler::scheduleDeferred(TaskRef task)
 {
-    auto* state = task.state();
-    if (!state || state->m_scheduler != this) {
+    if (!bindTask(task)) {
         return false;
     }
 
@@ -208,14 +166,11 @@ bool EpollScheduler::scheduleDeferred(TaskRef task)
     return true;
 }
 
-bool EpollScheduler::spawnImmidiately(Coroutine co)
+bool EpollScheduler::scheduleImmediately(TaskRef task)
 {
-    auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
-    if (scheduler) {
+    if (!bindTask(task)) {
         return false;
     }
-    detail::CoroutineAccess::setScheduler(co, this);
-    TaskRef task = detail::CoroutineAccess::detachTask(std::move(co));
     resume(task);
     return true;
 }

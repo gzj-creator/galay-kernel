@@ -30,7 +30,7 @@ bool verifyInjectedBurstFastPath(const char* label) {
     SchedulerT scheduler;
 
     for (int i = 0; i < kTaskCount; ++i) {
-        if (!scheduler.spawn(countingTask())) {
+        if (!scheduler.schedule(detail::CoroutineAccess::detachTask(countingTask()))) {
             std::cerr << "[T46] " << label << " failed to enqueue injected task " << i << "\n";
             return false;
         }

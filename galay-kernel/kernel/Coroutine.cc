@@ -28,12 +28,12 @@ namespace detail
 
 bool spawnCoroutine(Scheduler* scheduler, Coroutine co) noexcept
 {
-    return scheduler != nullptr && scheduler->spawn(std::move(co));
+    return scheduler != nullptr && scheduler->schedule(detail::CoroutineAccess::detachTask(std::move(co)));
 }
 
 bool spawnCoroutineImmediately(Scheduler* scheduler, Coroutine co) noexcept
 {
-    return scheduler != nullptr && scheduler->spawnImmidiately(std::move(co));
+    return scheduler != nullptr && scheduler->scheduleImmediately(detail::CoroutineAccess::detachTask(std::move(co)));
 }
 
 } // namespace detail

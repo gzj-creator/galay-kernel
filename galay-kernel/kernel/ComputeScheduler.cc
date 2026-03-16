@@ -42,32 +42,13 @@ void ComputeScheduler::stop()
     }
 }
 
-bool ComputeScheduler::spawn(Coroutine co)
-{
-    auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
-    // 如果协程未绑定 scheduler，绑定到当前 scheduler
-    if (!scheduler) {
-        detail::CoroutineAccess::setScheduler(co, this);
-    } else {
-        if(scheduler != this) return false;
-    }
-    m_queue.enqueue(ComputeTask{detail::CoroutineAccess::detachTask(std::move(co))});
-    return true;
-}
-
 bool ComputeScheduler::schedule(TaskRef task)
 {
-    auto* state = task.state();
-    if (!state || state->m_scheduler != this) {
+    if (!bindTask(task)) {
         return false;
     }
     m_queue.enqueue(ComputeTask{std::move(task)});
     return true;
-}
-
-bool ComputeScheduler::spawnDeferred(Coroutine co)
-{
-    return spawn(std::move(co));
 }
 
 bool ComputeScheduler::scheduleDeferred(TaskRef task)
@@ -75,14 +56,11 @@ bool ComputeScheduler::scheduleDeferred(TaskRef task)
     return schedule(std::move(task));
 }
 
-bool ComputeScheduler::spawnImmidiately(Coroutine co)
+bool ComputeScheduler::scheduleImmediately(TaskRef task)
 {
-    auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
-    if (scheduler) {
+    if (!bindTask(task)) {
         return false;
     }
-    detail::CoroutineAccess::setScheduler(co, this);
-    TaskRef task = detail::CoroutineAccess::detachTask(std::move(co));
     resume(task);
     return true;
 }

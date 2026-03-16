@@ -129,56 +129,14 @@ std::optional<IOError> KqueueScheduler::lastError() const
     return detail::loadBackendError(m_last_error_code);
 }
 
-bool KqueueScheduler::spawn(Coroutine co)
-{
-    auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
-    // 如果协程未绑定 scheduler，绑定到当前 scheduler
-    if (!scheduler) {
-        detail::CoroutineAccess::setScheduler(co, this);
-    } else {
-        if(scheduler != this) return false;
-    }
-    TaskRef task = detail::CoroutineAccess::detachTask(std::move(co));
-
-    if (std::this_thread::get_id() == m_threadId) {
-        m_worker.scheduleLocal(std::move(task));
-        return true;
-    }
-
-    const bool queue_was_empty = m_worker.scheduleInjected(std::move(task));
-    m_wake_coordinator.requestWake(queue_was_empty, [this]() { notify(); });
-    return true;
-}
-
 bool KqueueScheduler::schedule(TaskRef task)
 {
-    auto* state = task.state();
-    if (!state || state->m_scheduler != this) {
+    if (!bindTask(task)) {
         return false;
     }
 
     if (std::this_thread::get_id() == m_threadId) {
         m_worker.scheduleLocal(std::move(task));
-        return true;
-    }
-
-    const bool queue_was_empty = m_worker.scheduleInjected(std::move(task));
-    m_wake_coordinator.requestWake(queue_was_empty, [this]() { notify(); });
-    return true;
-}
-
-bool KqueueScheduler::spawnDeferred(Coroutine co)
-{
-    auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
-    if (!scheduler) {
-        detail::CoroutineAccess::setScheduler(co, this);
-    } else if (scheduler != this) {
-        return false;
-    }
-    TaskRef task = detail::CoroutineAccess::detachTask(std::move(co));
-
-    if (std::this_thread::get_id() == m_threadId) {
-        m_worker.scheduleLocalDeferred(std::move(task));
         return true;
     }
 
@@ -189,8 +147,7 @@ bool KqueueScheduler::spawnDeferred(Coroutine co)
 
 bool KqueueScheduler::scheduleDeferred(TaskRef task)
 {
-    auto* state = task.state();
-    if (!state || state->m_scheduler != this) {
+    if (!bindTask(task)) {
         return false;
     }
 
@@ -204,14 +161,11 @@ bool KqueueScheduler::scheduleDeferred(TaskRef task)
     return true;
 }
 
-bool KqueueScheduler::spawnImmidiately(Coroutine co)
+bool KqueueScheduler::scheduleImmediately(TaskRef task)
 {
-    auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
-    if (scheduler) {
+    if (!bindTask(task)) {
         return false;
     }
-    detail::CoroutineAccess::setScheduler(co, this);
-    TaskRef task = detail::CoroutineAccess::detachTask(std::move(co));
     resume(task);
     return true;
 }

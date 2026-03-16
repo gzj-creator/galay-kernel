@@ -22,19 +22,20 @@ public:
     void start() override {}
     void stop() override {}
 
-    bool spawn(Coroutine) override {
-        ++spawn_calls;
-        return true;
-    }
-
-    bool spawnImmidiately(Coroutine) override {
-        ++spawn_immediately_calls;
-        return true;
-    }
-
     bool schedule(TaskRef task) override {
         if (task.isValid()) {
             ++schedule_calls;
+        }
+        return true;
+    }
+
+    bool scheduleDeferred(TaskRef task) override {
+        return schedule(std::move(task));
+    }
+
+    bool scheduleImmediately(TaskRef task) override {
+        if (task.isValid()) {
+            ++schedule_immediately_calls;
         }
         return true;
     }
@@ -45,9 +46,8 @@ public:
         return kIOScheduler;
     }
 
-    int spawn_calls = 0;
-    int spawn_immediately_calls = 0;
     int schedule_calls = 0;
+    int schedule_immediately_calls = 0;
 };
 
 bool verifyWakerUsesTaskRefSchedule() {
@@ -63,9 +63,9 @@ bool verifyWakerUsesTaskRefSchedule() {
                   << scheduler.schedule_calls << "\n";
         return false;
     }
-    if (scheduler.spawn_calls != 0) {
-        std::cerr << "[T41] expected Waker::wakeUp not to call spawn, got "
-                  << scheduler.spawn_calls << "\n";
+    if (scheduler.schedule_immediately_calls != 0) {
+        std::cerr << "[T41] expected Waker::wakeUp not to call scheduleImmediately, got "
+                  << scheduler.schedule_immediately_calls << "\n";
         return false;
     }
     return true;
@@ -83,9 +83,9 @@ bool verifyCoroutineResumeUsesTaskRefSchedule() {
                   << scheduler.schedule_calls << "\n";
         return false;
     }
-    if (scheduler.spawn_calls != 0) {
-        std::cerr << "[T41] expected Coroutine::resume not to call spawn, got "
-                  << scheduler.spawn_calls << "\n";
+    if (scheduler.schedule_immediately_calls != 0) {
+        std::cerr << "[T41] expected Coroutine::resume not to call scheduleImmediately, got "
+                  << scheduler.schedule_immediately_calls << "\n";
         return false;
     }
     return true;

@@ -32,34 +32,24 @@ public:
     void start() override {}
     void stop() override {}
 
-    bool spawn(Coroutine co) override {
-        auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
-        if (!scheduler) {
-            detail::CoroutineAccess::setScheduler(co, this);
-        } else if (scheduler != this) {
-            return false;
-        }
-        m_ready.push_back(detail::CoroutineAccess::detachTask(std::move(co)));
-        return true;
-    }
-
-    bool spawnImmidiately(Coroutine co) override {
-        auto* scheduler = detail::CoroutineAccess::belongScheduler(co);
-        if (scheduler) {
-            return false;
-        }
-        detail::CoroutineAccess::setScheduler(co, this);
-        TaskRef task = detail::CoroutineAccess::detachTask(std::move(co));
-        resume(task);
-        return true;
-    }
-
     bool schedule(TaskRef task) override {
-        if (!task.isValid()) {
+        if (!bindTask(task)) {
             return false;
         }
         ++schedule_calls;
         m_ready.push_back(std::move(task));
+        return true;
+    }
+
+    bool scheduleDeferred(TaskRef task) override {
+        return schedule(std::move(task));
+    }
+
+    bool scheduleImmediately(TaskRef task) override {
+        if (!bindTask(task)) {
+            return false;
+        }
+        resume(task);
         return true;
     }
 
@@ -118,7 +108,8 @@ bool verifyWaitContinuationReturnsThroughScheduler() {
     ChildSuspendState child_state;
     ParentState parent_state;
 
-    if (!scheduler.spawnImmidiately(parentTask(&child_state, &parent_state))) {
+    if (!scheduler.scheduleImmediately(detail::CoroutineAccess::detachTask(
+            parentTask(&child_state, &parent_state)))) {
         std::cerr << "[T43] failed to start parent task\n";
         return false;
     }

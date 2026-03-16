@@ -72,13 +72,9 @@ public:
 
     int remove(IOController* controller) override;
     std::optional<IOError> lastError() const override;
-    // Coroutine scheduling
-    bool spawn(Coroutine coro) override;
     bool schedule(TaskRef task) override;
-    bool spawnDeferred(Coroutine co) override;
     bool scheduleDeferred(TaskRef task) override;
-
-    bool spawnImmidiately(Coroutine co) override;
+    bool scheduleImmediately(TaskRef task) override;
 
     friend struct SchedulerTestAccess;
 protected:

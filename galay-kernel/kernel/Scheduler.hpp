@@ -57,8 +57,6 @@
 namespace galay::kernel
 {
 
-class Coroutine;
-
 enum SchedulerType {
     kIOScheduler,
     kComputeScheduler
@@ -92,45 +90,22 @@ public:
     virtual void stop() = 0;
 
     /**
-     * @brief 提交协程到调度器执行
-     * @param co 要执行的协程
-     * @note 协程会被加入调度队列，由调度器线程执行
-     */
-    virtual bool spawn(Coroutine co) = 0;
-
-    /**
      * @brief 直接提交已绑定调度器的任务引用
-     * @param task 已绑定当前调度器的任务引用
-     * @note 默认回退为包装成 Coroutine 再走 spawn；高性能调度器应覆写以避免额外包装
+     * @param task 任务引用；若未绑定 owner scheduler，会绑定到当前调度器
      */
-    virtual bool schedule(TaskRef task) {
-        return spawn(Coroutine(std::move(task)));
-    }
-
-    /**
-     * @brief 延后提交协程到调度器执行
-     * @param co 要执行的协程
-     * @note 默认行为与 spawn 相同；支持本地 worker 的调度器可覆写为让已就绪任务先执行
-     */
-    virtual bool spawnDeferred(Coroutine co) {
-        return spawn(std::move(co));
-    }
+    virtual bool schedule(TaskRef task) = 0;
 
     /**
      * @brief 延后提交已绑定调度器的任务引用
-     * @param task 已绑定当前调度器的任务引用
-     * @note 默认回退为包装成 Coroutine 再走 spawnDeferred
+     * @param task 任务引用；若未绑定 owner scheduler，会绑定到当前调度器
      */
-    virtual bool scheduleDeferred(TaskRef task) {
-        return spawnDeferred(Coroutine(std::move(task)));
-    }
+    virtual bool scheduleDeferred(TaskRef task) = 0;
 
     /**
-     * @brief 提交协程到调度器执行
-     * @param co 要执行的协程
-     * @note 协程立即执行，需要该接口只适合在协程内部调用以避免调度导致的延迟，已经spwan的协程调用此接口无效
+     * @brief 立即在当前线程恢复任务
+     * @param task 任务引用；若未绑定 owner scheduler，会绑定到当前调度器
      */
-    virtual bool spawnImmidiately(Coroutine co) = 0;
+    virtual bool scheduleImmediately(TaskRef task) = 0;
 
     /**
      * @brief 添加定时器到内部时间轮
@@ -160,6 +135,7 @@ public:
     virtual SchedulerType type() = 0;
 
 protected:
+    bool bindTask(TaskRef& task);
     /**
      * @brief 恢复协程执行
      * @param co 要恢复的协程
@@ -174,6 +150,18 @@ private:
     static constexpr int32_t kNoAffinity = -1;
     std::atomic<int32_t> m_affinity_cpu{kNoAffinity};
 };
+
+inline bool Scheduler::bindTask(TaskRef& task) {
+    auto* state = task.state();
+    if (!state) {
+        return false;
+    }
+    if (state->m_scheduler == nullptr) {
+        detail::setTaskScheduler(task, this);
+        return true;
+    }
+    return state->m_scheduler == this;
+}
 
 
 inline void Scheduler::resume(Coroutine& co) {
