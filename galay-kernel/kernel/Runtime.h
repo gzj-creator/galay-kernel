@@ -2,6 +2,7 @@
 #define GALAY_KERNEL_RUNTIME_H
 
 #include "BlockingExecutor.h"
+#include "Task.h"
 #include "ComputeScheduler.h"
 #include "IOScheduler.hpp"
 #include <atomic>

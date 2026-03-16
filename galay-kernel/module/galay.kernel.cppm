@@ -13,6 +13,7 @@ export {
 #include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/common/Sleep.hpp"
 
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Scheduler.hpp"
 #include "galay-kernel/kernel/IOScheduler.hpp"
