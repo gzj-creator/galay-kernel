@@ -38,9 +38,29 @@ bool scheduleTaskDeferred(const TaskRef& task) noexcept
     return scheduler != nullptr && scheduler->scheduleDeferred(task);
 }
 
+bool scheduleTaskImmediately(const TaskRef& task) noexcept
+{
+    auto* scheduler = task.belongScheduler();
+    return scheduler != nullptr && scheduler->scheduleImmediately(task);
+}
+
 std::thread::id schedulerThreadId(Scheduler* scheduler) noexcept
 {
     return scheduler ? scheduler->threadId() : std::thread::id{};
+}
+
+void attachTaskContinuation(const TaskRef& task, TaskRef next) noexcept
+{
+    auto* state = task.state();
+    if (state == nullptr) {
+        return;
+    }
+
+    inheritTaskRuntime(next, state->m_runtime);
+    if (next.belongScheduler() == nullptr && state->m_scheduler != nullptr) {
+        setTaskScheduler(next, state->m_scheduler);
+    }
+    state->m_then = std::move(next);
 }
 
 void completeTaskState(const TaskRef& task) noexcept

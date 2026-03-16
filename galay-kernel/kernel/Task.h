@@ -40,9 +40,13 @@ Runtime* currentRuntime() noexcept;
 Runtime* swapCurrentRuntime(Runtime* runtime) noexcept;
 bool scheduleTask(const TaskRef& task) noexcept;
 bool scheduleTaskDeferred(const TaskRef& task) noexcept;
+bool scheduleTaskImmediately(const TaskRef& task) noexcept;
 std::thread::id schedulerThreadId(Scheduler* scheduler) noexcept;
 void completeTaskState(const TaskRef& task) noexcept;
+void attachTaskContinuation(const TaskRef& task, TaskRef next) noexcept;
 struct TaskAccess;
+template <typename T>
+class TaskAwaiter;
 
 } // namespace detail
 
@@ -272,6 +276,9 @@ public:
         return !state || state->m_done.load(std::memory_order_acquire);
     }
 
+    auto operator co_await() &;
+    auto operator co_await() &&;
+
 private:
     friend class Runtime;
     template <typename U>
@@ -319,6 +326,11 @@ public:
         auto* state = m_task.state();
         return !state || state->m_done.load(std::memory_order_acquire);
     }
+
+    auto operator co_await() &;
+    auto operator co_await() &&;
+    Task<void>& then(Task<void> next) &;
+    Task<void>&& then(Task<void> next) &&;
 
 private:
     friend class Runtime;
@@ -445,9 +457,103 @@ struct TaskAccess
     {
         return task.takeResult();
     }
+
+    template <typename T>
+    static TaskRef detachTask(Task<T>&& task) noexcept
+    {
+        return std::move(task.m_task);
+    }
 };
 
 } // namespace detail
+
+namespace detail
+{
+
+template <typename T>
+class TaskAwaiter
+{
+public:
+    explicit TaskAwaiter(Task<T>&& task) noexcept
+        : m_task(std::move(task))
+    {
+    }
+
+    bool await_ready() const noexcept
+    {
+        return !m_task.isValid() || m_task.done();
+    }
+
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle)
+    {
+        TaskRef waitingTask = handle.promise().taskRefView();
+        TaskRef childTask = TaskAccess::taskRef(m_task);
+        if (!childTask.isValid()) {
+            return false;
+        }
+        if (m_task.done()) {
+            return false;
+        }
+
+        detail::inheritTaskRuntime(childTask, detail::taskRuntime(waitingTask));
+        if (waitingTask.belongScheduler() == nullptr) {
+            throw std::runtime_error("awaited task has no scheduler available");
+        }
+        if (!detail::scheduleTaskImmediately(childTask)) {
+            throw std::runtime_error("failed to schedule awaited task");
+        }
+        if (m_task.done()) {
+            return false;
+        }
+        childTask.state()->m_next = std::move(waitingTask);
+        return true;
+    }
+
+    decltype(auto) await_resume()
+    {
+        return TaskAccess::takeResult(m_task);
+    }
+
+private:
+    Task<T> m_task;
+};
+
+} // namespace detail
+
+template <typename T>
+inline auto Task<T>::operator co_await() &
+{
+    return detail::TaskAwaiter<T>(std::move(*this));
+}
+
+template <typename T>
+inline auto Task<T>::operator co_await() &&
+{
+    return detail::TaskAwaiter<T>(std::move(*this));
+}
+
+inline auto Task<void>::operator co_await() &
+{
+    return detail::TaskAwaiter<void>(std::move(*this));
+}
+
+inline auto Task<void>::operator co_await() &&
+{
+    return detail::TaskAwaiter<void>(std::move(*this));
+}
+
+inline Task<void>& Task<void>::then(Task<void> next) &
+{
+    detail::attachTaskContinuation(m_task, detail::TaskAccess::detachTask(std::move(next)));
+    return *this;
+}
+
+inline Task<void>&& Task<void>::then(Task<void> next) &&
+{
+    detail::attachTaskContinuation(m_task, detail::TaskAccess::detachTask(std::move(next)));
+    return std::move(*this);
+}
 
 template <typename T>
 class TaskPromise
