@@ -21,24 +21,44 @@
 - 任务模型：`Task<T>`、`Task<void>::then(...)`、`JoinHandle<T>::join()/wait()`、`blockOn()`、`spawn()`、`spawnBlocking()`、`sleep(...)`
 - 网络 IO：`galay::async::TcpSocket`、`galay::async::UdpSocket`
 - 文件 IO：`galay::async::AsyncFile`；Linux epoll 下额外提供 `galay::async::AioFile`
-- 低层组合扩展：`SequenceAwaitable<ResultT, InlineN>`、`AwaitableBuilder<ResultT, InlineN, FlowT>`、`ParseStatus`、`ByteQueueView`
+- 低层组合扩展：`SequenceAwaitable<ResultT, InlineN>`、`AwaitableBuilder<ResultT, InlineN, FlowT>`、`StateMachineAwaitable<MachineT>`、`MachineAction<ResultT>`、`ParseStatus`、`ByteQueueView`
 - 并发原语：`AsyncMutex`、`MpscChannel<T>`、`UnsafeChannel<T>`、`AsyncWaiter<T>`
 - 定时器：`TimerScheduler` + 线程安全分层时间轮
 - 文件监控：`galay::async::FileWatcher`
 - 向量 IO / 零拷贝：`readv` / `writev` / `sendfile`
 
-## v3.1.0 非兼容升级
+## v3.2.0 非兼容升级
 
 - 旧 `CustomAwaitable` / `CustomSequenceAwaitable` / `addCustom(...)` 扩展模型已移除，不再保留兼容层。
 - 自定义组合 IO 统一改为 `SequenceAwaitable + SequenceStep + AwaitableBuilder`。
+- 复杂双向协议现在可以直接通过 `AwaitableBuilder<Result>::fromStateMachine(&controller, machine).build()` 接入共享状态机内核。
+- 链式 `AwaitableBuilder` 仍保留 `connect(...).recv(...).parse(...).send(...).local(...).finish(...)` 这类用法，但 `build()` 已改为落到共享状态机内核，而不是独立的旧 sequence 执行路径。
 - 协议解析推荐使用 `AwaitableBuilder::parse(...) + ParseStatus + ByteQueueView`：
   - `ParseStatus::kNeedMore` 会自动重挂最近一个读步骤，不提前唤醒协程
   - `ParseStatus::kContinue` 会继续本地 parse loop，适合单次 `recv` 吃完粘包 backlog
   - `ByteQueueView` 用于累积半包、读取协议头和消费已解析字节
+- 状态机动作模型：
+  - `MachineSignal::kContinue`：继续本地推进，不等待新的内核事件
+  - `MachineSignal::kWaitRead / kWaitWrite / kWaitConnect`：注册读写或连接完成事件，等待下一次底层完成
+  - `MachineSignal::kComplete / kFail`：结束 awaitable
 - 真实回归入口：
   - 线性组合：`test/T63-custom_sequence_awaitable.cc`
   - 半包不提前唤醒：`test/T76-sequence_parser_need_more.cc`
   - 粘包本地连读：`test/T77-sequence_parser_coalesced_frames.cc`
+  - 状态机读写切换：`test/T86-state_machine_read_write_loop.cc`
+  - builder 桥接：`test/T87-awaitable_builder_state_machine_bridge.cc`
+  - builder connect 桥接：`test/T90-awaitable_builder_connect_bridge.cc`
+  - 自定义状态机 connect：`test/T91-state_machine_connect_action.cc`
+  - builder queue 误用拒绝：`test/T92-awaitable_builder_queue_rejected.cc`
+
+### Awaitable 入门
+
+- 先看 `examples/include/E10-custom_awaitable.cc`：
+  这是最小状态机自定义 Awaitable 示例，适合 `connect / read / write / shutdown / handshake` 这类多状态推进场景。
+- 先看 `examples/include/E11-builder_protocol.cc`：
+  这是最小链式 Builder 协议示例，适合 `recv -> parse -> send` 这类线性协议流，尤其是半包/粘包解析。
+- 如果你需要显式 `ops.queue(...)` 或长期持有步骤对象，请直接使用 `SequenceAwaitable + SequenceStep`。
+- 更完整的选型说明与入口骨架见 `docs/03-使用指南.md`。
 
 ## 构建前提
 
@@ -94,20 +114,20 @@ target_link_libraries(your_app PRIVATE galay-kernel::galay-kernel)
 ## 示例 / 测试 / benchmark 生成规则
 
 - 示例：
-  - `E1-SendfileExample` ~ `E5-UdpEcho` 始终由 `examples/include/*.cc` 生成
-  - `E1-SendfileExampleImport` ~ `E9-TimerSleepImport` 仅在模块 target 生效时生成
+  - `E1-SendfileExample` ~ `E5-UdpEcho`，以及 `E10-CustomAwaitable` / `E11-BuilderProtocol` 始终由 `examples/include/*.cc` 生成
+  - `E1-SendfileExampleImport` ~ `E11-BuilderProtocolImport` 仅在模块 target 生效时生成
 - 测试：`test/T*.cc` 会按文件名直接生成同名 target，例如 `test/T13-async_mutex.cc` -> `T13-async_mutex`
 - benchmark：`benchmark/CMakeLists.txt` 明确定义 `B1-ComputeScheduler` 到 `B14-SchedulerInjectedWakeup`
 
-## 性能验证口径（2026-03-15）
+## 性能验证口径（2026-03-17）
 
-- 当前本地 fresh 验证对应 `v3.1.0` worktree；历史 triplet 对比仍以 `baseline=cde3da1`、`refactored=v3.0.1(59bc155)` 为准
+- 当前本地 fresh 验证对应 `v3.2.0` worktree；历史 triplet 对比仍以 `baseline=cde3da1`、`refactored=v3.0.1(59bc155)` 为准
 - 单 benchmark 的标准入口是 `scripts/run_single_benchmark_triplet.sh`
 - 后端顺序固定为 `kqueue -> epoll -> io_uring`
 - `scripts/run_benchmark_triplet.sh` 是单 backend 低层 orchestrator，`scripts/parse_benchmark_triplet.py` 只输出 `baseline | refactored`
 - `B5-UdpClient` 只做 smoke/stability 检查，最终 UDP 性能结论以 `B6-Udp` 为准
 
-## 当前已验证的命令（2026-03-15）
+## 当前已验证的命令（2026-03-17）
 
 验证环境：macOS、AppleClang 17、CMake 默认 Release、后端为 kqueue。
 
@@ -119,34 +139,38 @@ python3 -m unittest \
   scripts.tests.test_run_single_benchmark_triplet \
   scripts.tests.test_parse_benchmark_triplet
 
-cmake -S . -B build -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON -DBUILD_BENCHMARKS=ON
-cmake --build build --parallel
+cmake -S . -B build-awaitable-state-machine -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON -DBUILD_BENCHMARKS=ON
+cmake --build build-awaitable-state-machine --parallel
 
-bash scripts/run_test_matrix.sh "$PWD/build" "$PWD/build/test_matrix_logs_2026_03_15_v310_final_rerun"
+bash scripts/run_test_matrix.sh \
+  "$PWD/build-awaitable-state-machine" \
+  "$PWD/build-awaitable-state-machine/test_matrix_logs_release_2026_03_17"
 
-for name in E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-TaskBasic E5-UdpEcho; do
-  ./build/bin/$name
+for name in E1-SendfileExample E2-TcpEchoServer E3-TcpClient E4-TaskBasic E5-UdpEcho E10-CustomAwaitable E11-BuilderProtocol; do
+  ./build-awaitable-state-machine/bin/$name
 done
 
 bash scripts/run_benchmark_matrix.sh \
-  --build-dir "$PWD/build" \
-  --log-root "$PWD/build/benchmark_matrix_logs_2026_03_15_v310_final"
+  --build-dir "$PWD/build-awaitable-state-machine" \
+  --log-root "$PWD/build-awaitable-state-machine/benchmark_matrix_logs_release_2026_03_17"
 ```
 
 实际结果：
 
-- 脚本单测：`24/24` 通过
-- 测试：全量 `test matrix` fresh 跑完，`74` 个日志全部生成，未出现新的 `FAILED` / `Segmentation fault` / `terminate called`
+- 脚本单测：`28/28` 通过
+- 测试：全量 `test matrix` fresh 跑完，日志全部生成，未出现新的 `FAILED` / `Segmentation fault` / `terminate called`
 - 示例：
   - `E1-SendfileExample`：PASS
   - `E2-TcpEchoServer`：PASS
   - `E3-TcpClient`：PASS
   - `E4-TaskBasic`：PASS
   - `E5-UdpEcho`：PASS
+  - `E10-CustomAwaitable`：PASS
+  - `E11-BuilderProtocol`：PASS
 - benchmark：
   - `B1` ~ `B14` fresh 跑完并生成当前机器日志
   - `B4/B5-Udp` 已恢复有效收发；`B5` 仍只作为 smoke / stability 检查
-  - `B5-UdpClient` 本地 kqueue fresh 结果为 `100000 sent / 99507 received`、loss `0.493%`
+  - `B5-UdpClient` 本地 kqueue fresh 结果为 `100000 sent / 99518 received`、loss `0.482%`
   - `B6-Udp` 本地 kqueue fresh 结果为 `200000/200000`、loss `0.00%`、recv throughput `8.86656 MB/s`
 - 模块 import 示例：当前环境 `ENABLE_CPP23_MODULES=OFF`，未生成 import target；最近一次专门的模块构建结论仍是 `Unix Makefiles + AppleClang` 下不会生成模块 target
 - 安装与消费：最近一次专门 smoke 验证仍是 `2026-03-10`，细节见 `docs/00-快速开始.md`

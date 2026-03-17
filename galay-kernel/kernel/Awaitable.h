@@ -2,7 +2,7 @@
  * @file Awaitable.h
  * @brief 异步IO可等待对象
  * @author galay-kernel
- * @version 3.1.0
+ * @version 3.2.0
  *
  * @details 三层继承结构：
  * - AwaitableBase: 基类（m_sqe_type, virtual ~）
@@ -30,6 +30,7 @@
 #include "FileWatchDefs.hpp"
 #include "Waker.h"
 #include <cerrno>
+#include <concepts>
 #include <coroutine>
 #include <cstddef>
 #include <cstdio>
@@ -41,6 +42,7 @@
 #include <memory>
 #include <optional>
 #include <type_traits>
+#include <utility>
 #include <sys/socket.h>
 #include <sys/uio.h>
 
@@ -793,6 +795,77 @@ enum class ParseStatus {
     kCompleted,
 };
 
+enum class MachineSignal {
+    kContinue,
+    kWaitRead,
+    kWaitWrite,
+    kWaitConnect,
+    kComplete,
+    kFail,
+};
+
+template <typename ResultT>
+struct MachineAction {
+    MachineSignal signal = MachineSignal::kContinue;
+    char* read_buffer = nullptr;
+    size_t read_length = 0;
+    const char* write_buffer = nullptr;
+    size_t write_length = 0;
+    Host connect_host{};
+    std::optional<ResultT> result;
+    std::optional<IOError> error;
+
+    static MachineAction continue_() {
+        return MachineAction{};
+    }
+
+    static MachineAction waitRead(char* buffer, size_t length) {
+        MachineAction action;
+        action.signal = MachineSignal::kWaitRead;
+        action.read_buffer = buffer;
+        action.read_length = length;
+        return action;
+    }
+
+    static MachineAction waitWrite(const char* buffer, size_t length) {
+        MachineAction action;
+        action.signal = MachineSignal::kWaitWrite;
+        action.write_buffer = buffer;
+        action.write_length = length;
+        return action;
+    }
+
+    static MachineAction waitConnect(const Host& host) {
+        MachineAction action;
+        action.signal = MachineSignal::kWaitConnect;
+        action.connect_host = host;
+        return action;
+    }
+
+    static MachineAction complete(ResultT value) {
+        MachineAction action;
+        action.signal = MachineSignal::kComplete;
+        action.result = std::move(value);
+        return action;
+    }
+
+    static MachineAction fail(IOError io_error) {
+        MachineAction action;
+        action.signal = MachineSignal::kFail;
+        action.error = std::move(io_error);
+        return action;
+    }
+};
+
+template <typename MachineT>
+concept AwaitableStateMachine =
+    requires(MachineT& machine, std::expected<size_t, IOError> io_result) {
+        typename MachineT::result_type;
+        { machine.advance() } -> std::same_as<MachineAction<typename MachineT::result_type>>;
+        { machine.onRead(std::move(io_result)) } -> std::same_as<void>;
+        { machine.onWrite(std::move(io_result)) } -> std::same_as<void>;
+    };
+
 struct SequenceAwaitableBase: public AwaitableBase {
     struct IOTask {
         IOEventType type;
@@ -992,6 +1065,34 @@ public:
         clear();
     }
 
+    bool hasResultValue() const {
+        return m_result_set && m_result.has_value();
+    }
+
+    bool hasFailure() const {
+        return m_error.has_value();
+    }
+
+    std::optional<ResultT> takeResultValue() {
+        m_result_set = false;
+        auto result = std::move(m_result);
+        m_result.reset();
+        return result;
+    }
+
+    std::optional<IOError> takeFailure() {
+        auto error = std::move(m_error);
+        m_error.reset();
+        return error;
+    }
+
+    void resetOutcomeForReuse() {
+        m_result.reset();
+        m_result_set = false;
+        m_error.reset();
+        clear();
+    }
+
     SequenceOps<ResultT, InlineN> ops() {
         return SequenceOps<ResultT, InlineN>(*this);
     }
@@ -1127,6 +1228,301 @@ private:
     size_t m_size = 0;
     std::optional<ResultT> m_result;
     bool m_result_set = false;
+};
+
+template <AwaitableStateMachine MachineT>
+class StateMachineAwaitable : public SequenceAwaitableBase {
+public:
+    using result_type = typename MachineT::result_type;
+
+    StateMachineAwaitable(IOController* controller, MachineT machine)
+        : SequenceAwaitableBase(controller)
+        , m_machine(std::move(machine))
+        , m_recv_context(nullptr, 0)
+        , m_send_context(nullptr, 0)
+        , m_connect_context(Host{}) {}
+
+    bool await_ready() {
+        return m_result_set;
+    }
+
+    auto await_resume() -> result_type {
+        onCompleted();
+        if (m_result_set) {
+            return std::move(*m_result);
+        }
+        if (m_error.has_value()) {
+            if constexpr (detail::is_expected_v<result_type>) {
+                using ErrorT = typename detail::expected_traits<result_type>::error_type;
+                if constexpr (std::is_constructible_v<ErrorT, IOError>) {
+                    return std::unexpected(ErrorT(*m_error));
+                }
+            }
+        }
+        if constexpr (detail::is_expected_v<result_type>) {
+            using ErrorT = typename detail::expected_traits<result_type>::error_type;
+            if constexpr (std::is_constructible_v<ErrorT, IOError>) {
+                return std::unexpected(ErrorT(IOError(kNotReady, errno)));
+            }
+        }
+        std::abort();
+    }
+
+    IOTask* front() override {
+        return m_has_active_task ? &m_active_task : nullptr;
+    }
+
+    const IOTask* front() const override {
+        return m_has_active_task ? &m_active_task : nullptr;
+    }
+
+    void popFront() override {
+        clearActiveTask();
+    }
+
+    bool empty() const override {
+        return !m_has_active_task;
+    }
+
+#ifdef USE_IOURING
+    SequenceProgress prepareForSubmit() override {
+        return pump();
+    }
+
+    SequenceProgress onActiveEvent(struct io_uring_cqe* cqe, GHandle handle) override {
+        if (!m_has_active_task) {
+            return pump();
+        }
+        if (m_active_kind == ActiveKind::kRead) {
+            if (!m_recv_context.handleComplete(cqe, handle)) {
+                return SequenceProgress::kNeedWait;
+            }
+            auto io_result = std::move(m_recv_context.m_result);
+            clearActiveTask();
+            m_machine.onRead(std::move(io_result));
+            return pump();
+        }
+        if (m_active_kind == ActiveKind::kWrite) {
+            if (!m_send_context.handleComplete(cqe, handle)) {
+                return SequenceProgress::kNeedWait;
+            }
+            auto io_result = std::move(m_send_context.m_result);
+            clearActiveTask();
+            m_machine.onWrite(std::move(io_result));
+            return pump();
+        }
+        if (m_active_kind == ActiveKind::kConnect) {
+            if (!m_connect_context.handleComplete(cqe, handle)) {
+                return SequenceProgress::kNeedWait;
+            }
+            auto io_result = std::move(m_connect_context.m_result);
+            clearActiveTask();
+            deliverConnect(std::move(io_result));
+            return pump();
+        }
+        m_error = IOError(kParamInvalid, 0);
+        return SequenceProgress::kCompleted;
+    }
+#else
+    SequenceProgress prepareForSubmit(GHandle handle) override {
+        for (size_t i = 0; i < kInlineTransitionCap; ++i) {
+            const SequenceProgress progress = pump();
+            if (progress == SequenceProgress::kCompleted) {
+                return progress;
+            }
+            if (!m_has_active_task) {
+                return SequenceProgress::kCompleted;
+            }
+            if (m_active_kind == ActiveKind::kRead) {
+                if (!m_recv_context.handleComplete(handle)) {
+                    return SequenceProgress::kNeedWait;
+                }
+                auto io_result = std::move(m_recv_context.m_result);
+                clearActiveTask();
+                m_machine.onRead(std::move(io_result));
+                continue;
+            }
+            if (m_active_kind == ActiveKind::kWrite) {
+                if (!m_send_context.handleComplete(handle)) {
+                    return SequenceProgress::kNeedWait;
+                }
+                auto io_result = std::move(m_send_context.m_result);
+                clearActiveTask();
+                m_machine.onWrite(std::move(io_result));
+                continue;
+            }
+            if (m_active_kind == ActiveKind::kConnect) {
+                if (!m_connect_context.handleComplete(handle)) {
+                    return SequenceProgress::kNeedWait;
+                }
+                auto io_result = std::move(m_connect_context.m_result);
+                clearActiveTask();
+                deliverConnect(std::move(io_result));
+                continue;
+            }
+            m_error = IOError(kParamInvalid, 0);
+            return SequenceProgress::kCompleted;
+        }
+        m_error = IOError(kParamInvalid, 0);
+        clearActiveTask();
+        return SequenceProgress::kCompleted;
+    }
+
+    SequenceProgress onActiveEvent(GHandle handle) override {
+        if (!m_has_active_task) {
+            return prepareForSubmit(handle);
+        }
+        if (m_active_kind == ActiveKind::kRead) {
+            if (!m_recv_context.handleComplete(handle)) {
+                return SequenceProgress::kNeedWait;
+            }
+            auto io_result = std::move(m_recv_context.m_result);
+            clearActiveTask();
+            m_machine.onRead(std::move(io_result));
+            return prepareForSubmit(handle);
+        }
+        if (m_active_kind == ActiveKind::kWrite) {
+            if (!m_send_context.handleComplete(handle)) {
+                return SequenceProgress::kNeedWait;
+            }
+            auto io_result = std::move(m_send_context.m_result);
+            clearActiveTask();
+            m_machine.onWrite(std::move(io_result));
+            return prepareForSubmit(handle);
+        }
+        if (m_active_kind == ActiveKind::kConnect) {
+            if (!m_connect_context.handleComplete(handle)) {
+                return SequenceProgress::kNeedWait;
+            }
+            auto io_result = std::move(m_connect_context.m_result);
+            clearActiveTask();
+            deliverConnect(std::move(io_result));
+            return prepareForSubmit(handle);
+        }
+        m_error = IOError(kParamInvalid, 0);
+        return SequenceProgress::kCompleted;
+    }
+#endif
+
+private:
+    enum class ActiveKind {
+        kNone,
+        kRead,
+        kWrite,
+        kConnect,
+    };
+
+    static constexpr size_t kInlineTransitionCap = 64;
+
+    SequenceProgress pump() {
+        for (size_t i = 0; i < kInlineTransitionCap; ++i) {
+            if (m_result_set || m_error.has_value()) {
+                return SequenceProgress::kCompleted;
+            }
+            if (m_has_active_task) {
+                return SequenceProgress::kNeedWait;
+            }
+
+            auto action = m_machine.advance();
+            switch (action.signal) {
+            case MachineSignal::kContinue:
+                continue;
+            case MachineSignal::kWaitRead:
+                if (action.read_buffer == nullptr && action.read_length != 0) {
+                    m_error = IOError(kParamInvalid, 0);
+                    clearActiveTask();
+                    return SequenceProgress::kCompleted;
+                }
+                m_recv_context.m_buffer = action.read_buffer;
+                m_recv_context.m_length = action.read_length;
+                m_active_task = IOTask{RECV, nullptr, &m_recv_context};
+                m_has_active_task = true;
+                m_active_kind = ActiveKind::kRead;
+                return SequenceProgress::kNeedWait;
+            case MachineSignal::kWaitWrite:
+                if (action.write_buffer == nullptr && action.write_length != 0) {
+                    m_error = IOError(kParamInvalid, 0);
+                    clearActiveTask();
+                    return SequenceProgress::kCompleted;
+                }
+                m_send_context.m_buffer = action.write_buffer;
+                m_send_context.m_length = action.write_length;
+                m_active_task = IOTask{SEND, nullptr, &m_send_context};
+                m_has_active_task = true;
+                m_active_kind = ActiveKind::kWrite;
+                return SequenceProgress::kNeedWait;
+            case MachineSignal::kWaitConnect:
+                m_connect_context.m_host = action.connect_host;
+                m_active_task = IOTask{CONNECT, nullptr, &m_connect_context};
+                m_has_active_task = true;
+                m_active_kind = ActiveKind::kConnect;
+                return SequenceProgress::kNeedWait;
+            case MachineSignal::kComplete:
+                if (!action.result.has_value()) {
+                    m_error = IOError(kParamInvalid, 0);
+                    clearActiveTask();
+                    return SequenceProgress::kCompleted;
+                }
+                m_result = std::move(*action.result);
+                m_result_set = true;
+                clearActiveTask();
+                return SequenceProgress::kCompleted;
+            case MachineSignal::kFail:
+                m_error = action.error.value_or(IOError(kParamInvalid, 0));
+                clearActiveTask();
+                return SequenceProgress::kCompleted;
+            }
+        }
+        m_error = IOError(kParamInvalid, 0);
+        clearActiveTask();
+        return SequenceProgress::kCompleted;
+    }
+
+    void deliverConnect(std::expected<void, IOError> result) {
+        if constexpr (requires(MachineT& machine, std::expected<void, IOError> connect_result) {
+            { machine.onConnect(std::move(connect_result)) } -> std::same_as<void>;
+        }) {
+            m_machine.onConnect(std::move(result));
+        } else {
+            m_error = IOError(kParamInvalid, 0);
+        }
+    }
+
+    void clearActiveTask() {
+        m_active_task = IOTask{};
+        m_has_active_task = false;
+        m_active_kind = ActiveKind::kNone;
+    }
+
+    MachineT m_machine;
+    RecvIOContext m_recv_context;
+    SendIOContext m_send_context;
+    ConnectIOContext m_connect_context;
+    IOTask m_active_task{};
+    bool m_has_active_task = false;
+    ActiveKind m_active_kind = ActiveKind::kNone;
+    std::optional<result_type> m_result;
+    bool m_result_set = false;
+};
+
+template <AwaitableStateMachine MachineT>
+class StateMachineBuilder {
+public:
+    StateMachineBuilder(IOController* controller, MachineT machine)
+        : m_controller(controller)
+        , m_machine(std::move(machine)) {}
+
+    auto build() & -> StateMachineAwaitable<MachineT> {
+        return StateMachineAwaitable<MachineT>(m_controller, std::move(m_machine));
+    }
+
+    auto build() && -> StateMachineAwaitable<MachineT> {
+        return StateMachineAwaitable<MachineT>(m_controller, std::move(m_machine));
+    }
+
+private:
+    IOController* m_controller;
+    MachineT m_machine;
 };
 
 template <typename ResultT, size_t InlineN, typename FlowT, typename BaseContextT, auto Handler>
@@ -1285,82 +1681,480 @@ private:
     typename SequenceAwaitable<ResultT, InlineN>::TaskBase* m_rearm_step;
 };
 
-template <typename ResultT, size_t InlineN, typename FlowT>
-class AwaitableBuilder : public SequenceAwaitable<ResultT, InlineN> {
-    using Base = SequenceAwaitable<ResultT, InlineN>;
-    using TaskBase = typename Base::TaskBase;
+namespace detail {
 
+template <typename ResultT, size_t InlineN, typename FlowT>
+class LinearMachine {
 public:
+    using result_type = ResultT;
+    using OpsT = SequenceOps<ResultT, InlineN>;
+
+    static constexpr size_t kInvalidIndex = static_cast<size_t>(-1);
+
+    enum class NodeKind : uint8_t {
+        kRecv,
+        kSend,
+        kConnect,
+        kParse,
+        kLocal,
+        kFinish,
+    };
+
+    using IOHandlerFn = void(*)(FlowT*, OpsT&, IOContextBase&);
+    using LocalHandlerFn = void(*)(FlowT*, OpsT&);
+    using ParseHandlerFn = ParseStatus(*)(FlowT*, OpsT&);
+
+    struct Node {
+        NodeKind kind = NodeKind::kLocal;
+        IOHandlerFn io_handler = nullptr;
+        LocalHandlerFn local_handler = nullptr;
+        ParseHandlerFn parse_handler = nullptr;
+        char* read_buffer = nullptr;
+        const char* write_buffer = nullptr;
+        size_t io_length = 0;
+        Host connect_host{};
+        size_t parse_rearm_recv_index = kInvalidIndex;
+    };
+
+    using NodeList = std::vector<Node>;
+
+    LinearMachine(IOController* controller, FlowT* flow, NodeList nodes)
+        : m_controller(controller)
+        , m_flow(flow)
+        , m_nodes(std::move(nodes))
+        , m_ops_owner(nullptr)
+        , m_recv_context(nullptr, 0)
+        , m_send_context(nullptr, 0)
+        , m_connect_context(Host{}) {}
+
+    template <auto Handler>
+    static Node makeRecvNode(char* buffer, size_t length) {
+        Node node;
+        node.kind = NodeKind::kRecv;
+        node.io_handler = &invokeIO<RecvIOContext, Handler>;
+        node.read_buffer = buffer;
+        node.io_length = length;
+        return node;
+    }
+
+    template <auto Handler>
+    static Node makeSendNode(const char* buffer, size_t length) {
+        Node node;
+        node.kind = NodeKind::kSend;
+        node.io_handler = &invokeIO<SendIOContext, Handler>;
+        node.write_buffer = buffer;
+        node.io_length = length;
+        return node;
+    }
+
+    template <auto Handler>
+    static Node makeConnectNode(const Host& host) {
+        Node node;
+        node.kind = NodeKind::kConnect;
+        node.io_handler = &invokeIO<ConnectIOContext, Handler>;
+        node.connect_host = host;
+        return node;
+    }
+
+    template <auto Handler>
+    static Node makeLocalNode() {
+        Node node;
+        node.kind = NodeKind::kLocal;
+        node.local_handler = &invokeLocal<Handler>;
+        return node;
+    }
+
+    template <auto Handler>
+    static Node makeFinishNode() {
+        Node node;
+        node.kind = NodeKind::kFinish;
+        node.local_handler = &invokeLocal<Handler>;
+        return node;
+    }
+
+    template <auto Handler>
+    static Node makeParseNode(size_t rearm_recv_index) {
+        Node node;
+        node.kind = NodeKind::kParse;
+        node.parse_handler = &invokeParse<Handler>;
+        node.parse_rearm_recv_index = rearm_recv_index;
+        return node;
+    }
+
+    MachineAction<result_type> advance() {
+        if (m_result.has_value()) {
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
+        if (m_error.has_value()) {
+            return MachineAction<result_type>::fail(*m_error);
+        }
+        if (m_cursor >= m_nodes.size()) {
+            setIOError(IOError(kNotReady, 0));
+            return emitActionFromOutcome();
+        }
+
+        const Node& node = m_nodes[m_cursor];
+        switch (node.kind) {
+        case NodeKind::kRecv:
+            m_recv_context.m_buffer = node.read_buffer;
+            m_recv_context.m_length = node.io_length;
+            m_pending_io = PendingIO::kRead;
+            m_pending_index = m_cursor;
+            return MachineAction<result_type>::waitRead(node.read_buffer, node.io_length);
+        case NodeKind::kSend:
+            m_send_context.m_buffer = node.write_buffer;
+            m_send_context.m_length = node.io_length;
+            m_pending_io = PendingIO::kWrite;
+            m_pending_index = m_cursor;
+            return MachineAction<result_type>::waitWrite(node.write_buffer, node.io_length);
+        case NodeKind::kConnect:
+            return runConnect(node);
+        case NodeKind::kParse:
+            return runParse(node);
+        case NodeKind::kLocal:
+        case NodeKind::kFinish:
+            return runLocal(node);
+        }
+        setIOError(IOError(kParamInvalid, 0));
+        return emitActionFromOutcome();
+    }
+
+    void onRead(std::expected<size_t, IOError> result) {
+        if (m_pending_io != PendingIO::kRead || m_pending_index >= m_nodes.size()) {
+            setIOError(IOError(kParamInvalid, 0));
+            return;
+        }
+
+        const bool has_value = result.has_value();
+        std::optional<IOError> io_error;
+        if (!has_value) {
+            io_error = result.error();
+        }
+        m_recv_context.m_result = std::move(result);
+
+        const Node& node = m_nodes[m_pending_index];
+        invokeIONode(node, m_recv_context);
+        clearPendingIO();
+
+        if (absorbOpsOutcome()) {
+            return;
+        }
+        if (io_error.has_value()) {
+            setIOError(std::move(*io_error));
+            return;
+        }
+        ++m_cursor;
+    }
+
+    void onWrite(std::expected<size_t, IOError> result) {
+        if (m_pending_io != PendingIO::kWrite || m_pending_index >= m_nodes.size()) {
+            setIOError(IOError(kParamInvalid, 0));
+            return;
+        }
+
+        const bool has_value = result.has_value();
+        std::optional<IOError> io_error;
+        if (!has_value) {
+            io_error = result.error();
+        }
+        m_send_context.m_result = std::move(result);
+
+        const Node& node = m_nodes[m_pending_index];
+        invokeIONode(node, m_send_context);
+        clearPendingIO();
+
+        if (absorbOpsOutcome()) {
+            return;
+        }
+        if (io_error.has_value()) {
+            setIOError(std::move(*io_error));
+            return;
+        }
+        ++m_cursor;
+    }
+
+    void onConnect(std::expected<void, IOError> result) {
+        if (m_pending_io != PendingIO::kConnect || m_pending_index >= m_nodes.size()) {
+            setIOError(IOError(kParamInvalid, 0));
+            return;
+        }
+
+        const bool has_value = result.has_value();
+        std::optional<IOError> io_error;
+        if (!has_value) {
+            io_error = result.error();
+        }
+        m_connect_context.m_result = std::move(result);
+
+        const Node& node = m_nodes[m_pending_index];
+        invokeIONode(node, m_connect_context);
+        clearPendingIO();
+
+        if (absorbOpsOutcome()) {
+            return;
+        }
+        if (io_error.has_value()) {
+            setIOError(std::move(*io_error));
+            return;
+        }
+        ++m_cursor;
+    }
+
+private:
+    enum class PendingIO : uint8_t {
+        kNone,
+        kRead,
+        kWrite,
+        kConnect,
+    };
+
+    template <typename ContextT, auto Handler>
+    static void invokeIO(FlowT* flow, OpsT& ops, IOContextBase& context) {
+        (flow->*Handler)(ops, static_cast<ContextT&>(context));
+    }
+
+    template <auto Handler>
+    static void invokeLocal(FlowT* flow, OpsT& ops) {
+        (flow->*Handler)(ops);
+    }
+
+    template <auto Handler>
+    static ParseStatus invokeParse(FlowT* flow, OpsT& ops) {
+        return (flow->*Handler)(ops);
+    }
+
+    MachineAction<result_type> runConnect(const Node& node) {
+        if (node.io_handler == nullptr) {
+            setIOError(IOError(kParamInvalid, 0));
+            return emitActionFromOutcome();
+        }
+
+        m_connect_context.m_host = node.connect_host;
+        m_pending_io = PendingIO::kConnect;
+        m_pending_index = m_cursor;
+        return MachineAction<result_type>::waitConnect(node.connect_host);
+    }
+
+    MachineAction<result_type> runLocal(const Node& node) {
+        if (node.local_handler == nullptr) {
+            setIOError(IOError(kParamInvalid, 0));
+            return emitActionFromOutcome();
+        }
+
+        m_ops_owner.resetOutcomeForReuse();
+        auto ops = m_ops_owner.ops();
+        node.local_handler(m_flow, ops);
+
+        if (absorbOpsOutcome()) {
+            return emitActionFromOutcome();
+        }
+        ++m_cursor;
+        return MachineAction<result_type>::continue_();
+    }
+
+    MachineAction<result_type> runParse(const Node& node) {
+        if (node.parse_handler == nullptr) {
+            setIOError(IOError(kParamInvalid, 0));
+            return emitActionFromOutcome();
+        }
+
+        m_ops_owner.resetOutcomeForReuse();
+        auto ops = m_ops_owner.ops();
+        const ParseStatus status = node.parse_handler(m_flow, ops);
+
+        if (absorbOpsOutcome()) {
+            return emitActionFromOutcome();
+        }
+
+        switch (status) {
+        case ParseStatus::kNeedMore:
+            if (node.parse_rearm_recv_index == kInvalidIndex ||
+                node.parse_rearm_recv_index >= m_nodes.size() ||
+                m_nodes[node.parse_rearm_recv_index].kind != NodeKind::kRecv) {
+                setIOError(IOError(kParamInvalid, 0));
+                return emitActionFromOutcome();
+            }
+            m_cursor = node.parse_rearm_recv_index;
+            return MachineAction<result_type>::continue_();
+        case ParseStatus::kContinue:
+            return MachineAction<result_type>::continue_();
+        case ParseStatus::kCompleted:
+            ++m_cursor;
+            return MachineAction<result_type>::continue_();
+        }
+        setIOError(IOError(kParamInvalid, 0));
+        return emitActionFromOutcome();
+    }
+
+    void invokeIONode(const Node& node, IOContextBase& context) {
+        if (node.io_handler == nullptr) {
+            setIOError(IOError(kParamInvalid, 0));
+            return;
+        }
+        m_ops_owner.resetOutcomeForReuse();
+        auto ops = m_ops_owner.ops();
+        node.io_handler(m_flow, ops, context);
+    }
+
+    bool absorbOpsOutcome() {
+        if (m_ops_owner.hasResultValue()) {
+            auto result = m_ops_owner.takeResultValue();
+            if (result.has_value()) {
+                m_result = std::move(*result);
+            } else {
+                setIOError(IOError(kParamInvalid, 0));
+            }
+            return true;
+        }
+        if (m_ops_owner.hasFailure()) {
+            auto error = m_ops_owner.takeFailure();
+            if (error.has_value()) {
+                setIOError(std::move(*error));
+            } else {
+                setIOError(IOError(kParamInvalid, 0));
+            }
+            return true;
+        }
+        if (!m_ops_owner.empty()) {
+            m_ops_owner.clear();
+            setIOError(IOError(kParamInvalid, 0));
+            return true;
+        }
+        return false;
+    }
+
+    MachineAction<result_type> emitActionFromOutcome() {
+        if (m_result.has_value()) {
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
+        if (m_error.has_value()) {
+            return MachineAction<result_type>::fail(*m_error);
+        }
+        return MachineAction<result_type>::continue_();
+    }
+
+    void clearPendingIO() {
+        m_pending_io = PendingIO::kNone;
+        m_pending_index = kInvalidIndex;
+    }
+
+    void setIOError(IOError error) {
+        if constexpr (detail::is_expected_v<result_type>) {
+            using ErrorT = typename detail::expected_traits<result_type>::error_type;
+            if constexpr (std::is_constructible_v<ErrorT, IOError>) {
+                m_result = std::unexpected(ErrorT(std::move(error)));
+                return;
+            }
+        }
+        m_error = std::move(error);
+    }
+
+    IOController* m_controller;
+    FlowT* m_flow;
+    NodeList m_nodes;
+    size_t m_cursor = 0;
+    PendingIO m_pending_io = PendingIO::kNone;
+    size_t m_pending_index = kInvalidIndex;
+
+    SequenceAwaitable<ResultT, InlineN> m_ops_owner;
+    RecvIOContext m_recv_context;
+    SendIOContext m_send_context;
+    ConnectIOContext m_connect_context;
+
+    std::optional<result_type> m_result;
+    std::optional<IOError> m_error;
+};
+
+} // namespace detail
+
+template <typename ResultT, size_t InlineN = 4, typename FlowT = void>
+class AwaitableBuilder {
+public:
+    using MachineT = detail::LinearMachine<ResultT, InlineN, FlowT>;
+    using MachineNode = typename MachineT::Node;
+
     AwaitableBuilder(IOController* controller, FlowT& flow)
-        : Base(controller)
+        : m_controller(controller)
         , m_flow(&flow)
     {
-        m_owned_steps.reserve(InlineN);
+        m_nodes.reserve(InlineN);
+    }
+
+    template <AwaitableStateMachine MachineTParam>
+    static auto fromStateMachine(IOController* controller, MachineTParam machine) -> StateMachineBuilder<MachineTParam> {
+        static_assert(std::same_as<typename MachineTParam::result_type, ResultT>,
+                      "AwaitableBuilder::fromStateMachine requires matching result_type");
+        return StateMachineBuilder<MachineTParam>(controller, std::move(machine));
     }
 
     template <auto Handler>
     AwaitableBuilder& local() {
-        auto* step = ownStep<LocalSequenceStep<ResultT, InlineN, FlowT, Handler>>(m_flow);
-        this->queue(*step);
+        m_nodes.push_back(MachineT::template makeLocalNode<Handler>());
         return *this;
     }
 
     template <auto Handler>
     AwaitableBuilder& parse() {
-        auto* step = ownStep<ParserSequenceStep<ResultT, InlineN, FlowT, Handler>>(m_flow, m_last_io_step);
-        this->queue(*step);
+        m_nodes.push_back(MachineT::template makeParseNode<Handler>(m_last_recv_index));
         return *this;
     }
 
     template <auto Handler>
     AwaitableBuilder& finish() {
-        return local<Handler>();
+        m_nodes.push_back(MachineT::template makeFinishNode<Handler>());
+        return *this;
     }
 
     template <auto Handler>
     AwaitableBuilder& recv(char* buffer, size_t length) {
-        auto* step = ownStep<SequenceStep<ResultT, InlineN, FlowT, RecvIOContext, Handler>>(m_flow, buffer, length);
-        this->queue(*step);
-        m_last_io_step = step;
+        m_nodes.push_back(MachineT::template makeRecvNode<Handler>(buffer, length));
+        m_last_recv_index = m_nodes.size() - 1;
         return *this;
     }
 
     template <auto Handler>
     AwaitableBuilder& send(const char* buffer, size_t length) {
-        auto* step = ownStep<SequenceStep<ResultT, InlineN, FlowT, SendIOContext, Handler>>(m_flow, buffer, length);
-        this->queue(*step);
-        m_last_io_step = step;
+        m_nodes.push_back(MachineT::template makeSendNode<Handler>(buffer, length));
         return *this;
     }
 
     template <auto Handler>
     AwaitableBuilder& connect(const Host& host) {
-        auto* step = ownStep<SequenceStep<ResultT, InlineN, FlowT, ConnectIOContext, Handler>>(m_flow, host);
-        this->queue(*step);
-        m_last_io_step = step;
+        m_nodes.push_back(MachineT::template makeConnectNode<Handler>(host));
         return *this;
     }
 
-    AwaitableBuilder&& build() & {
-        return std::move(*this);
+    auto build() & -> StateMachineAwaitable<MachineT> {
+        return buildImpl();
     }
 
-    AwaitableBuilder&& build() && {
-        return std::move(*this);
+    auto build() && -> StateMachineAwaitable<MachineT> {
+        return buildImpl();
     }
 
 private:
-    template <typename StepT, typename... Args>
-    StepT* ownStep(Args&&... args) {
-        auto step = std::make_unique<StepT>(std::forward<Args>(args)...);
-        StepT* raw = step.get();
-        m_owned_steps.push_back(std::move(step));
-        return raw;
+    auto buildImpl() -> StateMachineAwaitable<MachineT> {
+        return StateMachineAwaitable<MachineT>(
+            m_controller,
+            MachineT(m_controller, m_flow, std::move(m_nodes))
+        );
     }
 
+    IOController* m_controller;
     FlowT* m_flow;
-    std::vector<std::unique_ptr<TaskBase>> m_owned_steps;
-    TaskBase* m_last_io_step = nullptr;
+    std::vector<MachineNode> m_nodes;
+    size_t m_last_recv_index = MachineT::kInvalidIndex;
+};
+
+template <typename ResultT, size_t InlineN>
+class AwaitableBuilder<ResultT, InlineN, void> {
+public:
+    template <AwaitableStateMachine MachineT>
+    static auto fromStateMachine(IOController* controller, MachineT machine) -> StateMachineBuilder<MachineT> {
+        static_assert(std::same_as<typename MachineT::result_type, ResultT>,
+                      "AwaitableBuilder::fromStateMachine requires matching result_type");
+        return StateMachineBuilder<MachineT>(controller, std::move(machine));
+    }
 };
 
 
