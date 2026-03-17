@@ -46,11 +46,23 @@ struct ReadWriteLoopMachine {
 
         switch (m_phase) {
         case Phase::ReadHello:
-            return MachineAction<result_type>::waitRead(m_hello.data(), m_hello.size());
+            return MachineAction<result_type>::waitRead(
+                m_hello.data() + m_hello_received,
+                m_hello.size() - m_hello_received
+            );
+        case Phase::TransitionToWrite:
+            m_phase = Phase::WritePong;
+            return MachineAction<result_type>::continue_();
         case Phase::WritePong:
-            return MachineAction<result_type>::waitWrite(m_pong.data(), m_pong.size());
+            return MachineAction<result_type>::waitWrite(
+                m_pong.data() + m_pong_sent,
+                m_pong.size() - m_pong_sent
+            );
         case Phase::ReadWorld:
-            return MachineAction<result_type>::waitRead(m_world.data(), m_world.size());
+            return MachineAction<result_type>::waitRead(
+                m_world.data() + m_world_received,
+                m_world.size() - m_world_received
+            );
         case Phase::Done:
             return MachineAction<result_type>::fail(IOError(kParamInvalid, 0));
         }
@@ -65,11 +77,14 @@ struct ReadWriteLoopMachine {
         }
 
         if (m_phase == Phase::ReadHello) {
-            if (result.value() != m_hello.size() ||
-                std::string(m_hello.data(), result.value()) != "hello") {
+            m_hello_received += result.value();
+            if (m_hello_received < m_hello.size()) {
+                return;
+            }
+            if (std::string(m_hello.data(), m_hello.size()) != "hello") {
                 m_result = std::unexpected(IOError(kReadFailed, 0));
             } else {
-                m_phase = Phase::WritePong;
+                m_phase = Phase::TransitionToWrite;
             }
             if (m_result.has_value()) {
                 m_phase = Phase::Done;
@@ -78,11 +93,11 @@ struct ReadWriteLoopMachine {
         }
 
         if (m_phase == Phase::ReadWorld) {
-            if (result.value() != m_world.size()) {
-                m_result = std::unexpected(IOError(kReadFailed, 0));
-            } else {
-                m_result = std::string(m_world.data(), result.value());
+            m_world_received += result.value();
+            if (m_world_received < m_world.size()) {
+                return;
             }
+            m_result = std::string(m_world.data(), m_world.size());
             m_phase = Phase::Done;
             return;
         }
@@ -98,18 +113,22 @@ struct ReadWriteLoopMachine {
             return;
         }
 
-        if (m_phase != Phase::WritePong || result.value() != m_pong.size()) {
+        if (m_phase != Phase::WritePong) {
             m_result = std::unexpected(IOError(kSendFailed, 0));
             m_phase = Phase::Done;
             return;
         }
 
-        m_phase = Phase::ReadWorld;
+        m_pong_sent += result.value();
+        if (m_pong_sent >= m_pong.size()) {
+            m_phase = Phase::ReadWorld;
+        }
     }
 
 private:
     enum class Phase {
         ReadHello,
+        TransitionToWrite,
         WritePong,
         ReadWorld,
         Done,
@@ -118,8 +137,11 @@ private:
     Phase m_phase = Phase::ReadHello;
     std::optional<MachineResult> m_result;
     std::array<char, 5> m_hello{};
+    size_t m_hello_received = 0;
     std::array<char, 4> m_pong{'p', 'o', 'n', 'g'};
+    size_t m_pong_sent = 0;
     std::array<char, 5> m_world{};
+    size_t m_world_received = 0;
 };
 
 struct TestState {
@@ -149,6 +171,30 @@ bool waitUntil(const std::atomic<bool>& flag,
     return flag.load(std::memory_order_acquire);
 }
 
+bool sendAll(int fd, const char* buffer, size_t length) {
+    size_t sent = 0;
+    while (sent < length) {
+        const ssize_t n = ::send(fd, buffer + sent, length - sent, 0);
+        if (n <= 0) {
+            return false;
+        }
+        sent += static_cast<size_t>(n);
+    }
+    return true;
+}
+
+bool recvExact(int fd, char* buffer, size_t length) {
+    size_t received = 0;
+    while (received < length) {
+        const ssize_t n = ::recv(fd, buffer + received, length - received, 0);
+        if (n <= 0) {
+            return false;
+        }
+        received += static_cast<size_t>(n);
+    }
+    return true;
+}
+
 }  // namespace
 
 int main() {
@@ -167,11 +213,10 @@ int main() {
         constexpr char world[] = "world";
         char pong[4]{};
 
-        ::send(fds[1], hello, sizeof(hello) - 1, 0);
-        const ssize_t pong_n = ::recv(fds[1], pong, sizeof(pong), 0);
-        if (pong_n == static_cast<ssize_t>(sizeof(pong)) &&
+        if (sendAll(fds[1], hello, sizeof(hello) - 1) &&
+            recvExact(fds[1], pong, sizeof(pong)) &&
             std::string(pong, sizeof(pong)) == "pong") {
-            ::send(fds[1], world, sizeof(world) - 1, 0);
+            sendAll(fds[1], world, sizeof(world) - 1);
         }
     });
 
@@ -179,8 +224,8 @@ int main() {
 
     const bool completed = waitUntil(state.done);
     scheduler.stop();
-    peer.join();
     close(fds[0]);
+    peer.join();
     close(fds[1]);
 
     if (!completed) {

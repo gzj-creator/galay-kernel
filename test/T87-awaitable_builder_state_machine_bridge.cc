@@ -1,19 +1,23 @@
 /**
  * @file T87-awaitable_builder_state_machine_bridge.cc
- * @brief 用途：验证 builder 状态机入口能生成可 co_await 的 Awaitable。
- * 关键覆盖点：`AwaitableBuilder<ResultT>::fromStateMachine(...).build()`。
- * 通过条件：经由 builder 构建的状态机 awaitable 成功完成并返回预期结果。
+ * @brief 用途：验证 builder 的状态机入口与链式 build 桥接都能落到共享状态机内核。
+ * 关键覆盖点：`AwaitableBuilder<ResultT>::fromStateMachine(...).build()`、
+ * 链式 `recv.parse.send.build()` 不再直接返回旧 `SequenceAwaitable` 路径。
+ * 通过条件：状态机入口运行成功，且链式 build 的类型桥接静态断言成立。
  */
 
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/kernel/Task.h"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstring>
 #include <expected>
 #include <iostream>
+#include <string>
 #include <sys/socket.h>
 #include <thread>
+#include <type_traits>
 #include <unistd.h>
 
 #ifdef USE_IOURING
@@ -32,7 +36,7 @@ using namespace std::chrono_literals;
 
 namespace {
 
-using BuilderResult = std::expected<size_t, IOError>;
+using BuilderResult = std::expected<std::string, IOError>;
 
 struct ReadOnceMachine {
     using result_type = BuilderResult;
@@ -45,7 +49,11 @@ struct ReadOnceMachine {
     }
 
     void onRead(std::expected<size_t, IOError> result) {
-        m_result = std::move(result);
+        if (!result) {
+            m_result = std::unexpected(result.error());
+            return;
+        }
+        m_result = std::string(m_buffer, result.value());
     }
 
     void onWrite(std::expected<size_t, IOError>) {}
@@ -54,6 +62,34 @@ private:
     char m_buffer[8]{};
     std::optional<BuilderResult> m_result;
 };
+
+struct ChainSurfaceFlow {
+    std::array<char, 8> scratch{};
+    std::array<char, 4> reply{'p', 'o', 'n', 'g'};
+
+    void onRecv(SequenceOps<BuilderResult, 4>&, RecvIOContext&) {}
+
+    ParseStatus onParse(SequenceOps<BuilderResult, 4>&) {
+        return ParseStatus::kCompleted;
+    }
+
+    void onSend(SequenceOps<BuilderResult, 4>& ops, SendIOContext&) {
+        ops.complete(std::string("pong"));
+    }
+};
+
+using ChainedAwaitableT = decltype(
+    std::declval<AwaitableBuilder<BuilderResult, 4, ChainSurfaceFlow>&>()
+        .template recv<&ChainSurfaceFlow::onRecv>(std::declval<char*>(), std::declval<size_t>())
+        .template parse<&ChainSurfaceFlow::onParse>()
+        .template send<&ChainSurfaceFlow::onSend>(std::declval<const char*>(), std::declval<size_t>())
+        .build()
+);
+
+static_assert(
+    !std::derived_from<std::remove_cvref_t<ChainedAwaitableT>, SequenceAwaitable<BuilderResult, 4>>,
+    "Chained AwaitableBuilder::build() should bridge to the shared state-machine core"
+);
 
 struct TestState {
     std::atomic<bool> done{false};
@@ -68,8 +104,21 @@ Task<void> builderTask(TestState* state, int fd) {
     ).build();
 
     auto result = co_await awaitable;
-    state->success.store(result.has_value() && result.value() == 5, std::memory_order_release);
+    state->success.store(result.has_value() && result.value() == "hello", std::memory_order_release);
     state->done.store(true, std::memory_order_release);
+}
+
+[[maybe_unused]] Task<void> chainedBuilderSurfaceTask(int fd) {
+    IOController controller(GHandle{.fd = fd});
+    ChainSurfaceFlow flow;
+    auto awaitable = AwaitableBuilder<BuilderResult, 4, ChainSurfaceFlow>(&controller, flow)
+        .recv<&ChainSurfaceFlow::onRecv>(flow.scratch.data(), flow.scratch.size())
+        .parse<&ChainSurfaceFlow::onParse>()
+        .send<&ChainSurfaceFlow::onSend>(flow.reply.data(), flow.reply.size())
+        .build();
+
+    auto result = co_await awaitable;
+    (void)result;
 }
 
 bool waitUntil(const std::atomic<bool>& flag,

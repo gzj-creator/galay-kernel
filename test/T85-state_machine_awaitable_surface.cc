@@ -31,8 +31,12 @@ concept HasFromStateMachine = requires(IOController* controller, SurfaceMachine 
     { BuilderT::fromStateMachine(controller, std::move(machine)) };
 };
 
-static_assert(std::same_as<decltype(MachineSignal::kContinue), const MachineSignal>);
+static_assert(std::same_as<decltype(MachineSignal::kContinue), MachineSignal>);
+static_assert(std::same_as<decltype(MachineSignal::kWaitConnect), MachineSignal>);
 static_assert(std::is_same_v<decltype(MachineAction<SurfaceResult>::continue_()), MachineAction<SurfaceResult>>);
+static_assert(std::is_same_v<
+              decltype(MachineAction<SurfaceResult>::waitConnect(Host{})),
+              MachineAction<SurfaceResult>>);
 static_assert(AwaitableStateMachine<SurfaceMachine>);
 static_assert(std::constructible_from<StateMachineAwaitable<SurfaceMachine>, IOController*, SurfaceMachine>);
 static_assert(HasFromStateMachine<AwaitableBuilder<SurfaceResult>>);

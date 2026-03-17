@@ -26,7 +26,7 @@
 - 稳定 direct-include 入口由包配置变量 `GALAY_KERNEL_SUPPORTED_HEADERS` 给出
 - 仅为内联 / 模板依赖而安装的内部头由 `GALAY_KERNEL_INTERNAL_HEADERS` 给出
 - `Awaitable.h`、`IOController.hpp`、`Timeout.hpp`、`Scheduler.hpp`、`IOScheduler.hpp` 默认仍属于低层扩展 / 排障入口；日常业务优先使用 `Runtime`、`TcpSocket`、`UdpSocket` 等高层接口
-- 其中 `Awaitable.h` 在 `v3.1.0` 起承载正式的组合式扩展面：`SequenceAwaitable`、`SequenceStep`、`AwaitableBuilder`、`ParseStatus`
+- 其中 `Awaitable.h` 在 `v3.2.0` 起承载正式的组合式扩展面：`SequenceAwaitable`、`SequenceStep`、`AwaitableBuilder`、`ParseStatus`
 - 仓库内最小消费夹具位于 `test/package-consumer/`，安装后同样可通过 `GALAY_KERNEL_PACKAGE_CONSUMER_FIXTURE_DIR` 定位
 
 ## 稳定公开头快速索引
@@ -430,21 +430,34 @@
 - `template <typename ResultT, size_t InlineN, typename FlowT, typename BaseContextT, auto Handler> struct SequenceStep`
 - `template <typename ResultT, size_t InlineN, typename FlowT, auto Handler> struct LocalSequenceStep`
 - `template <typename ResultT, size_t InlineN, typename FlowT, auto Handler> struct ParserSequenceStep`
-- `template <typename ResultT, size_t InlineN, typename FlowT> class AwaitableBuilder`
+- `template <typename ResultT, size_t InlineN = 4, typename FlowT = void> class AwaitableBuilder`
+- `enum class MachineSignal { kContinue, kWaitRead, kWaitWrite, kWaitConnect, kComplete, kFail }`
+- `template <typename ResultT> struct MachineAction`
+- `template <typename MachineT> concept AwaitableStateMachine`
+- `template <AwaitableStateMachine MachineT> class StateMachineAwaitable`
 - `enum class ParseStatus { kNeedMore, kContinue, kCompleted }`
 - `class ByteQueueView`
 
 推荐用法：
 
 - 线性组合步骤优先用 `AwaitableBuilder`
+- 复杂双向协议、读写切换或 handshake/shutdown 状态推进优先用 `AwaitableBuilder::fromStateMachine(...)` 或直接 `StateMachineAwaitable<MachineT>`
 - 需要显式持有步骤对象、跨步骤共享状态或自定义 re-arm 路径时使用 `SequenceAwaitable + SequenceStep`
 - 协议解析优先使用 `AwaitableBuilder::parse(...)`，parse handler 返回 `ParseStatus`
+- 链式 `AwaitableBuilder` 的 `build()` 现在返回 machine-backed awaitable，并与 `fromStateMachine(...)` 共享同一套状态机驱动
 
 parse 语义：
 
 - `ParseStatus::kNeedMore`：builder 会自动重挂最近一个非本地 IO 步骤，然后再次进入 parse；协程保持挂起
 - `ParseStatus::kContinue`：builder 会继续本地 parse loop，不等待新的内核事件
 - `ParseStatus::kCompleted`：parse handler 已完成最终 `ops.complete(...)` 或显式排好了后续步骤
+
+状态机 connect 语义：
+
+- `MachineSignal::kWaitConnect`：让内核注册 socket 连接完成
+- 若状态机会返回 `kWaitConnect`，则需要实现 `onConnect(std::expected<void, IOError>)`
+- 链式 builder 的 `.connect(...)` 也会通过同一套状态机驱动推进，而不是走独立旧路径
+- machine-backed builder handler 不支持 `ops.queue(...)`；若需要显式排队步骤，请改用 `SequenceAwaitable + SequenceStep`
 
 `ByteQueueView` 当前能力：
 
@@ -459,6 +472,13 @@ parse 语义：
 - 显式步骤编排：`test/T30-custom_awaitable.cc`
 - 半包不提前唤醒：`test/T76-sequence_parser_need_more.cc`
 - 粘包单次恢复尽量吃完：`test/T77-sequence_parser_coalesced_frames.cc`
+- 状态机读写切换：`test/T86-state_machine_read_write_loop.cc`
+- 状态机入口与 builder 桥接：`test/T87-awaitable_builder_state_machine_bridge.cc`
+- 状态机错误动作：`test/T88-state_machine_fail_action.cc`
+- 零长度读写动作：`test/T89-state_machine_zero_length_actions.cc`
+- builder connect 桥接：`test/T90-awaitable_builder_connect_bridge.cc`
+- 自定义状态机 connect：`test/T91-state_machine_connect_action.cc`
+- builder queue 误用拒绝：`test/T92-awaitable_builder_queue_rejected.cc`
 
 任务辅助：
 
