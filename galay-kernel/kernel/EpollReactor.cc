@@ -21,6 +21,18 @@ namespace {
 
 constexpr int kImmediateReady = 1;
 
+uint32_t ioTypeToEpollEvents(IOEventType type) {
+    uint32_t events = EPOLLET;
+    const uint32_t t = static_cast<uint32_t>(type);
+    if (t & (ACCEPT | RECV | READV | RECVFROM | FILEREAD | FILEWATCH)) {
+        events |= EPOLLIN;
+    }
+    if (t & (CONNECT | SEND | WRITEV | SENDTO | SENDFILE | FILEWRITE)) {
+        events |= EPOLLOUT;
+    }
+    return events;
+}
+
 }  // namespace
 
 EpollReactor::EpollReactor(int max_events, std::atomic<uint64_t>& last_error_code)
@@ -71,14 +83,27 @@ int EpollReactor::wakeReadFdForTest() const {
 }
 
 uint32_t EpollReactor::buildEvents(IOController* controller) const {
-    uint32_t events = EPOLLET;
+    if (controller == nullptr) {
+        return EPOLLET;
+    }
+
+    uint32_t events = ioTypeToEpollEvents(controller->m_type);
     const uint32_t t = static_cast<uint32_t>(controller->m_type);
-    if (t & (ACCEPT | RECV | READV | RECVFROM | FILEREAD | FILEWATCH)) {
-        events |= EPOLLIN;
+    if ((t & SEQUENCE) == 0) {
+        return events;
     }
-    if (t & (CONNECT | SEND | WRITEV | SENDTO | SENDFILE | FILEWRITE)) {
-        events |= EPOLLOUT;
+
+    auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
+    if (sequence == nullptr) {
+        return events;
     }
+
+    const auto* task = sequence->front();
+    if (task == nullptr) {
+        return events;
+    }
+
+    events |= ioTypeToEpollEvents(sequence->resolveTaskEventType(*task));
     return events;
 }
 
@@ -257,14 +282,7 @@ int EpollReactor::remove(IOController* controller) {
 }
 
 int EpollReactor::processSequence(IOEventType type, IOController* controller) {
-    const uint32_t t = static_cast<uint32_t>(type);
-    uint32_t events = EPOLLET;
-    if (t & (ACCEPT | RECV | READV | RECVFROM | FILEREAD)) {
-        events |= EPOLLIN;
-    }
-    if (t & (CONNECT | SEND | WRITEV | SENDTO | SENDFILE | FILEWRITE)) {
-        events |= EPOLLOUT;
-    }
+    const uint32_t events = ioTypeToEpollEvents(type);
     if (events == EPOLLET) {
         return -1;
     }

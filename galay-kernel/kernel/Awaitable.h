@@ -1433,6 +1433,10 @@ private:
                     clearActiveTask();
                     return SequenceProgress::kCompleted;
                 }
+                if (action.read_length == 0) {
+                    m_machine.onRead(std::expected<size_t, IOError>(size_t{0}));
+                    continue;
+                }
                 m_recv_context.m_buffer = action.read_buffer;
                 m_recv_context.m_length = action.read_length;
                 m_active_task = IOTask{RECV, nullptr, &m_recv_context};
@@ -1444,6 +1448,10 @@ private:
                     m_error = IOError(kParamInvalid, 0);
                     clearActiveTask();
                     return SequenceProgress::kCompleted;
+                }
+                if (action.write_length == 0) {
+                    m_machine.onWrite(std::expected<size_t, IOError>(size_t{0}));
+                    continue;
                 }
                 m_send_context.m_buffer = action.write_buffer;
                 m_send_context.m_length = action.write_length;

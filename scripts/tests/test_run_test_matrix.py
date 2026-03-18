@@ -20,6 +20,10 @@ PAIRED_TESTS = {
 
 
 class RunTestMatrixTest(unittest.TestCase):
+    @staticmethod
+    def matrix_timeout_seconds(test_names: list[str]) -> int:
+        return max(45, len(test_names))
+
     def make_fake_test(self, path: Path) -> None:
         if path.name in {"T3-tcp_server", "T6-udp_server"}:
             body = """
@@ -86,7 +90,7 @@ class RunTestMatrixTest(unittest.TestCase):
                 cwd=PROJECT_ROOT,
                 capture_output=True,
                 text=True,
-                timeout=45,
+                timeout=self.matrix_timeout_seconds(test_names),
                 env=os.environ.copy(),
             )
 
@@ -129,7 +133,7 @@ class RunTestMatrixTest(unittest.TestCase):
                 cwd=PROJECT_ROOT,
                 capture_output=True,
                 text=True,
-                timeout=45,
+                timeout=self.matrix_timeout_seconds(test_names),
                 env=os.environ.copy(),
             )
 
