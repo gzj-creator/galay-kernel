@@ -812,7 +812,9 @@ enum class ParseStatus {
 enum class MachineSignal {
     kContinue,
     kWaitRead,
+    kWaitReadv,
     kWaitWrite,
+    kWaitWritev,
     kWaitConnect,
     kComplete,
     kFail,
@@ -823,6 +825,8 @@ struct MachineAction {
     MachineSignal signal = MachineSignal::kContinue;
     char* read_buffer = nullptr;
     size_t read_length = 0;
+    const struct iovec* iovecs = nullptr;
+    size_t iov_count = 0;
     const char* write_buffer = nullptr;
     size_t write_length = 0;
     Host connect_host{};
@@ -846,6 +850,22 @@ struct MachineAction {
         action.signal = MachineSignal::kWaitWrite;
         action.write_buffer = buffer;
         action.write_length = length;
+        return action;
+    }
+
+    static MachineAction waitReadv(const struct iovec* iovecs, size_t count) {
+        MachineAction action;
+        action.signal = MachineSignal::kWaitReadv;
+        action.iovecs = iovecs;
+        action.iov_count = count;
+        return action;
+    }
+
+    static MachineAction waitWritev(const struct iovec* iovecs, size_t count) {
+        MachineAction action;
+        action.signal = MachineSignal::kWaitWritev;
+        action.iovecs = iovecs;
+        action.iov_count = count;
         return action;
     }
 
@@ -1253,7 +1273,9 @@ public:
         : SequenceAwaitableBase(controller)
         , m_machine(std::move(machine))
         , m_recv_context(nullptr, 0)
+        , m_readv_context(std::span<const struct iovec>{})
         , m_send_context(nullptr, 0)
+        , m_writev_context(std::span<const struct iovec>{})
         , m_connect_context(Host{}) {}
 
     bool await_ready() {
@@ -1316,11 +1338,29 @@ public:
             m_machine.onRead(std::move(io_result));
             return pump();
         }
+        if (m_active_kind == ActiveKind::kReadv) {
+            if (!m_readv_context.handleComplete(cqe, handle)) {
+                return SequenceProgress::kNeedWait;
+            }
+            auto io_result = std::move(m_readv_context.m_result);
+            clearActiveTask();
+            m_machine.onRead(std::move(io_result));
+            return pump();
+        }
         if (m_active_kind == ActiveKind::kWrite) {
             if (!m_send_context.handleComplete(cqe, handle)) {
                 return SequenceProgress::kNeedWait;
             }
             auto io_result = std::move(m_send_context.m_result);
+            clearActiveTask();
+            m_machine.onWrite(std::move(io_result));
+            return pump();
+        }
+        if (m_active_kind == ActiveKind::kWritev) {
+            if (!m_writev_context.handleComplete(cqe, handle)) {
+                return SequenceProgress::kNeedWait;
+            }
+            auto io_result = std::move(m_writev_context.m_result);
             clearActiveTask();
             m_machine.onWrite(std::move(io_result));
             return pump();
@@ -1356,11 +1396,29 @@ public:
                 m_machine.onRead(std::move(io_result));
                 continue;
             }
+            if (m_active_kind == ActiveKind::kReadv) {
+                if (!m_readv_context.handleComplete(handle)) {
+                    return SequenceProgress::kNeedWait;
+                }
+                auto io_result = std::move(m_readv_context.m_result);
+                clearActiveTask();
+                m_machine.onRead(std::move(io_result));
+                continue;
+            }
             if (m_active_kind == ActiveKind::kWrite) {
                 if (!m_send_context.handleComplete(handle)) {
                     return SequenceProgress::kNeedWait;
                 }
                 auto io_result = std::move(m_send_context.m_result);
+                clearActiveTask();
+                m_machine.onWrite(std::move(io_result));
+                continue;
+            }
+            if (m_active_kind == ActiveKind::kWritev) {
+                if (!m_writev_context.handleComplete(handle)) {
+                    return SequenceProgress::kNeedWait;
+                }
+                auto io_result = std::move(m_writev_context.m_result);
                 clearActiveTask();
                 m_machine.onWrite(std::move(io_result));
                 continue;
@@ -1395,11 +1453,29 @@ public:
             m_machine.onRead(std::move(io_result));
             return prepareForSubmit(handle);
         }
+        if (m_active_kind == ActiveKind::kReadv) {
+            if (!m_readv_context.handleComplete(handle)) {
+                return SequenceProgress::kNeedWait;
+            }
+            auto io_result = std::move(m_readv_context.m_result);
+            clearActiveTask();
+            m_machine.onRead(std::move(io_result));
+            return prepareForSubmit(handle);
+        }
         if (m_active_kind == ActiveKind::kWrite) {
             if (!m_send_context.handleComplete(handle)) {
                 return SequenceProgress::kNeedWait;
             }
             auto io_result = std::move(m_send_context.m_result);
+            clearActiveTask();
+            m_machine.onWrite(std::move(io_result));
+            return prepareForSubmit(handle);
+        }
+        if (m_active_kind == ActiveKind::kWritev) {
+            if (!m_writev_context.handleComplete(handle)) {
+                return SequenceProgress::kNeedWait;
+            }
+            auto io_result = std::move(m_writev_context.m_result);
             clearActiveTask();
             m_machine.onWrite(std::move(io_result));
             return prepareForSubmit(handle);
@@ -1422,7 +1498,9 @@ private:
     enum class ActiveKind {
         kNone,
         kRead,
+        kReadv,
         kWrite,
+        kWritev,
         kConnect,
     };
 
@@ -1457,6 +1535,24 @@ private:
                 m_has_active_task = true;
                 m_active_kind = ActiveKind::kRead;
                 return SequenceProgress::kNeedWait;
+            case MachineSignal::kWaitReadv:
+                if (action.iovecs == nullptr && action.iov_count != 0) {
+                    m_error = IOError(kParamInvalid, 0);
+                    clearActiveTask();
+                    return SequenceProgress::kCompleted;
+                }
+                if (action.iov_count == 0) {
+                    m_machine.onRead(std::expected<size_t, IOError>(size_t{0}));
+                    continue;
+                }
+                m_readv_context.m_iovecs = std::span<const struct iovec>(action.iovecs, action.iov_count);
+#ifdef USE_IOURING
+                m_readv_context.initMsghdr();
+#endif
+                m_active_task = IOTask{READV, nullptr, &m_readv_context};
+                m_has_active_task = true;
+                m_active_kind = ActiveKind::kReadv;
+                return SequenceProgress::kNeedWait;
             case MachineSignal::kWaitWrite:
                 if (action.write_buffer == nullptr && action.write_length != 0) {
                     m_error = IOError(kParamInvalid, 0);
@@ -1472,6 +1568,24 @@ private:
                 m_active_task = IOTask{SEND, nullptr, &m_send_context};
                 m_has_active_task = true;
                 m_active_kind = ActiveKind::kWrite;
+                return SequenceProgress::kNeedWait;
+            case MachineSignal::kWaitWritev:
+                if (action.iovecs == nullptr && action.iov_count != 0) {
+                    m_error = IOError(kParamInvalid, 0);
+                    clearActiveTask();
+                    return SequenceProgress::kCompleted;
+                }
+                if (action.iov_count == 0) {
+                    m_machine.onWrite(std::expected<size_t, IOError>(size_t{0}));
+                    continue;
+                }
+                m_writev_context.m_iovecs = std::span<const struct iovec>(action.iovecs, action.iov_count);
+#ifdef USE_IOURING
+                m_writev_context.initMsghdr();
+#endif
+                m_active_task = IOTask{WRITEV, nullptr, &m_writev_context};
+                m_has_active_task = true;
+                m_active_kind = ActiveKind::kWritev;
                 return SequenceProgress::kNeedWait;
             case MachineSignal::kWaitConnect:
                 m_connect_context.m_host = action.connect_host;
@@ -1518,7 +1632,9 @@ private:
 
     MachineT m_machine;
     RecvIOContext m_recv_context;
+    ReadvIOContext m_readv_context;
     SendIOContext m_send_context;
+    WritevIOContext m_writev_context;
     ConnectIOContext m_connect_context;
     IOTask m_active_task{};
     bool m_has_active_task = false;
