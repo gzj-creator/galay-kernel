@@ -1831,7 +1831,9 @@ public:
 
     enum class NodeKind : uint8_t {
         kRecv,
+        kReadv,
         kSend,
+        kWritev,
         kConnect,
         kParse,
         kLocal,
@@ -1849,6 +1851,8 @@ public:
         ParseHandlerFn parse_handler = nullptr;
         char* read_buffer = nullptr;
         const char* write_buffer = nullptr;
+        const struct iovec* iovecs = nullptr;
+        size_t iov_count = 0;
         size_t io_length = 0;
         Host connect_host{};
         size_t parse_rearm_recv_index = kInvalidIndex;
@@ -1862,7 +1866,9 @@ public:
         , m_nodes(std::move(nodes))
         , m_ops_owner(nullptr)
         , m_recv_context(nullptr, 0)
+        , m_readv_context(std::span<const struct iovec>{})
         , m_send_context(nullptr, 0)
+        , m_writev_context(std::span<const struct iovec>{})
         , m_connect_context(Host{}) {}
 
     template <auto Handler>
@@ -1882,6 +1888,26 @@ public:
         node.io_handler = &invokeIO<SendIOContext, Handler>;
         node.write_buffer = buffer;
         node.io_length = length;
+        return node;
+    }
+
+    template <auto Handler>
+    static Node makeReadvNode(const struct iovec* iovecs, size_t count) {
+        Node node;
+        node.kind = NodeKind::kReadv;
+        node.io_handler = &invokeIO<ReadvIOContext, Handler>;
+        node.iovecs = iovecs;
+        node.iov_count = count;
+        return node;
+    }
+
+    template <auto Handler>
+    static Node makeWritevNode(const struct iovec* iovecs, size_t count) {
+        Node node;
+        node.kind = NodeKind::kWritev;
+        node.io_handler = &invokeIO<WritevIOContext, Handler>;
+        node.iovecs = iovecs;
+        node.iov_count = count;
         return node;
     }
 
@@ -1939,12 +1965,28 @@ public:
             m_pending_io = PendingIO::kRead;
             m_pending_index = m_cursor;
             return MachineAction<result_type>::waitRead(node.read_buffer, node.io_length);
+        case NodeKind::kReadv:
+            m_readv_context.m_iovecs = std::span<const struct iovec>(node.iovecs, node.iov_count);
+#ifdef USE_IOURING
+            m_readv_context.initMsghdr();
+#endif
+            m_pending_io = PendingIO::kReadv;
+            m_pending_index = m_cursor;
+            return MachineAction<result_type>::waitReadv(node.iovecs, node.iov_count);
         case NodeKind::kSend:
             m_send_context.m_buffer = node.write_buffer;
             m_send_context.m_length = node.io_length;
             m_pending_io = PendingIO::kWrite;
             m_pending_index = m_cursor;
             return MachineAction<result_type>::waitWrite(node.write_buffer, node.io_length);
+        case NodeKind::kWritev:
+            m_writev_context.m_iovecs = std::span<const struct iovec>(node.iovecs, node.iov_count);
+#ifdef USE_IOURING
+            m_writev_context.initMsghdr();
+#endif
+            m_pending_io = PendingIO::kWritev;
+            m_pending_index = m_cursor;
+            return MachineAction<result_type>::waitWritev(node.iovecs, node.iov_count);
         case NodeKind::kConnect:
             return runConnect(node);
         case NodeKind::kParse:
@@ -1958,7 +2000,8 @@ public:
     }
 
     void onRead(std::expected<size_t, IOError> result) {
-        if (m_pending_io != PendingIO::kRead || m_pending_index >= m_nodes.size()) {
+        if ((m_pending_io != PendingIO::kRead && m_pending_io != PendingIO::kReadv) ||
+            m_pending_index >= m_nodes.size()) {
             setIOError(IOError(kParamInvalid, 0));
             return;
         }
@@ -1968,10 +2011,14 @@ public:
         if (!has_value) {
             io_error = result.error();
         }
-        m_recv_context.m_result = std::move(result);
-
         const Node& node = m_nodes[m_pending_index];
-        invokeIONode(node, m_recv_context);
+        if (m_pending_io == PendingIO::kRead) {
+            m_recv_context.m_result = std::move(result);
+            invokeIONode(node, m_recv_context);
+        } else {
+            m_readv_context.m_result = std::move(result);
+            invokeIONode(node, m_readv_context);
+        }
         clearPendingIO();
 
         if (absorbOpsOutcome()) {
@@ -1985,7 +2032,8 @@ public:
     }
 
     void onWrite(std::expected<size_t, IOError> result) {
-        if (m_pending_io != PendingIO::kWrite || m_pending_index >= m_nodes.size()) {
+        if ((m_pending_io != PendingIO::kWrite && m_pending_io != PendingIO::kWritev) ||
+            m_pending_index >= m_nodes.size()) {
             setIOError(IOError(kParamInvalid, 0));
             return;
         }
@@ -1995,10 +2043,14 @@ public:
         if (!has_value) {
             io_error = result.error();
         }
-        m_send_context.m_result = std::move(result);
-
         const Node& node = m_nodes[m_pending_index];
-        invokeIONode(node, m_send_context);
+        if (m_pending_io == PendingIO::kWrite) {
+            m_send_context.m_result = std::move(result);
+            invokeIONode(node, m_send_context);
+        } else {
+            m_writev_context.m_result = std::move(result);
+            invokeIONode(node, m_writev_context);
+        }
         clearPendingIO();
 
         if (absorbOpsOutcome()) {
@@ -2042,7 +2094,9 @@ private:
     enum class PendingIO : uint8_t {
         kNone,
         kRead,
+        kReadv,
         kWrite,
+        kWritev,
         kConnect,
     };
 
@@ -2108,7 +2162,8 @@ private:
         case ParseStatus::kNeedMore:
             if (node.parse_rearm_recv_index == kInvalidIndex ||
                 node.parse_rearm_recv_index >= m_nodes.size() ||
-                m_nodes[node.parse_rearm_recv_index].kind != NodeKind::kRecv) {
+                (m_nodes[node.parse_rearm_recv_index].kind != NodeKind::kRecv &&
+                 m_nodes[node.parse_rearm_recv_index].kind != NodeKind::kReadv)) {
                 setIOError(IOError(kParamInvalid, 0));
                 return emitActionFromOutcome();
             }
@@ -2196,7 +2251,9 @@ private:
 
     SequenceAwaitable<ResultT, InlineN> m_ops_owner;
     RecvIOContext m_recv_context;
+    ReadvIOContext m_readv_context;
     SendIOContext m_send_context;
+    WritevIOContext m_writev_context;
     ConnectIOContext m_connect_context;
 
     std::optional<result_type> m_result;
@@ -2250,9 +2307,39 @@ public:
         return *this;
     }
 
+    template <auto Handler, size_t N>
+    AwaitableBuilder& readv(std::array<struct iovec, N>& iovecs, size_t count = N) {
+        const size_t bounded = ReadvIOContext::validateBorrowedCountOrAbort(count, N, "readv");
+        m_nodes.push_back(MachineT::template makeReadvNode<Handler>(iovecs.data(), bounded));
+        m_last_recv_index = m_nodes.size() - 1;
+        return *this;
+    }
+
+    template <auto Handler, size_t N>
+    AwaitableBuilder& readv(struct iovec (&iovecs)[N], size_t count = N) {
+        const size_t bounded = ReadvIOContext::validateBorrowedCountOrAbort(count, N, "readv");
+        m_nodes.push_back(MachineT::template makeReadvNode<Handler>(iovecs, bounded));
+        m_last_recv_index = m_nodes.size() - 1;
+        return *this;
+    }
+
     template <auto Handler>
     AwaitableBuilder& send(const char* buffer, size_t length) {
         m_nodes.push_back(MachineT::template makeSendNode<Handler>(buffer, length));
+        return *this;
+    }
+
+    template <auto Handler, size_t N>
+    AwaitableBuilder& writev(std::array<struct iovec, N>& iovecs, size_t count = N) {
+        const size_t bounded = WritevIOContext::validateBorrowedCountOrAbort(count, N, "writev");
+        m_nodes.push_back(MachineT::template makeWritevNode<Handler>(iovecs.data(), bounded));
+        return *this;
+    }
+
+    template <auto Handler, size_t N>
+    AwaitableBuilder& writev(struct iovec (&iovecs)[N], size_t count = N) {
+        const size_t bounded = WritevIOContext::validateBorrowedCountOrAbort(count, N, "writev");
+        m_nodes.push_back(MachineT::template makeWritevNode<Handler>(iovecs, bounded));
         return *this;
     }
 

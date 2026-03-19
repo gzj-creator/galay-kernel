@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstring>
 #include <expected>
+#include <fcntl.h>
 #include <iostream>
 #include <string>
 #include <sys/socket.h>
@@ -67,6 +68,11 @@ template <typename BuilderT>
 auto makeReadAwaitable(BuilderT& builder, std::array<struct iovec, 2>& iovecs) {
     auto with_readv = builder.template readv<&ReadFlow::onReadv>(iovecs, iovecs.size());
     return with_readv.build();
+}
+
+bool setNonBlocking(int fd) {
+    const int flags = fcntl(fd, F_GETFL, 0);
+    return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 
 bool waitUntilBoth(const std::atomic<bool>& first,
@@ -138,6 +144,12 @@ int main() {
     int fds[2] = {-1, -1};
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) {
         std::cerr << "[T94] socketpair failed: " << std::strerror(errno) << "\n";
+        return 1;
+    }
+    if (!setNonBlocking(fds[0]) || !setNonBlocking(fds[1])) {
+        std::cerr << "[T94] failed to set socketpair non-blocking\n";
+        close(fds[0]);
+        close(fds[1]);
         return 1;
     }
 
