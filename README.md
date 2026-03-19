@@ -33,13 +33,14 @@
 - 自定义组合 IO 统一改为 `SequenceAwaitable + SequenceStep + AwaitableBuilder`。
 - 复杂双向协议现在可以直接通过 `AwaitableBuilder<Result>::fromStateMachine(&controller, machine).build()` 接入共享状态机内核。
 - 链式 `AwaitableBuilder` 仍保留 `connect(...).recv(...).parse(...).send(...).local(...).finish(...)` 这类用法，但 `build()` 已改为落到共享状态机内核，而不是独立的旧 sequence 执行路径。
+- 链式 `AwaitableBuilder` 现在额外支持 `.readv(...) / .writev(...)`，适合 header/body 分段收发这类线性多段 IO。
 - 协议解析推荐使用 `AwaitableBuilder::parse(...) + ParseStatus + ByteQueueView`：
   - `ParseStatus::kNeedMore` 会自动重挂最近一个读步骤，不提前唤醒协程
   - `ParseStatus::kContinue` 会继续本地 parse loop，适合单次 `recv` 吃完粘包 backlog
   - `ByteQueueView` 用于累积半包、读取协议头和消费已解析字节
 - 状态机动作模型：
   - `MachineSignal::kContinue`：继续本地推进，不等待新的内核事件
-  - `MachineSignal::kWaitRead / kWaitWrite / kWaitConnect`：注册读写或连接完成事件，等待下一次底层完成
+  - `MachineSignal::kWaitRead / kWaitReadv / kWaitWrite / kWaitWritev / kWaitConnect`：注册读写或连接完成事件，等待下一次底层完成
   - `MachineSignal::kComplete / kFail`：结束 awaitable
 - 真实回归入口：
   - 线性组合：`test/T63-custom_sequence_awaitable.cc`
@@ -50,6 +51,8 @@
   - builder connect 桥接：`test/T90-awaitable_builder_connect_bridge.cc`
   - 自定义状态机 connect：`test/T91-state_machine_connect_action.cc`
   - builder queue 误用拒绝：`test/T92-awaitable_builder_queue_rejected.cc`
+  - builder iovec 往返：`test/T94-awaitable_builder_iovec_roundtrip.cc`
+  - builder iovec parse 桥接：`test/T95-awaitable_builder_iovec_parse_bridge.cc`
 
 ### Awaitable 入门
 

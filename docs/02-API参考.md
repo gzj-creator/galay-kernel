@@ -431,7 +431,7 @@
 - `template <typename ResultT, size_t InlineN, typename FlowT, auto Handler> struct LocalSequenceStep`
 - `template <typename ResultT, size_t InlineN, typename FlowT, auto Handler> struct ParserSequenceStep`
 - `template <typename ResultT, size_t InlineN = 4, typename FlowT = void> class AwaitableBuilder`
-- `enum class MachineSignal { kContinue, kWaitRead, kWaitWrite, kWaitConnect, kComplete, kFail }`
+- `enum class MachineSignal { kContinue, kWaitRead, kWaitReadv, kWaitWrite, kWaitWritev, kWaitConnect, kComplete, kFail }`
 - `template <typename ResultT> struct MachineAction`
 - `template <typename MachineT> concept AwaitableStateMachine`
 - `template <AwaitableStateMachine MachineT> class StateMachineAwaitable`
@@ -441,6 +441,7 @@
 推荐用法：
 
 - 线性组合步骤优先用 `AwaitableBuilder`
+- 线性多段收发、header/body 分段 IO 优先 `AwaitableBuilder::readv(...) / writev(...)`
 - 复杂双向协议、读写切换或 handshake/shutdown 状态推进优先用 `AwaitableBuilder::fromStateMachine(...)` 或直接 `StateMachineAwaitable<MachineT>`
 - 需要显式持有步骤对象、跨步骤共享状态或自定义 re-arm 路径时使用 `SequenceAwaitable + SequenceStep`
 - 协议解析优先使用 `AwaitableBuilder::parse(...)`，parse handler 返回 `ParseStatus`
@@ -448,9 +449,24 @@
 
 parse 语义：
 
-- `ParseStatus::kNeedMore`：builder 会自动重挂最近一个非本地 IO 步骤，然后再次进入 parse；协程保持挂起
+- `ParseStatus::kNeedMore`：builder 会自动重挂最近一个非本地 IO 步骤（包括 `recv/readv`），然后再次进入 parse；协程保持挂起
 - `ParseStatus::kContinue`：builder 会继续本地 parse loop，不等待新的内核事件
 - `ParseStatus::kCompleted`：parse handler 已完成最终 `ops.complete(...)` 或显式排好了后续步骤
+
+builder iovec 公开面：
+
+- `template <auto Handler, size_t N> AwaitableBuilder& readv(std::array<struct iovec, N>& iovecs, size_t count = N)`
+- `template <auto Handler, size_t N> AwaitableBuilder& readv(struct iovec (&iovecs)[N], size_t count = N)`
+- `template <auto Handler, size_t N> AwaitableBuilder& writev(std::array<struct iovec, N>& iovecs, size_t count = N)`
+- `template <auto Handler, size_t N> AwaitableBuilder& writev(struct iovec (&iovecs)[N], size_t count = N)`
+- borrowed `iovecs` 以及底层 buffer 生命周期必须覆盖整个 awaitable 挂起期
+
+状态机 / builder iovec 动作：
+
+- `MachineAction<ResultT>::waitReadv(const struct iovec* iovecs, size_t count)`
+- `MachineAction<ResultT>::waitWritev(const struct iovec* iovecs, size_t count)`
+- `MachineSignal::kWaitReadv`：挂多段读事件，完成后仍通过 `onRead(std::expected<size_t, IOError>)` 回传总字节数
+- `MachineSignal::kWaitWritev`：挂多段写事件，完成后仍通过 `onWrite(std::expected<size_t, IOError>)` 回传总字节数
 
 状态机 connect 语义：
 
@@ -479,6 +495,9 @@ parse 语义：
 - builder connect 桥接：`test/T90-awaitable_builder_connect_bridge.cc`
 - 自定义状态机 connect：`test/T91-state_machine_connect_action.cc`
 - builder queue 误用拒绝：`test/T92-awaitable_builder_queue_rejected.cc`
+- builder iovec surface：`test/T93-awaitable_builder_iovec_surface.cc`
+- builder iovec 往返：`test/T94-awaitable_builder_iovec_roundtrip.cc`
+- builder iovec parse 桥接：`test/T95-awaitable_builder_iovec_parse_bridge.cc`
 
 任务辅助：
 
