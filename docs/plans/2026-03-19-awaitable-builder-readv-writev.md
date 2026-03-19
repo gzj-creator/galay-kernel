@@ -439,3 +439,40 @@ Add a short note that `galay-http` should migrate header/body split sends to bui
 git add docs/plans/2026-03-19-awaitable-builder-readv-writev-design.md docs/plans/2026-03-19-awaitable-builder-readv-writev.md
 git commit -m "文档: 记录 Awaitable Builder iovec 实施结果"
 ```
+
+## 最终执行记录（2026-03-19）
+
+已完成提交：
+
+- `aeb4027` `新增 Awaitable Builder iovec 失败测试`
+- `4599523` `增加 iovec 上下文运行时 span 构造`
+- `592405b` `扩展状态机 Awaitable 支持 iovec 动作`
+- `75557d6` `为 Awaitable Builder 增加 readv writev`
+- `0d85de6` `文档: 补充 Awaitable Builder iovec 用法`
+
+fresh 验证命令：
+
+```bash
+cmake --build build-awaitable-builder-iovec --target T19-readv_writev T85-state_machine_awaitable_surface T86-state_machine_read_write_loop T87-awaitable_builder_state_machine_bridge T89-state_machine_zero_length_actions T90-awaitable_builder_connect_bridge T92-awaitable_builder_queue_rejected T93-awaitable_builder_iovec_surface T94-awaitable_builder_iovec_roundtrip T95-awaitable_builder_iovec_parse_bridge --parallel
+
+for name in T19-readv_writev T85-state_machine_awaitable_surface T86-state_machine_read_write_loop T87-awaitable_builder_state_machine_bridge T89-state_machine_zero_length_actions T90-awaitable_builder_connect_bridge T92-awaitable_builder_queue_rejected T93-awaitable_builder_iovec_surface T94-awaitable_builder_iovec_roundtrip T95-awaitable_builder_iovec_parse_bridge; do
+  ./build-awaitable-builder-iovec/bin/$name
+done
+
+for i in 1 2 3 4 5; do
+  ./build-awaitable-builder-iovec/bin/T94-awaitable_builder_iovec_roundtrip
+  ./build-awaitable-builder-iovec/bin/T95-awaitable_builder_iovec_parse_bridge
+done
+```
+
+执行结果：
+
+- build 成功
+- `T19/T85/T86/T87/T89/T90/T92/T93/T94/T95` 全部 PASS
+- `T94/T95` 稳定性补跑 5 轮，全部 PASS
+
+上层迁移备注：
+
+- `galay-http` 合并本轮 kernel 后，header/body 分段发送优先改用 builder `writev(...)`
+- `galay-http` 需要半包解析前的多段读时，可直接使用 `readv(...).parse(...)`
+- 其他 `galay-*` 协议库如已有私有 scatter-gather awaitable，优先收敛到统一 builder 表达

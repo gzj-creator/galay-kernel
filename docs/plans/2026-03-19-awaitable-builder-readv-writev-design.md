@@ -291,3 +291,40 @@ void onWrite(std::expected<size_t, IOError>);
 - 保持现有单 buffer builder 简洁性
 - 给复杂协议库提供统一 scatter-gather 表达能力
 - 为 `galay-http` 等上层仓库后续清理冗余 awaitable 提供内核支撑
+
+## 实施结果（2026-03-19）
+
+最终落地：
+
+- `AwaitableBuilder` 增加 borrowed `.readv(...) / .writev(...)`
+- `LinearMachine` 与共享 `StateMachineAwaitable` 一起支持 `kWaitReadv / kWaitWritev`
+- `ParseStatus::kNeedMore` 现在可以重挂最近一个 `recv/readv` 读步骤
+- builder iovec 回归测试补齐 `T93/T94/T95`
+
+本轮 fresh 验证命令：
+
+```bash
+cmake --build build-awaitable-builder-iovec --target T19-readv_writev T85-state_machine_awaitable_surface T86-state_machine_read_write_loop T87-awaitable_builder_state_machine_bridge T89-state_machine_zero_length_actions T90-awaitable_builder_connect_bridge T92-awaitable_builder_queue_rejected T93-awaitable_builder_iovec_surface T94-awaitable_builder_iovec_roundtrip T95-awaitable_builder_iovec_parse_bridge --parallel
+
+for name in T19-readv_writev T85-state_machine_awaitable_surface T86-state_machine_read_write_loop T87-awaitable_builder_state_machine_bridge T89-state_machine_zero_length_actions T90-awaitable_builder_connect_bridge T92-awaitable_builder_queue_rejected T93-awaitable_builder_iovec_surface T94-awaitable_builder_iovec_roundtrip T95-awaitable_builder_iovec_parse_bridge; do
+  ./build-awaitable-builder-iovec/bin/$name
+done
+
+for i in 1 2 3 4 5; do
+  ./build-awaitable-builder-iovec/bin/T94-awaitable_builder_iovec_roundtrip
+  ./build-awaitable-builder-iovec/bin/T95-awaitable_builder_iovec_parse_bridge
+done
+```
+
+结果：
+
+- 上述 build 全部成功
+- 回归矩阵全部 PASS
+- `T94/T95` 连续 5 轮 PASS
+- `T94` 早期卡住的根因已确认是测试使用阻塞 `socketpair`，提交阶段已把 scheduler 侧 fd 改为 non-blocking
+
+上层跟进：
+
+- `galay-http` 在消费本轮 kernel 后，header/body 分段发送优先迁移到 builder `writev(...)`
+- `galay-http` 如有半包解析前的多段接收，也可以直接走 `readv(...).parse(...)`
+- 上层协议库应优先删除私有 scatter-gather awaitable，避免再维护专有状态机分支
