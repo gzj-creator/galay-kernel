@@ -303,6 +303,13 @@ struct SendAwaitable: public SendIOContext, public TimeoutSupport<SendAwaitable>
 // ---- Readv ----
 
 struct ReadvIOContext: public IOContextBase {
+    explicit ReadvIOContext(std::span<const struct iovec> iovecs)
+        : m_iovecs(iovecs) {
+#ifdef USE_IOURING
+        initMsghdr();
+#endif
+    }
+
     template<size_t N>
     ReadvIOContext(std::array<struct iovec, N>& iovecs, size_t count)
         : m_iovecs(iovecs.data(), validateBorrowedCountOrAbort(count, N, "readv")) {
@@ -374,6 +381,13 @@ struct ReadvAwaitable: public ReadvIOContext, public TimeoutSupport<ReadvAwaitab
 // ---- Writev ----
 
 struct WritevIOContext: public IOContextBase {
+    explicit WritevIOContext(std::span<const struct iovec> iovecs)
+        : m_iovecs(iovecs) {
+#ifdef USE_IOURING
+        initMsghdr();
+#endif
+    }
+
     template<size_t N>
     WritevIOContext(std::array<struct iovec, N>& iovecs, size_t count)
         : m_iovecs(iovecs.data(), validateBorrowedCountOrAbort(count, N, "writev")) {
