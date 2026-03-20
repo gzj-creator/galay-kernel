@@ -196,11 +196,6 @@ inline auto IOController::getAwaitable() -> SendFileAwaitable* {
     return static_cast<SendFileAwaitable*>(m_awaitable[WRITE]);
 }
 
-template<>
-inline auto IOController::getAwaitable() -> SequenceAwaitableBase* {
-    return static_cast<SequenceAwaitableBase*>(m_awaitable[READ]);
-};
-
 template<typename Awaitable>
 inline void completeAwaitableAndWake(IOController* controller, Awaitable* awaitable) {
     if (awaitable && awaitable->handleComplete(controller->m_handle)) {
@@ -375,9 +370,14 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
     case IOEventType::RECVFROM:
     case IOEventType::ACCEPT:
     case IOEventType::FILEWATCH:
-    case IOEventType::SEQUENCE:
         m_awaitable[READ] = awaitable;
 #ifdef USE_IOURING
+        advanceSqeGeneration(READ);
+#endif
+        break;
+    case IOEventType::SEQUENCE:
+#ifdef USE_IOURING
+        m_awaitable[READ] = awaitable;
         advanceSqeGeneration(READ);
 #endif
         break;
@@ -407,9 +407,14 @@ inline void IOController::removeAwaitable(IOEventType type) {
     case IOEventType::RECVFROM:
     case IOEventType::ACCEPT:
     case IOEventType::FILEWATCH:
-    case IOEventType::SEQUENCE:
         m_awaitable[READ] = nullptr;
 #ifdef USE_IOURING
+        advanceSqeGeneration(READ);
+#endif
+        break;
+    case IOEventType::SEQUENCE:
+#ifdef USE_IOURING
+        m_awaitable[READ] = nullptr;
         advanceSqeGeneration(READ);
 #endif
         break;

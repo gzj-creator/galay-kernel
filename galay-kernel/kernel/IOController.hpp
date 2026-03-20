@@ -13,6 +13,8 @@
 namespace galay::kernel
 {
 
+struct SequenceAwaitableBase;
+
 /**
  * @brief IO事件控制器
  *
@@ -80,6 +82,7 @@ struct IOController {
         : m_handle(other.m_handle)
         , m_type(other.m_type)
         , m_awaitable{other.m_awaitable[READ], other.m_awaitable[WRITE]}
+        , m_sequence_owner{other.m_sequence_owner[READ], other.m_sequence_owner[WRITE]}
 #ifdef USE_EPOLL
         , m_registered_events(other.m_registered_events)
 #endif
@@ -96,6 +99,8 @@ struct IOController {
             m_type = other.m_type;
             m_awaitable[READ] = other.m_awaitable[READ];
             m_awaitable[WRITE] = other.m_awaitable[WRITE];
+            m_sequence_owner[READ] = other.m_sequence_owner[READ];
+            m_sequence_owner[WRITE] = other.m_sequence_owner[WRITE];
 #ifdef USE_EPOLL
             m_registered_events = other.m_registered_events;
 #endif
@@ -112,6 +117,7 @@ struct IOController {
         : m_handle(other.m_handle)
         , m_type(other.m_type)
         , m_awaitable{other.m_awaitable[READ], other.m_awaitable[WRITE]}
+        , m_sequence_owner{other.m_sequence_owner[READ], other.m_sequence_owner[WRITE]}
 #ifdef USE_EPOLL
         , m_registered_events(other.m_registered_events)
 #endif
@@ -131,6 +137,8 @@ struct IOController {
             m_type = other.m_type;
             m_awaitable[READ] = other.m_awaitable[READ];
             m_awaitable[WRITE] = other.m_awaitable[WRITE];
+            m_sequence_owner[READ] = other.m_sequence_owner[READ];
+            m_sequence_owner[WRITE] = other.m_sequence_owner[WRITE];
 #ifdef USE_EPOLL
             m_registered_events = other.m_registered_events;
 #endif
@@ -150,6 +158,8 @@ struct IOController {
         m_type = IOEventType::INVALID;
         m_awaitable[READ] = nullptr;
         m_awaitable[WRITE] = nullptr;
+        m_sequence_owner[READ] = nullptr;
+        m_sequence_owner[WRITE] = nullptr;
 #ifdef USE_EPOLL
         m_registered_events = 0;
 #endif
@@ -199,6 +209,7 @@ struct IOController {
     GHandle m_handle = GHandle::invalid();
     IOEventType m_type = IOEventType::INVALID;  ///< 当前IO事件类型
     void* m_awaitable[IOController::SIZE] = {nullptr, nullptr};
+    SequenceAwaitableBase* m_sequence_owner[IOController::SIZE] = {nullptr, nullptr};
 #ifdef USE_EPOLL
     uint32_t m_registered_events = 0;          ///< epoll 已注册的事件掩码缓存
 #endif

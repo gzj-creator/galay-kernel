@@ -44,6 +44,18 @@ inline auto negativeRetOrErrno(int ret) -> uint32_t {
         : static_cast<uint32_t>(errno);
 }
 
+inline bool resolveSequenceSlot(IOEventType type, IOController::Index& slot) {
+    if (detail::sequenceEventUsesSlot(type, IOController::READ)) {
+        slot = IOController::READ;
+        return true;
+    }
+    if (detail::sequenceEventUsesSlot(type, IOController::WRITE)) {
+        slot = IOController::WRITE;
+        return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 IOUringReactor::IOUringReactor(int queue_depth, std::atomic<uint64_t>& last_error_code)
@@ -412,22 +424,58 @@ int IOUringReactor::addFileWatch(IOController* controller) {
 }
 
 int IOUringReactor::addSequence(IOController* controller) {
-    auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
-    if (sequence == nullptr) return -1;
-    if (sequence->prepareForSubmit() == SequenceProgress::kCompleted) {
-        return kImmediateReady;
+    if (controller == nullptr) {
+        return -1;
     }
-    auto* task = sequence->front();
-    if (task == nullptr) {
-        return kImmediateReady;
+
+    const auto submit_owner = [this, controller](SequenceAwaitableBase* owner) -> int {
+        if (owner == nullptr) {
+            return 0;
+        }
+
+        auto* task = owner->front();
+        if (task == nullptr) {
+            return 0;
+        }
+        if (task->context == nullptr) {
+            return -EINVAL;
+        }
+
+        const IOEventType type = owner->resolveTaskEventType(*task);
+        IOController::Index slot = IOController::READ;
+        if (!resolveSequenceSlot(type, slot)) {
+            return -EINVAL;
+        }
+        if (controller->m_awaitable[slot] == owner) {
+            return 0;
+        }
+        if (controller->m_awaitable[slot] != nullptr) {
+            return -EBUSY;
+        }
+        return submitSequenceSqe(slot, type, task->context, controller, owner);
+    };
+
+    auto* read_owner = controller->m_sequence_owner[IOController::READ];
+    if (const int ret = submit_owner(read_owner); ret < 0) {
+        return ret;
     }
-    return submitSequenceSqe(sequence->resolveTaskEventType(*task), task->context, controller);
+
+    auto* write_owner = controller->m_sequence_owner[IOController::WRITE];
+    if (write_owner != read_owner) {
+        if (const int ret = submit_owner(write_owner); ret < 0) {
+            return ret;
+        }
+    }
+
+    return 0;
 }
 
-int IOUringReactor::submitSequenceSqe(IOEventType type,
+int IOUringReactor::submitSequenceSqe(IOController::Index slot,
+                                      IOEventType type,
                                       IOContextBase* ctx,
-                                      IOController* controller) {
-    auto* token = controller->makeSqeRequest(IOController::READ);
+                                      IOController* controller,
+                                      SequenceAwaitableBase* owner) {
+    auto* token = controller->makeSqeRequest(slot);
     if (token == nullptr) {
         return -ENOMEM;
     }
@@ -529,11 +577,11 @@ int IOUringReactor::submitSequenceSqe(IOEventType type,
     }
     default:
         delete token;
-        return -1;
+        return -EINVAL;
     }
 
-    auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
-    sequence->m_sqe_type = SEQUENCE;
+    owner->m_sqe_type = SEQUENCE;
+    controller->m_awaitable[slot] = owner;
     io_uring_sqe_set_data(sqe, token);
     return 0;
 }
@@ -807,20 +855,18 @@ void IOUringReactor::processCompletion(struct io_uring_cqe* cqe) {
     }
     case SEQUENCE: {
         auto* sequence = static_cast<SequenceAwaitableBase*>(base);
-        auto* task = sequence->front();
-        if (task) {
-            const auto progress = sequence->onActiveEvent(cqe, controller->m_handle);
-            if (progress == SequenceProgress::kCompleted) {
+        controller->m_awaitable[slot] = nullptr;
+        controller->advanceSqeGeneration(slot);
+
+        const auto progress = sequence->onActiveEvent(cqe, controller->m_handle);
+        if (progress == SequenceProgress::kCompleted) {
+            sequence->m_waker.wakeUp();
+        } else {
+            const int ret = addSequence(controller);
+            if (ret < 0) {
+                detail::storeBackendError(
+                    m_last_error_code, kNotReady, negativeRetOrErrno(ret));
                 sequence->m_waker.wakeUp();
-            } else {
-                const int ret = addSequence(controller);
-                if (ret == kImmediateReady) {
-                    sequence->m_waker.wakeUp();
-                } else if (ret < 0) {
-                    detail::storeBackendError(
-                        m_last_error_code, kNotReady, negativeRetOrErrno(ret));
-                    sequence->m_waker.wakeUp();
-                }
             }
         }
         break;

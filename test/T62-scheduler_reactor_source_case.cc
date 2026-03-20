@@ -152,6 +152,28 @@ int main() {
         }
     }
 
+    const auto iouring_reactor = kernel_dir / "IOUringReactor.cc";
+    if (containsText(iouring_reactor, "auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();")) {
+        std::cerr << "[T62] expected IOUringReactor sequence path to avoid single-owner lookup\n";
+        return 1;
+    }
+    if (containsText(iouring_reactor, "int IOUringReactor::submitSequenceSqe(IOEventType type,")) {
+        std::cerr << "[T62] expected IOUringReactor submitSequenceSqe to be slot-aware\n";
+        return 1;
+    }
+    if (!containsText(iouring_reactor, "int IOUringReactor::submitSequenceSqe(IOController::Index slot,")) {
+        std::cerr << "[T62] expected IOUringReactor submitSequenceSqe to accept slot parameter\n";
+        return 1;
+    }
+    if (!containsText(iouring_reactor, "controller->m_awaitable[slot] == owner")) {
+        std::cerr << "[T62] expected IOUringReactor sequence path to skip already-armed slots\n";
+        return 1;
+    }
+    if (!containsText(iouring_reactor, "controller->m_awaitable[slot] = owner;")) {
+        std::cerr << "[T62] expected IOUringReactor sequence SQE submission to bind slot owner\n";
+        return 1;
+    }
+
     std::cout << "T62-SchedulerReactorSourceCase PASS\n";
     return 0;
 }

@@ -11,6 +11,28 @@
 
 namespace galay::kernel {
 
+namespace {
+
+IOEventType collectSequenceEvents(const IOController* controller) {
+    if (controller == nullptr) {
+        return IOEventType::INVALID;
+    }
+
+    IOEventType events = IOEventType::INVALID;
+    const SequenceAwaitableBase* last_owner = nullptr;
+    for (const auto slot : {IOController::READ, IOController::WRITE}) {
+        const auto* owner = controller->m_sequence_owner[slot];
+        if (owner == nullptr || owner == last_owner) {
+            continue;
+        }
+        events |= owner->activeEventType();
+        last_owner = owner;
+    }
+    return events;
+}
+
+}  // namespace
+
 KqueueReactor::KqueueReactor(int max_events, std::atomic<uint64_t>& last_error_code)
     : m_kqueue_fd(kqueue())
     , m_max_events(max_events)
@@ -156,6 +178,8 @@ int KqueueReactor::addClose(IOController* controller) {
     controller->m_type = IOEventType::INVALID;
     controller->m_awaitable[IOController::READ] = nullptr;
     controller->m_awaitable[IOController::WRITE] = nullptr;
+    controller->m_sequence_owner[IOController::READ] = nullptr;
+    controller->m_sequence_owner[IOController::WRITE] = nullptr;
 
     close(fd);
     controller->m_handle = GHandle::invalid();
@@ -235,16 +259,14 @@ int KqueueReactor::addSendFile(IOController* controller) {
 }
 
 int KqueueReactor::addSequence(IOController* controller) {
-    auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
-    if (sequence == nullptr) return -1;
-    if (sequence->prepareForSubmit(controller->m_handle) == SequenceProgress::kCompleted) {
-        return 1;
+    if (controller == nullptr) {
+        return -1;
     }
-    auto* task = sequence->front();
-    if (task == nullptr) {
-        return 1;
+    const IOEventType sequence_events = collectSequenceEvents(controller);
+    if (sequence_events == IOEventType::INVALID) {
+        return 0;
     }
-    return processSequence(sequence->resolveTaskEventType(*task), controller);
+    return processSequence(sequence_events, controller);
 }
 
 int KqueueReactor::remove(IOController* controller) {
@@ -347,30 +369,38 @@ void KqueueReactor::processEvent(struct kevent& ev) {
     }
 
     if (t & SEQUENCE) {
-        auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
-        if (!sequence) {
-            return;
+        SequenceAwaitableBase* owner = nullptr;
+        if (ev.filter == EVFILT_READ) {
+            owner = controller->m_sequence_owner[IOController::READ];
+            if (owner != nullptr && !owner->waitsOn(IOController::READ)) {
+                owner = nullptr;
+            }
+        } else if (ev.filter == EVFILT_WRITE) {
+            owner = controller->m_sequence_owner[IOController::WRITE];
+            if (owner != nullptr && !owner->waitsOn(IOController::WRITE)) {
+                owner = nullptr;
+            }
         }
-        auto* task = sequence->front();
-        if (!task) {
+
+        if (owner == nullptr) {
             return;
         }
 
-        const auto progress = sequence->onActiveEvent(controller->m_handle);
+        const auto progress = owner->onActiveEvent(controller->m_handle);
         if (progress == SequenceProgress::kCompleted) {
-            sequence->m_waker.wakeUp();
+            owner->m_waker.wakeUp();
             return;
         }
 
         const int ret = addSequence(controller);
         if (ret == 1) {
-            sequence->m_waker.wakeUp();
+            owner->m_waker.wakeUp();
         } else if (ret < 0) {
             const uint32_t sys = (ret != -1)
                 ? static_cast<uint32_t>(-ret)
                 : static_cast<uint32_t>(errno);
             detail::storeBackendError(m_last_error_code, kNotReady, sys);
-            sequence->m_waker.wakeUp();
+            owner->m_waker.wakeUp();
         }
     }
 }
@@ -381,10 +411,16 @@ int KqueueReactor::processSequence(IOEventType type, IOController* controller) {
     const uint32_t t = static_cast<uint32_t>(type);
 
     if (t & (ACCEPT | RECV | READV | RECVFROM | FILEREAD | FILEWATCH)) {
-        EV_SET(&evs[ev_count++], controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
+        EV_SET(&evs[ev_count++], controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, controller);
     }
     if (t & (CONNECT | SEND | WRITEV | SENDTO | FILEWRITE | SENDFILE)) {
-        EV_SET(&evs[ev_count++], controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
+        EV_SET(&evs[ev_count++],
+               controller->m_handle.fd,
+               EVFILT_WRITE,
+               EV_ADD | EV_ONESHOT,
+               NOTE_LOWAT,
+               1,
+               controller);
     }
 
     if (ev_count == 0) {

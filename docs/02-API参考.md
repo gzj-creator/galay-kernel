@@ -27,6 +27,7 @@
 - 仅为内联 / 模板依赖而安装的内部头由 `GALAY_KERNEL_INTERNAL_HEADERS` 给出
 - `Awaitable.h`、`IOController.hpp`、`Timeout.hpp`、`Scheduler.hpp`、`IOScheduler.hpp` 默认仍属于低层扩展 / 排障入口；日常业务优先使用 `Runtime`、`TcpSocket`、`UdpSocket` 等高层接口
 - 其中 `Awaitable.h` 在 `v3.2.0` 起承载正式的组合式扩展面：`SequenceAwaitable`、`SequenceStep`、`AwaitableBuilder`、`ParseStatus`
+- `v3.3.0` 进一步补充 `AwaitContext`、`SequenceOwnerDomain` 与共享 state-machine `.timeout(...)` 收口，便于 builder / direct awaitable 统一扩展
 - 仓库内最小消费夹具位于 `test/package-consumer/`，安装后同样可通过 `GALAY_KERNEL_PACKAGE_CONSUMER_FIXTURE_DIR` 定位
 
 ## 稳定公开头快速索引

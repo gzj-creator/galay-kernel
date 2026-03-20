@@ -27,6 +27,23 @@
 - 文件监控：`galay::async::FileWatcher`
 - 向量 IO / 零拷贝：`readv` / `writev` / `sendfile`
 
+## v3.3.0 更新
+
+- sequence owner 现在支持同一 `IOController` 上一个只读 sequence 和一个只写 sequence 并发共存；双向 `StateMachineAwaitable` 仍保持双向独占，避免读写归属混乱。
+- 共享 state-machine awaitable 家族补齐 `AwaitContext` 注入与统一 `.timeout(...)` 收口，builder / direct 两条路径行为一致。
+- 修复 `io_uring` 下普通 awaitable 与 sequence owner 冲突时可能误清 slot、导致 sequence 永久挂起的问题。
+- 新增回归测试：
+  - `test/T96-state_machine_timeout.cc`
+  - `test/T97-state_machine_await_context.cc`
+  - `test/T98-sequence_owner_conflict.cc`
+  - `test/T99-sequence_duplex_split.cc`
+  - `test/T100-sequence_bidirectional_exclusive.cc`
+  - `test/T101-sequence_ordinary_conflict.cc`
+- `2026-03-21` 远端 Linux `io_uring` fresh 验证结果：
+  - 全量测试 `98/98 PASS`
+  - `B2/B3` plain TCP loopback：平均约 `119184 QPS`、`232.782 MB/s`、`Errors=0`
+  - `B11/B12` `readv/writev` loopback：平均约 `100726 QPS`、`786.923 MB/s`、`Errors=0`
+
 ## v3.2.0 非兼容升级
 
 - 旧 `CustomAwaitable` / `CustomSequenceAwaitable` / `addCustom(...)` 扩展模型已移除，不再保留兼容层。
@@ -122,17 +139,18 @@ target_link_libraries(your_app PRIVATE galay-kernel::galay-kernel)
 - 测试：`test/T*.cc` 会按文件名直接生成同名 target，例如 `test/T13-async_mutex.cc` -> `T13-async_mutex`
 - benchmark：`benchmark/CMakeLists.txt` 明确定义 `B1-ComputeScheduler` 到 `B14-SchedulerInjectedWakeup`
 
-## 性能验证口径（2026-03-17）
+## 性能验证口径（2026-03-21）
 
-- 当前本地 fresh 验证对应 `v3.2.0` worktree；历史 triplet 对比仍以 `baseline=cde3da1`、`refactored=v3.0.1(59bc155)` 为准
+- 当前本地 fresh 验证与远端 Linux `io_uring` fresh 验证对应 `v3.3.0` worktree；历史 triplet 对比仍以 `baseline=cde3da1`、`refactored=v3.0.1(59bc155)` 为准
 - 单 benchmark 的标准入口是 `scripts/run_single_benchmark_triplet.sh`
 - 后端顺序固定为 `kqueue -> epoll -> io_uring`
 - `scripts/run_benchmark_triplet.sh` 是单 backend 低层 orchestrator，`scripts/parse_benchmark_triplet.py` 只输出 `baseline | refactored`
 - `B5-UdpClient` 只做 smoke/stability 检查，最终 UDP 性能结论以 `B6-Udp` 为准
 
-## 当前已验证的命令（2026-03-17）
+## 当前已验证的命令（2026-03-21）
 
-验证环境：macOS、AppleClang 17、CMake 默认 Release、后端为 kqueue。
+验证环境 1：macOS、AppleClang 17、CMake 默认 Release、后端为 kqueue。  
+验证环境 2：Ubuntu Linux、`io_uring`、远端保守压测（`nice -n 10` + 绑定 `1-2` 核）。
 
 ```bash
 python3 -m unittest \
@@ -175,6 +193,15 @@ bash scripts/run_benchmark_matrix.sh \
   - `B4/B5-Udp` 已恢复有效收发；`B5` 仍只作为 smoke / stability 检查
   - `B5-UdpClient` 本地 kqueue fresh 结果为 `100000 sent / 99518 received`、loss `0.482%`
   - `B6-Udp` 本地 kqueue fresh 结果为 `200000/200000`、loss `0.00%`、recv throughput `8.86656 MB/s`
+- 远端 Linux `io_uring`：
+  - 定向回归：`T98/T99/T100/T101` 全部 `PASS`
+  - 全量回归：`98/98 PASS`
+  - `B1-ComputeScheduler`：空任务约 `1.21M tasks/s`，light 约 `0.99M tasks/s`，heavy 约 `81.7K tasks/s`
+  - `B14-SchedulerInjectedWakeup`：约 `1.62M tasks/s`，平均延迟约 `16.3us`
+  - `B8-MpscChannel`：持续负载平均约 `20.9M msg/s`
+  - `B9-UnsafeChannel`：`recvBatched` 峰值约 `128.7M msg/s`
+  - `B2/B3` plain TCP loopback：平均约 `119184 QPS`、`232.782 MB/s`、`Errors=0`
+  - `B11/B12` `readv/writev` loopback：平均约 `100726 QPS`、`786.923 MB/s`、`Errors=0`
 - 模块 import 示例：当前环境 `ENABLE_CPP23_MODULES=OFF`，未生成 import target；最近一次专门的模块构建结论仍是 `Unix Makefiles + AppleClang` 下不会生成模块 target
 - 安装与消费：最近一次专门 smoke 验证仍是 `2026-03-10`，细节见 `docs/00-快速开始.md`
 

@@ -6,3 +6,5 @@ test_results
 .vscode
 .claude/
 .worktrees
+.install-staging-*
+.stage-*

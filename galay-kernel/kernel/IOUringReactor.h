@@ -50,7 +50,11 @@ public:
     void poll(uint64_t timeout_ns, WakeCoordinator& wake_coordinator);
 
 private:
-    int submitSequenceSqe(IOEventType type, IOContextBase* ctx, IOController* controller);
+    int submitSequenceSqe(IOController::Index slot,
+                          IOEventType type,
+                          IOContextBase* ctx,
+                          IOController* controller,
+                          SequenceAwaitableBase* owner);
     void processCompletion(struct io_uring_cqe* cqe);
     void ensureWakeReadArmed();
 

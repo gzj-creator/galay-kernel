@@ -33,6 +33,24 @@ uint32_t ioTypeToEpollEvents(IOEventType type) {
     return events;
 }
 
+IOEventType collectSequenceEvents(const IOController* controller) {
+    if (controller == nullptr) {
+        return IOEventType::INVALID;
+    }
+
+    IOEventType events = IOEventType::INVALID;
+    const SequenceAwaitableBase* last_owner = nullptr;
+    for (const auto slot : {IOController::READ, IOController::WRITE}) {
+        const auto* owner = controller->m_sequence_owner[slot];
+        if (owner == nullptr || owner == last_owner) {
+            continue;
+        }
+        events |= owner->activeEventType();
+        last_owner = owner;
+    }
+    return events;
+}
+
 }  // namespace
 
 EpollReactor::EpollReactor(int max_events, std::atomic<uint64_t>& last_error_code)
@@ -93,17 +111,7 @@ uint32_t EpollReactor::buildEvents(IOController* controller) const {
         return events;
     }
 
-    auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
-    if (sequence == nullptr) {
-        return events;
-    }
-
-    const auto* task = sequence->front();
-    if (task == nullptr) {
-        return events;
-    }
-
-    events |= ioTypeToEpollEvents(sequence->resolveTaskEventType(*task));
+    events |= ioTypeToEpollEvents(collectSequenceEvents(controller));
     return events;
 }
 
@@ -220,6 +228,8 @@ int EpollReactor::addClose(IOController* controller) {
     controller->m_type = IOEventType::INVALID;
     controller->m_awaitable[IOController::READ] = nullptr;
     controller->m_awaitable[IOController::WRITE] = nullptr;
+    controller->m_sequence_owner[IOController::READ] = nullptr;
+    controller->m_sequence_owner[IOController::WRITE] = nullptr;
     controller->m_registered_events = 0;
 
     close(fd);
@@ -260,18 +270,13 @@ int EpollReactor::addFileWatch(IOController* controller) {
 }
 
 int EpollReactor::addSequence(IOController* controller) {
-    auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
-    if (sequence == nullptr) return -1;
-
-    if (sequence->prepareForSubmit(controller->m_handle) == SequenceProgress::kCompleted) {
-        return kImmediateReady;
+    if (controller == nullptr) {
+        return -1;
     }
-
-    auto* task = sequence->front();
-    if (task == nullptr) {
-        return kImmediateReady;
+    if (collectSequenceEvents(controller) == IOEventType::INVALID) {
+        return 0;
     }
-    return processSequence(sequence->resolveTaskEventType(*task), controller);
+    return applyEvents(controller, buildEvents(controller));
 }
 
 int EpollReactor::remove(IOController* controller) {
@@ -442,22 +447,43 @@ void EpollReactor::processEvent(struct epoll_event& ev) {
     }
 
     if (t & SEQUENCE) {
-        auto* sequence = controller->getAwaitable<SequenceAwaitableBase>();
-        if (sequence) {
-            const auto progress = sequence->onActiveEvent(controller->m_handle);
+        const auto dispatch_owner = [this, controller](SequenceAwaitableBase* owner) {
+            if (owner == nullptr) {
+                return;
+            }
+
+            const auto progress = owner->onActiveEvent(controller->m_handle);
             if (progress == SequenceProgress::kCompleted) {
-                sequence->m_waker.wakeUp();
-            } else {
-                const int ret = addSequence(controller);
-                if (ret == kImmediateReady) {
-                    sequence->m_waker.wakeUp();
-                } else if (ret < 0) {
-                    const uint32_t sys = (ret != -1)
-                        ? static_cast<uint32_t>(-ret)
-                        : static_cast<uint32_t>(errno);
-                    detail::storeBackendError(m_last_error_code, kNotReady, sys);
-                    sequence->m_waker.wakeUp();
-                }
+                owner->m_waker.wakeUp();
+                return;
+            }
+
+            const int ret = addSequence(controller);
+            if (ret == kImmediateReady) {
+                owner->m_waker.wakeUp();
+            } else if (ret < 0) {
+                const uint32_t sys = (ret != -1)
+                    ? static_cast<uint32_t>(-ret)
+                    : static_cast<uint32_t>(errno);
+                detail::storeBackendError(m_last_error_code, kNotReady, sys);
+                owner->m_waker.wakeUp();
+            }
+        };
+
+        SequenceAwaitableBase* dispatched = nullptr;
+        if ((ev.events & EPOLLIN) != 0) {
+            auto* owner = controller->m_sequence_owner[IOController::READ];
+            if (owner != nullptr && owner->waitsOn(IOController::READ)) {
+                dispatch_owner(owner);
+                dispatched = owner;
+            }
+        }
+        if ((ev.events & EPOLLOUT) != 0) {
+            auto* owner = controller->m_sequence_owner[IOController::WRITE];
+            if (owner != nullptr &&
+                owner != dispatched &&
+                owner->waitsOn(IOController::WRITE)) {
+                dispatch_owner(owner);
             }
         }
     }

@@ -2,7 +2,7 @@
  * @file Awaitable.h
  * @brief 异步IO可等待对象
  * @author galay-kernel
- * @version 3.2.0
+ * @version 3.3.0
  *
  * @details 三层继承结构：
  * - AwaitableBase: 基类（m_sqe_type, virtual ~）
@@ -33,6 +33,7 @@
 #include <concepts>
 #include <coroutine>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <expected>
@@ -64,6 +65,17 @@ struct AwaitableBase {
     IOEventType m_sqe_type = IOEventType::INVALID;
 #endif
     virtual ~AwaitableBase() = default;
+};
+
+struct AwaitContext {
+    TaskRef task;
+    Scheduler* scheduler = nullptr;
+};
+
+enum class SequenceOwnerDomain : uint8_t {
+    Read,
+    Write,
+    ReadWrite
 };
 
 // ==================== 第二层：IOContextBase ====================
@@ -102,6 +114,9 @@ int registerIOSchedulerEvent(Scheduler* scheduler,
 int registerIOSchedulerClose(Scheduler* scheduler,
                              IOController* controller) noexcept;
 
+constexpr bool sequenceEventUsesSlot(IOEventType type,
+                                     IOController::Index slot) noexcept;
+
 inline uint32_t normalizeAwaitableErrno(int ret) noexcept {
     return (ret < 0 && ret != -1)
         ? static_cast<uint32_t>(-ret)
@@ -124,7 +139,19 @@ inline bool finalizeAwaitableAddResult(int ret,
 
 template <IOEventType Event, typename AwaitableT>
 inline auto resumeIOAwaitable(AwaitableT& awaitable) -> decltype(std::move(awaitable.m_result)) {
+#ifdef USE_IOURING
+    const bool owns_read =
+        sequenceEventUsesSlot(Event, IOController::READ) &&
+        awaitable.m_controller->m_awaitable[IOController::READ] == &awaitable;
+    const bool owns_write =
+        sequenceEventUsesSlot(Event, IOController::WRITE) &&
+        awaitable.m_controller->m_awaitable[IOController::WRITE] == &awaitable;
+    if (owns_read || owns_write) {
+        awaitable.m_controller->removeAwaitable(Event);
+    }
+#else
     awaitable.m_controller->removeAwaitable(Event);
+#endif
     return std::move(awaitable.m_result);
 }
 
@@ -134,6 +161,13 @@ inline bool suspendRegisteredAwaitable(AwaitableT& awaitable, std::coroutine_han
 #ifdef USE_IOURING
     awaitable.m_sqe_type = Event;
 #endif
+    if ((sequenceEventUsesSlot(Event, IOController::READ) &&
+         awaitable.m_controller->m_sequence_owner[IOController::READ] != nullptr) ||
+        (sequenceEventUsesSlot(Event, IOController::WRITE) &&
+         awaitable.m_controller->m_sequence_owner[IOController::WRITE] != nullptr)) {
+        awaitable.m_result = std::unexpected(IOError(kNotReady, 0));
+        return false;
+    }
     awaitable.m_controller->fillAwaitable(Event, &awaitable);
     auto* scheduler = awaitable.m_waker.getScheduler();
     if (scheduler == nullptr || scheduler->type() != kIOScheduler) {
@@ -147,6 +181,68 @@ inline bool suspendRegisteredAwaitable(AwaitableT& awaitable, std::coroutine_han
 template <typename Promise>
 inline bool suspendSequenceAwaitable(SequenceAwaitableBase& awaitable,
                                      std::coroutine_handle<Promise> handle);
+
+template <typename Promise>
+inline AwaitContext makeAwaitContext(std::coroutine_handle<Promise> handle) {
+    TaskRef task = handle.promise().taskRefView();
+    return AwaitContext{
+        .task = task,
+        .scheduler = task.belongScheduler(),
+    };
+}
+
+template <typename TargetT>
+inline void bindAwaitContextIfSupported(TargetT& target, const AwaitContext& ctx) {
+    if constexpr (requires(TargetT& t, const AwaitContext& context) {
+        t.onAwaitContext(context);
+    }) {
+        target.onAwaitContext(ctx);
+    }
+}
+
+constexpr bool sequenceOwnerDomainUsesSlot(SequenceOwnerDomain domain,
+                                           IOController::Index slot) noexcept {
+    switch (domain) {
+    case SequenceOwnerDomain::Read:
+        return slot == IOController::READ;
+    case SequenceOwnerDomain::Write:
+        return slot == IOController::WRITE;
+    case SequenceOwnerDomain::ReadWrite:
+        return true;
+    }
+    return false;
+}
+
+constexpr bool sequenceEventUsesSlot(IOEventType type,
+                                     IOController::Index slot) noexcept {
+    const uint32_t t = static_cast<uint32_t>(type);
+    if (slot == IOController::READ) {
+        return (t & (ACCEPT | RECV | READV | RECVFROM | FILEREAD | FILEWATCH)) != 0;
+    }
+    if (slot == IOController::WRITE) {
+        return (t & (CONNECT | SEND | WRITEV | SENDTO | FILEWRITE | SENDFILE)) != 0;
+    }
+    return false;
+}
+
+template <typename MachineT>
+constexpr SequenceOwnerDomain resolveStateMachineOwnerDomain(const MachineT& machine) {
+    if constexpr (requires {
+        { MachineT::kSequenceOwnerDomain } -> std::convertible_to<SequenceOwnerDomain>;
+    }) {
+        return MachineT::kSequenceOwnerDomain;
+    } else if constexpr (requires {
+        { MachineT::sequence_owner_domain } -> std::convertible_to<SequenceOwnerDomain>;
+    }) {
+        return MachineT::sequence_owner_domain;
+    } else if constexpr (requires(const MachineT& m) {
+        { m.sequenceOwnerDomain() } -> std::convertible_to<SequenceOwnerDomain>;
+    }) {
+        return machine.sequenceOwnerDomain();
+    } else {
+        return SequenceOwnerDomain::ReadWrite;
+    }
+}
 
 template <typename ContextT>
 constexpr IOEventType customAwaitableDefaultEvent() {
@@ -907,8 +1003,11 @@ struct SequenceAwaitableBase: public AwaitableBase {
         IOContextBase* context = nullptr;
     };
 
-    explicit SequenceAwaitableBase(IOController* controller)
-        : m_controller(controller) {}
+    explicit SequenceAwaitableBase(IOController* controller,
+                                   SequenceOwnerDomain requested_domain = SequenceOwnerDomain::ReadWrite)
+        : m_controller(controller)
+        , m_requested_domain(requested_domain)
+        , m_registered_domain(requested_domain) {}
 
     virtual IOTask* front() = 0;
     virtual const IOTask* front() const = 0;
@@ -923,8 +1022,79 @@ struct SequenceAwaitableBase: public AwaitableBase {
         return desired == IOEventType::INVALID ? task.type : desired;
     }
 
+    IOEventType activeEventType() const {
+        const auto* task = front();
+        return task == nullptr ? IOEventType::INVALID : resolveTaskEventType(*task);
+    }
+
+    bool waitsOn(IOController::Index slot) const {
+        return detail::sequenceEventUsesSlot(activeEventType(), slot);
+    }
+
+    bool claimRequestedDomain() {
+        if (m_controller == nullptr) {
+            return false;
+        }
+
+        const bool need_read =
+            detail::sequenceOwnerDomainUsesSlot(m_requested_domain, IOController::READ);
+        const bool need_write =
+            detail::sequenceOwnerDomainUsesSlot(m_requested_domain, IOController::WRITE);
+
+        const auto can_claim = [this](IOController::Index slot) {
+            return m_controller->m_awaitable[slot] == nullptr &&
+                   (m_controller->m_sequence_owner[slot] == nullptr ||
+                    m_controller->m_sequence_owner[slot] == this);
+        };
+
+        if ((need_read && !can_claim(IOController::READ)) ||
+            (need_write && !can_claim(IOController::WRITE))) {
+            return false;
+        }
+
+        if (need_read) {
+            m_controller->m_sequence_owner[IOController::READ] = this;
+        }
+        if (need_write) {
+            m_controller->m_sequence_owner[IOController::WRITE] = this;
+        }
+        m_controller->m_type |= SEQUENCE;
+        m_registered_domain = m_requested_domain;
+        m_registered = true;
+        return true;
+    }
+
+    void releaseRegisteredDomain() {
+        if (!m_registered || m_controller == nullptr) {
+            m_registered = false;
+            return;
+        }
+
+        if (detail::sequenceOwnerDomainUsesSlot(m_registered_domain, IOController::READ) &&
+            m_controller->m_sequence_owner[IOController::READ] == this) {
+            m_controller->m_sequence_owner[IOController::READ] = nullptr;
+        }
+        if (detail::sequenceOwnerDomainUsesSlot(m_registered_domain, IOController::WRITE) &&
+            m_controller->m_sequence_owner[IOController::WRITE] == this) {
+            m_controller->m_sequence_owner[IOController::WRITE] = nullptr;
+        }
+#ifdef USE_IOURING
+        for (const auto slot : {IOController::READ, IOController::WRITE}) {
+            if (m_controller->m_awaitable[slot] == this) {
+                m_controller->m_awaitable[slot] = nullptr;
+                m_controller->advanceSqeGeneration(slot);
+            }
+        }
+#endif
+        if (m_controller->m_sequence_owner[IOController::READ] == nullptr &&
+            m_controller->m_sequence_owner[IOController::WRITE] == nullptr) {
+            m_controller->m_type &= ~SEQUENCE;
+        }
+        m_registered = false;
+    }
+
     void onCompleted() {
-        m_controller->removeAwaitable(SEQUENCE);
+        releaseRegisteredDomain();
     }
 
     template <typename Promise>
@@ -943,6 +1113,9 @@ struct SequenceAwaitableBase: public AwaitableBase {
     std::optional<IOError> m_error;
     IOController* m_controller;
     Waker m_waker;
+    SequenceOwnerDomain m_requested_domain = SequenceOwnerDomain::ReadWrite;
+    SequenceOwnerDomain m_registered_domain = SequenceOwnerDomain::ReadWrite;
+    bool m_registered = false;
 };
 
 namespace detail {
@@ -951,12 +1124,31 @@ template <typename Promise>
 inline bool suspendSequenceAwaitable(SequenceAwaitableBase& awaitable,
                                      std::coroutine_handle<Promise> handle) {
     awaitable.m_waker = Waker(handle);
+    awaitable.m_registered = false;
+    awaitable.m_error.reset();
 #ifdef USE_IOURING
     awaitable.m_sqe_type = SEQUENCE;
 #endif
-    awaitable.m_controller->fillAwaitable(SEQUENCE, &awaitable);
+
+    if (!awaitable.claimRequestedDomain()) {
+        awaitable.m_error = IOError(kNotReady, 0);
+        return false;
+    }
+
+#ifdef USE_IOURING
+    if (awaitable.prepareForSubmit() == SequenceProgress::kCompleted) {
+        return false;
+    }
+#else
+    if (awaitable.prepareForSubmit(awaitable.m_controller->m_handle) == SequenceProgress::kCompleted) {
+        return false;
+    }
+#endif
+
     auto* scheduler = awaitable.m_waker.getScheduler();
     if (scheduler == nullptr || scheduler->type() != kIOScheduler) {
+        awaitable.releaseRegisteredDomain();
+        awaitable.m_error = IOError(kNotRunningOnIOScheduler, errno);
         return false;
     }
     const int ret = registerIOSchedulerEvent(scheduler, SEQUENCE, awaitable.m_controller);
@@ -964,6 +1156,7 @@ inline bool suspendSequenceAwaitable(SequenceAwaitableBase& awaitable,
         return false;
     }
     if (ret < 0) {
+        awaitable.releaseRegisteredDomain();
         awaitable.m_error = IOError(kNotReady, normalizeAwaitableErrno(ret));
         return false;
     }
@@ -974,6 +1167,9 @@ inline bool suspendSequenceAwaitable(SequenceAwaitableBase& awaitable,
 
 template <typename ResultT, size_t InlineN = 4>
 class SequenceAwaitable;
+
+template <typename ResultT, size_t InlineN, typename FlowT>
+class AwaitableBuilder;
 
 template <typename ResultT, size_t InlineN = 4>
 class SequenceOps {
@@ -1022,8 +1218,9 @@ public:
 #endif
     };
 
-    explicit SequenceAwaitable(IOController* controller)
-        : SequenceAwaitableBase(controller) {}
+    explicit SequenceAwaitable(IOController* controller,
+                               SequenceOwnerDomain requested_domain = SequenceOwnerDomain::ReadWrite)
+        : SequenceAwaitableBase(controller, requested_domain) {}
 
     bool await_ready() {
         return m_result_set;
@@ -1265,12 +1462,14 @@ private:
 };
 
 template <AwaitableStateMachine MachineT>
-class StateMachineAwaitable : public SequenceAwaitableBase {
+class StateMachineAwaitable
+    : public SequenceAwaitableBase
+    , public TimeoutSupport<StateMachineAwaitable<MachineT>> {
 public:
     using result_type = typename MachineT::result_type;
 
     StateMachineAwaitable(IOController* controller, MachineT machine)
-        : SequenceAwaitableBase(controller)
+        : SequenceAwaitableBase(controller, detail::resolveStateMachineOwnerDomain(machine))
         , m_machine(std::move(machine))
         , m_recv_context(nullptr, 0)
         , m_readv_context(std::span<const struct iovec>{})
@@ -1278,8 +1477,33 @@ public:
         , m_writev_context(std::span<const struct iovec>{})
         , m_connect_context(Host{}) {}
 
+private:
+    template <typename ResultT, size_t InlineN, typename FlowT>
+    friend class AwaitableBuilder;
+
+    StateMachineAwaitable(IOController* controller,
+                          MachineT machine,
+                          SequenceOwnerDomain requested_domain)
+        : SequenceAwaitableBase(controller, requested_domain)
+        , m_machine(std::move(machine))
+        , m_recv_context(nullptr, 0)
+        , m_readv_context(std::span<const struct iovec>{})
+        , m_send_context(nullptr, 0)
+        , m_writev_context(std::span<const struct iovec>{})
+        , m_connect_context(Host{}) {}
+
+public:
     bool await_ready() {
-        return m_result_set;
+        return m_result_set || m_error.has_value();
+    }
+
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        if (!m_context_bound) {
+            detail::bindAwaitContextIfSupported(m_machine, detail::makeAwaitContext(handle));
+            m_context_bound = true;
+        }
+        return SequenceAwaitableBase::await_suspend(handle);
     }
 
     auto await_resume() -> result_type {
@@ -1318,6 +1542,11 @@ public:
 
     bool empty() const override {
         return !m_has_active_task;
+    }
+
+    void markTimeout() {
+        m_error = IOError(kTimeout, 0);
+        clearActiveTask();
     }
 
 #ifdef USE_IOURING
@@ -1639,6 +1868,7 @@ private:
     IOTask m_active_task{};
     bool m_has_active_task = false;
     ActiveKind m_active_kind = ActiveKind::kNone;
+    bool m_context_bound = false;
     std::optional<result_type> m_result;
     bool m_result_set = false;
 };
@@ -1943,6 +2173,16 @@ public:
         node.parse_handler = &invokeParse<Handler>;
         node.parse_rearm_recv_index = rearm_recv_index;
         return node;
+    }
+
+    void onAwaitContext(const AwaitContext& ctx) {
+        if constexpr (requires(FlowT& flow, const AwaitContext& context) {
+            flow.onAwaitContext(context);
+        }) {
+            if (m_flow != nullptr) {
+                m_flow->onAwaitContext(ctx);
+            }
+        }
     }
 
     MachineAction<result_type> advance() {
@@ -2359,9 +2599,30 @@ public:
 
 private:
     auto buildImpl() -> StateMachineAwaitable<MachineT> {
+        bool has_read = false;
+        bool has_write = false;
+        for (const auto& node : m_nodes) {
+            if (node.kind == MachineT::NodeKind::kRecv ||
+                node.kind == MachineT::NodeKind::kReadv) {
+                has_read = true;
+            } else if (node.kind == MachineT::NodeKind::kSend ||
+                       node.kind == MachineT::NodeKind::kWritev ||
+                       node.kind == MachineT::NodeKind::kConnect) {
+                has_write = true;
+            }
+            if (has_read && has_write) {
+                break;
+            }
+        }
+        const SequenceOwnerDomain domain =
+            has_read && has_write ? SequenceOwnerDomain::ReadWrite
+            : has_read ? SequenceOwnerDomain::Read
+            : has_write ? SequenceOwnerDomain::Write
+                        : SequenceOwnerDomain::ReadWrite;
         return StateMachineAwaitable<MachineT>(
             m_controller,
-            MachineT(m_controller, m_flow, std::move(m_nodes))
+            MachineT(m_controller, m_flow, std::move(m_nodes)),
+            domain
         );
     }
 

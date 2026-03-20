@@ -93,8 +93,12 @@ struct WithTimeout {
     auto await_resume() -> decltype(m_inner.await_resume()) {
         // 检查是否超时
         if (m_timer->timeouted()) [[unlikely]] {
-            // 所有等待体都有 m_result 成员，设置为超时错误
-            if constexpr (requires { m_inner.m_result; }) {
+            if constexpr (requires(Awaitable& awaitable) {
+                awaitable.markTimeout();
+            }) {
+                m_inner.markTimeout();
+            } else if constexpr (requires { m_inner.m_result; }) {
+                // 历史 awaitable 通过写入 m_result 注入超时错误
                 m_inner.m_result = std::unexpected(IOError(kTimeout, 0));
             }
         } else {
