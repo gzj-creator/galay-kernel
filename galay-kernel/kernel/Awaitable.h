@@ -454,6 +454,9 @@ struct ReadvIOContext: public IOContextBase {
 };
 
 struct ReadvAwaitable: public ReadvIOContext, public TimeoutSupport<ReadvAwaitable> {
+    ReadvAwaitable(IOController* controller, std::span<const struct iovec> iovecs)
+        : ReadvIOContext(iovecs), m_controller(controller) {}
+
     template<size_t N>
     ReadvAwaitable(IOController* controller, std::array<struct iovec, N>& iovecs, size_t count)
         : ReadvIOContext(iovecs, count), m_controller(controller) {}
@@ -532,6 +535,9 @@ struct WritevIOContext: public IOContextBase {
 };
 
 struct WritevAwaitable: public WritevIOContext, public TimeoutSupport<WritevAwaitable> {
+    WritevAwaitable(IOController* controller, std::span<const struct iovec> iovecs)
+        : WritevIOContext(iovecs), m_controller(controller) {}
+
     template<size_t N>
     WritevAwaitable(IOController* controller, std::array<struct iovec, N>& iovecs, size_t count)
         : WritevIOContext(iovecs, count), m_controller(controller) {}
@@ -1545,8 +1551,30 @@ public:
     }
 
     void markTimeout() {
-        m_error = IOError(kTimeout, 0);
+        const IOError timeout_error(kTimeout, 0);
+        const ActiveKind active_kind = m_active_kind;
         clearActiveTask();
+
+        switch (active_kind) {
+        case ActiveKind::kRead:
+        case ActiveKind::kReadv:
+            m_machine.onRead(std::unexpected(timeout_error));
+            break;
+        case ActiveKind::kWrite:
+        case ActiveKind::kWritev:
+            m_machine.onWrite(std::unexpected(timeout_error));
+            break;
+        case ActiveKind::kConnect:
+            deliverConnect(std::unexpected(timeout_error));
+            break;
+        case ActiveKind::kNone:
+            break;
+        }
+
+        (void)pump();
+        if (!m_result_set && !m_error.has_value()) {
+            m_error = timeout_error;
+        }
     }
 
 #ifdef USE_IOURING
@@ -1849,7 +1877,11 @@ private:
         }) {
             m_machine.onConnect(std::move(result));
         } else {
-            m_error = IOError(kParamInvalid, 0);
+            if (!result) {
+                m_error = result.error();
+            } else {
+                m_error = IOError(kParamInvalid, 0);
+            }
         }
     }
 

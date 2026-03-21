@@ -264,6 +264,20 @@ public:
     }
 
     /**
+     * @brief 异步 scatter-gather 读取数据（span 动态视图）
+     *
+     * @param iovecs iovec 视图，协程挂起期间底层存储由调用方持有
+     * @return ReadvAwaitable 可等待对象，co_await 后返回读取的总字节数
+     *
+     * @note
+     * - 适合使用 vector/span 组织的动态批量缓冲区
+     * - 底层 iovec 存储生命周期必须持续到 co_await 完成
+     */
+    ReadvAwaitable readv(std::span<const struct iovec> iovecs) {
+        return ReadvAwaitable(&m_controller, iovecs);
+    }
+
+    /**
      * @brief 异步 scatter-gather 读取数据（数组借用快路径）
      *
      * @param iovecs iovec 数组左值，协程挂起期间由调用方持有
@@ -295,6 +309,20 @@ public:
     template<size_t N>
     ReadvAwaitable readv(struct iovec (&iovecs)[N], size_t count = N) {
         return ReadvAwaitable(&m_controller, iovecs, count);
+    }
+
+    /**
+     * @brief 异步 scatter-gather 写入数据（span 动态视图）
+     *
+     * @param iovecs iovec 视图，协程挂起期间底层存储由调用方持有
+     * @return WritevAwaitable 可等待对象，co_await 后返回写入的总字节数
+     *
+     * @note
+     * - 适合使用 vector/span 组织的动态批量缓冲区
+     * - 底层 iovec 存储生命周期必须持续到 co_await 完成
+     */
+    WritevAwaitable writev(std::span<const struct iovec> iovecs) {
+        return WritevAwaitable(&m_controller, iovecs);
     }
 
     /**
