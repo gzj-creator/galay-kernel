@@ -27,6 +27,11 @@
 - 文件监控：`galay::async::FileWatcher`
 - 向量 IO / 零拷贝：`readv` / `writev` / `sendfile`
 
+## v3.4.0 更新
+
+- `Runtime::spawnBlocking(...)` 底层不再为每个阻塞任务单独 `detach` 一个线程，现已改为独立的 bounded elastic blocking executor：有空闲 worker 时复用，没有空闲 worker 时按需扩容，到上限后排队。
+- 源码分发版本元数据已对齐到 `3.4.0`，本轮功能验证完成后会在最终提交上发布新 tag `v3.4.1`。
+
 ## v3.3.0 更新
 
 - sequence owner 现在支持同一 `IOController` 上一个只读 sequence 和一个只写 sequence 并发共存；双向 `StateMachineAwaitable` 仍保持双向独占，避免读写归属混乱。
@@ -141,7 +146,7 @@ target_link_libraries(your_app PRIVATE galay-kernel::galay-kernel)
 
 ## 性能验证口径（2026-03-21）
 
-- 当前本地 fresh 验证与远端 Linux `io_uring` fresh 验证对应 `v3.3.0` worktree；历史 triplet 对比仍以 `baseline=cde3da1`、`refactored=v3.0.1(59bc155)` 为准
+- 当前本地 fresh 验证与远端 Linux `io_uring` fresh 验证对应 `v3.4.0` worktree；历史 triplet 对比仍以 `baseline=cde3da1`、`refactored=v3.0.1(59bc155)` 为准
 - 单 benchmark 的标准入口是 `scripts/run_single_benchmark_triplet.sh`
 - 后端顺序固定为 `kqueue -> epoll -> io_uring`
 - `scripts/run_benchmark_triplet.sh` 是单 backend 低层 orchestrator，`scripts/parse_benchmark_triplet.py` 只输出 `baseline | refactored`
