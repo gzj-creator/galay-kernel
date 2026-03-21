@@ -114,8 +114,29 @@ int registerIOSchedulerEvent(Scheduler* scheduler,
 int registerIOSchedulerClose(Scheduler* scheduler,
                              IOController* controller) noexcept;
 
+using SequenceInterestMask = uint8_t;
+
 constexpr bool sequenceEventUsesSlot(IOEventType type,
                                      IOController::Index slot) noexcept;
+
+constexpr SequenceInterestMask sequenceSlotMask(IOController::Index slot) noexcept {
+    return static_cast<SequenceInterestMask>(1u << static_cast<uint8_t>(slot));
+}
+
+constexpr SequenceInterestMask sequenceInterestMask(IOEventType type) noexcept {
+    SequenceInterestMask mask = 0;
+    if (sequenceEventUsesSlot(type, IOController::READ)) {
+        mask = static_cast<SequenceInterestMask>(mask | sequenceSlotMask(IOController::READ));
+    }
+    if (sequenceEventUsesSlot(type, IOController::WRITE)) {
+        mask = static_cast<SequenceInterestMask>(mask | sequenceSlotMask(IOController::WRITE));
+    }
+    return mask;
+}
+
+SequenceInterestMask collectSequenceInterestMask(const IOController* controller) noexcept;
+SequenceInterestMask syncSequenceInterestMask(IOController* controller) noexcept;
+void clearSequenceInterestMask(IOController* controller) noexcept;
 
 inline uint32_t normalizeAwaitableErrno(int ret) noexcept {
     return (ret < 0 && ret != -1)
@@ -1095,6 +1116,9 @@ struct SequenceAwaitableBase: public AwaitableBase {
         if (m_controller->m_sequence_owner[IOController::READ] == nullptr &&
             m_controller->m_sequence_owner[IOController::WRITE] == nullptr) {
             m_controller->m_type &= ~SEQUENCE;
+            detail::clearSequenceInterestMask(m_controller);
+        } else {
+            (void)detail::syncSequenceInterestMask(m_controller);
         }
         m_registered = false;
     }
@@ -1126,6 +1150,42 @@ struct SequenceAwaitableBase: public AwaitableBase {
 
 namespace detail {
 
+inline SequenceInterestMask collectSequenceInterestMask(const IOController* controller) noexcept {
+    if (controller == nullptr) {
+        return 0;
+    }
+
+    SequenceInterestMask mask = 0;
+    const SequenceAwaitableBase* last_owner = nullptr;
+    for (const auto slot : {IOController::READ, IOController::WRITE}) {
+        const auto* owner = controller->m_sequence_owner[slot];
+        if (owner == nullptr || owner == last_owner) {
+            continue;
+        }
+        mask = static_cast<SequenceInterestMask>(mask | sequenceInterestMask(owner->activeEventType()));
+        last_owner = owner;
+    }
+    return mask;
+}
+
+inline SequenceInterestMask syncSequenceInterestMask(IOController* controller) noexcept {
+    if (controller == nullptr) {
+        return 0;
+    }
+
+    controller->m_sequence_interest_mask = collectSequenceInterestMask(controller);
+    return controller->m_sequence_interest_mask;
+}
+
+inline void clearSequenceInterestMask(IOController* controller) noexcept {
+    if (controller == nullptr) {
+        return;
+    }
+
+    controller->m_sequence_interest_mask = 0;
+    controller->m_sequence_armed_mask = 0;
+}
+
 template <typename Promise>
 inline bool suspendSequenceAwaitable(SequenceAwaitableBase& awaitable,
                                      std::coroutine_handle<Promise> handle) {
@@ -1150,6 +1210,8 @@ inline bool suspendSequenceAwaitable(SequenceAwaitableBase& awaitable,
         return false;
     }
 #endif
+
+    (void)syncSequenceInterestMask(awaitable.m_controller);
 
     auto* scheduler = awaitable.m_waker.getScheduler();
     if (scheduler == nullptr || scheduler->type() != kIOScheduler) {

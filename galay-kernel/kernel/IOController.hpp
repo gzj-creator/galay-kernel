@@ -83,6 +83,8 @@ struct IOController {
         , m_type(other.m_type)
         , m_awaitable{other.m_awaitable[READ], other.m_awaitable[WRITE]}
         , m_sequence_owner{other.m_sequence_owner[READ], other.m_sequence_owner[WRITE]}
+        , m_sequence_interest_mask(other.m_sequence_interest_mask)
+        , m_sequence_armed_mask(other.m_sequence_armed_mask)
 #ifdef USE_EPOLL
         , m_registered_events(other.m_registered_events)
 #endif
@@ -101,6 +103,8 @@ struct IOController {
             m_awaitable[WRITE] = other.m_awaitable[WRITE];
             m_sequence_owner[READ] = other.m_sequence_owner[READ];
             m_sequence_owner[WRITE] = other.m_sequence_owner[WRITE];
+            m_sequence_interest_mask = other.m_sequence_interest_mask;
+            m_sequence_armed_mask = other.m_sequence_armed_mask;
 #ifdef USE_EPOLL
             m_registered_events = other.m_registered_events;
 #endif
@@ -118,6 +122,8 @@ struct IOController {
         , m_type(other.m_type)
         , m_awaitable{other.m_awaitable[READ], other.m_awaitable[WRITE]}
         , m_sequence_owner{other.m_sequence_owner[READ], other.m_sequence_owner[WRITE]}
+        , m_sequence_interest_mask(other.m_sequence_interest_mask)
+        , m_sequence_armed_mask(other.m_sequence_armed_mask)
 #ifdef USE_EPOLL
         , m_registered_events(other.m_registered_events)
 #endif
@@ -139,6 +145,8 @@ struct IOController {
             m_awaitable[WRITE] = other.m_awaitable[WRITE];
             m_sequence_owner[READ] = other.m_sequence_owner[READ];
             m_sequence_owner[WRITE] = other.m_sequence_owner[WRITE];
+            m_sequence_interest_mask = other.m_sequence_interest_mask;
+            m_sequence_armed_mask = other.m_sequence_armed_mask;
 #ifdef USE_EPOLL
             m_registered_events = other.m_registered_events;
 #endif
@@ -160,6 +168,8 @@ struct IOController {
         m_awaitable[WRITE] = nullptr;
         m_sequence_owner[READ] = nullptr;
         m_sequence_owner[WRITE] = nullptr;
+        m_sequence_interest_mask = 0;
+        m_sequence_armed_mask = 0;
 #ifdef USE_EPOLL
         m_registered_events = 0;
 #endif
@@ -210,6 +220,8 @@ struct IOController {
     IOEventType m_type = IOEventType::INVALID;  ///< 当前IO事件类型
     void* m_awaitable[IOController::SIZE] = {nullptr, nullptr};
     SequenceAwaitableBase* m_sequence_owner[IOController::SIZE] = {nullptr, nullptr};
+    uint8_t m_sequence_interest_mask = 0;
+    uint8_t m_sequence_armed_mask = 0;
 #ifdef USE_EPOLL
     uint32_t m_registered_events = 0;          ///< epoll 已注册的事件掩码缓存
 #endif

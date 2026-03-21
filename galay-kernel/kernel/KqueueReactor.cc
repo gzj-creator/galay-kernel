@@ -13,22 +13,8 @@ namespace galay::kernel {
 
 namespace {
 
-IOEventType collectSequenceEvents(const IOController* controller) {
-    if (controller == nullptr) {
-        return IOEventType::INVALID;
-    }
-
-    IOEventType events = IOEventType::INVALID;
-    const SequenceAwaitableBase* last_owner = nullptr;
-    for (const auto slot : {IOController::READ, IOController::WRITE}) {
-        const auto* owner = controller->m_sequence_owner[slot];
-        if (owner == nullptr || owner == last_owner) {
-            continue;
-        }
-        events |= owner->activeEventType();
-        last_owner = owner;
-    }
-    return events;
+inline bool sequenceMaskUsesSlot(uint8_t mask, IOController::Index slot) {
+    return (mask & detail::sequenceSlotMask(slot)) != 0;
 }
 
 }  // namespace
@@ -180,6 +166,7 @@ int KqueueReactor::addClose(IOController* controller) {
     controller->m_awaitable[IOController::WRITE] = nullptr;
     controller->m_sequence_owner[IOController::READ] = nullptr;
     controller->m_sequence_owner[IOController::WRITE] = nullptr;
+    detail::clearSequenceInterestMask(controller);
 
     close(fd);
     controller->m_handle = GHandle::invalid();
@@ -262,11 +249,7 @@ int KqueueReactor::addSequence(IOController* controller) {
     if (controller == nullptr) {
         return -1;
     }
-    const IOEventType sequence_events = collectSequenceEvents(controller);
-    if (sequence_events == IOEventType::INVALID) {
-        return 0;
-    }
-    return processSequence(sequence_events, controller);
+    return syncSequenceRegistration(controller);
 }
 
 int KqueueReactor::remove(IOController* controller) {
@@ -276,6 +259,7 @@ int KqueueReactor::remove(IOController* controller) {
     struct kevent evs[2];
     EV_SET(&evs[0], controller->m_handle.fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
     EV_SET(&evs[1], controller->m_handle.fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
+    controller->m_sequence_armed_mask = 0;
     return kevent(m_kqueue_fd, evs, 2, nullptr, 0, nullptr);
 }
 
@@ -370,17 +354,23 @@ void KqueueReactor::processEvent(struct kevent& ev) {
 
     if (t & SEQUENCE) {
         SequenceAwaitableBase* owner = nullptr;
+        uint8_t fired_mask = 0;
         if (ev.filter == EVFILT_READ) {
+            fired_mask = detail::sequenceSlotMask(IOController::READ);
             owner = controller->m_sequence_owner[IOController::READ];
             if (owner != nullptr && !owner->waitsOn(IOController::READ)) {
                 owner = nullptr;
             }
         } else if (ev.filter == EVFILT_WRITE) {
+            fired_mask = detail::sequenceSlotMask(IOController::WRITE);
             owner = controller->m_sequence_owner[IOController::WRITE];
             if (owner != nullptr && !owner->waitsOn(IOController::WRITE)) {
                 owner = nullptr;
             }
         }
+
+        controller->m_sequence_armed_mask =
+            static_cast<uint8_t>(controller->m_sequence_armed_mask & ~fired_mask);
 
         if (owner == nullptr) {
             return;
@@ -388,6 +378,7 @@ void KqueueReactor::processEvent(struct kevent& ev) {
 
         const auto progress = owner->onActiveEvent(controller->m_handle);
         if (progress == SequenceProgress::kCompleted) {
+            (void)detail::syncSequenceInterestMask(controller);
             owner->m_waker.wakeUp();
             return;
         }
@@ -405,29 +396,58 @@ void KqueueReactor::processEvent(struct kevent& ev) {
     }
 }
 
-int KqueueReactor::processSequence(IOEventType type, IOController* controller) {
-    struct kevent evs[2];
-    int ev_count = 0;
-    const uint32_t t = static_cast<uint32_t>(type);
-
-    if (t & (ACCEPT | RECV | READV | RECVFROM | FILEREAD | FILEWATCH)) {
-        EV_SET(&evs[ev_count++], controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, controller);
+int KqueueReactor::syncSequenceRegistration(IOController* controller) {
+    if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
+        return -1;
     }
-    if (t & (CONNECT | SEND | WRITEV | SENDTO | FILEWRITE | SENDFILE)) {
-        EV_SET(&evs[ev_count++],
-               controller->m_handle.fd,
-               EVFILT_WRITE,
-               EV_ADD | EV_ONESHOT,
-               NOTE_LOWAT,
-               1,
-               controller);
-    }
+    const auto desired_mask = detail::syncSequenceInterestMask(controller);
+    return applySequenceInterest(controller, desired_mask);
+}
 
-    if (ev_count == 0) {
+int KqueueReactor::applySequenceInterest(IOController* controller, uint8_t desired_mask) {
+    if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
         return -1;
     }
 
-    return kevent(m_kqueue_fd, evs, ev_count, nullptr, 0, nullptr);
+    const uint8_t armed_mask = controller->m_sequence_armed_mask;
+    const uint8_t to_delete = static_cast<uint8_t>(armed_mask & ~desired_mask);
+    const uint8_t to_add = static_cast<uint8_t>(desired_mask & ~armed_mask);
+
+    if ((to_delete | to_add) == 0) {
+        return 0;
+    }
+
+    struct kevent evs[4];
+    int ev_count = 0;
+    const int fd = controller->m_handle.fd;
+
+    const auto append_change = [&](IOController::Index slot, uint16_t flags) {
+        const int16_t filter = slot == IOController::READ ? EVFILT_READ : EVFILT_WRITE;
+        const uintptr_t fflags =
+            (slot == IOController::WRITE && (flags & EV_ADD) != 0) ? NOTE_LOWAT : 0;
+        const intptr_t data =
+            (slot == IOController::WRITE && (flags & EV_ADD) != 0) ? 1 : 0;
+        EV_SET(&evs[ev_count++], fd, filter, flags, fflags, data, controller);
+    };
+
+    if (sequenceMaskUsesSlot(to_delete, IOController::READ)) {
+        append_change(IOController::READ, EV_DELETE);
+    }
+    if (sequenceMaskUsesSlot(to_delete, IOController::WRITE)) {
+        append_change(IOController::WRITE, EV_DELETE);
+    }
+    if (sequenceMaskUsesSlot(to_add, IOController::READ)) {
+        append_change(IOController::READ, EV_ADD | EV_ONESHOT);
+    }
+    if (sequenceMaskUsesSlot(to_add, IOController::WRITE)) {
+        append_change(IOController::WRITE, EV_ADD | EV_ONESHOT);
+    }
+
+    const int ret = kevent(m_kqueue_fd, evs, ev_count, nullptr, 0, nullptr);
+    if (ret == 0) {
+        controller->m_sequence_armed_mask = desired_mask;
+    }
+    return ret;
 }
 
 }  // namespace galay::kernel

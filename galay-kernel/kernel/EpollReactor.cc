@@ -33,20 +33,13 @@ uint32_t ioTypeToEpollEvents(IOEventType type) {
     return events;
 }
 
-IOEventType collectSequenceEvents(const IOController* controller) {
-    if (controller == nullptr) {
-        return IOEventType::INVALID;
+uint32_t sequenceInterestToEpollEvents(detail::SequenceInterestMask mask) {
+    uint32_t events = EPOLLET;
+    if ((mask & detail::sequenceSlotMask(IOController::READ)) != 0) {
+        events |= EPOLLIN;
     }
-
-    IOEventType events = IOEventType::INVALID;
-    const SequenceAwaitableBase* last_owner = nullptr;
-    for (const auto slot : {IOController::READ, IOController::WRITE}) {
-        const auto* owner = controller->m_sequence_owner[slot];
-        if (owner == nullptr || owner == last_owner) {
-            continue;
-        }
-        events |= owner->activeEventType();
-        last_owner = owner;
+    if ((mask & detail::sequenceSlotMask(IOController::WRITE)) != 0) {
+        events |= EPOLLOUT;
     }
     return events;
 }
@@ -111,7 +104,7 @@ uint32_t EpollReactor::buildEvents(IOController* controller) const {
         return events;
     }
 
-    events |= ioTypeToEpollEvents(collectSequenceEvents(controller));
+    events |= sequenceInterestToEpollEvents(controller->m_sequence_interest_mask);
     return events;
 }
 
@@ -230,6 +223,7 @@ int EpollReactor::addClose(IOController* controller) {
     controller->m_awaitable[IOController::WRITE] = nullptr;
     controller->m_sequence_owner[IOController::READ] = nullptr;
     controller->m_sequence_owner[IOController::WRITE] = nullptr;
+    detail::clearSequenceInterestMask(controller);
     controller->m_registered_events = 0;
 
     close(fd);
@@ -273,9 +267,7 @@ int EpollReactor::addSequence(IOController* controller) {
     if (controller == nullptr) {
         return -1;
     }
-    if (collectSequenceEvents(controller) == IOEventType::INVALID) {
-        return 0;
-    }
+    (void)detail::syncSequenceInterestMask(controller);
     return applyEvents(controller, buildEvents(controller));
 }
 
@@ -287,7 +279,7 @@ int EpollReactor::remove(IOController* controller) {
 }
 
 int EpollReactor::processSequence(IOEventType type, IOController* controller) {
-    const uint32_t events = ioTypeToEpollEvents(type);
+    const uint32_t events = sequenceInterestToEpollEvents(detail::sequenceInterestMask(type));
     if (events == EPOLLET) {
         return -1;
     }
@@ -295,6 +287,9 @@ int EpollReactor::processSequence(IOEventType type, IOController* controller) {
 }
 
 void EpollReactor::syncEvents(IOController* controller) {
+    if (controller != nullptr && (static_cast<uint32_t>(controller->m_type) & SEQUENCE) != 0) {
+        (void)detail::syncSequenceInterestMask(controller);
+    }
     const uint32_t events = buildEvents(controller);
     if (applyEvents(controller, events) < 0) {
         detail::storeBackendError(
@@ -454,6 +449,7 @@ void EpollReactor::processEvent(struct epoll_event& ev) {
 
             const auto progress = owner->onActiveEvent(controller->m_handle);
             if (progress == SequenceProgress::kCompleted) {
+                (void)detail::syncSequenceInterestMask(controller);
                 owner->m_waker.wakeUp();
                 return;
             }

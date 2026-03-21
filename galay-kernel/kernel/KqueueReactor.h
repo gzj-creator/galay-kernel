@@ -46,7 +46,8 @@ public:
 
 private:
     void processEvent(struct kevent& ev);
-    int processSequence(IOEventType type, IOController* controller);
+    int syncSequenceRegistration(IOController* controller);
+    int applySequenceInterest(IOController* controller, uint8_t desired_mask);
 
     int m_kqueue_fd = -1;
     int m_notify_pipe[2] = {-1, -1};
