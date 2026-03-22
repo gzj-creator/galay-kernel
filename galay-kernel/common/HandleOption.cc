@@ -2,6 +2,14 @@
 #include <fcntl.h>
 #include <cerrno>
 
+#if defined(__linux__) || defined(__APPLE__)
+#include <netinet/tcp.h>
+#include <sys/socket.h>
+#elif defined(_WIN32) || defined(_WIN64)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
 namespace galay::kernel
 {
 
@@ -76,6 +84,27 @@ std::expected<void, IOError> HandleOption::handleReusePort()
     }
     return {};
 #endif
+}
+
+std::expected<void, IOError> HandleOption::handleTcpNoDelay()
+{
+    if (m_handle.fd < 0) {
+        return std::unexpected(IOError(kParamInvalid, 0));
+    }
+
+    int opt = 1;
+#if defined(_WIN32) || defined(_WIN64)
+    if (::setsockopt(m_handle.fd, IPPROTO_TCP, TCP_NODELAY,
+                     reinterpret_cast<const char*>(&opt), sizeof(opt)) != 0) {
+        return std::unexpected(IOError(kBindFailed, WSAGetLastError()));
+    }
+#else
+    if (::setsockopt(m_handle.fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)) != 0) {
+        return std::unexpected(IOError(kBindFailed, errno));
+    }
+#endif
+
+    return {};
 }
 
 }

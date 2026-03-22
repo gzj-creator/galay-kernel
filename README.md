@@ -27,10 +27,15 @@
 - 文件监控：`galay::async::FileWatcher`
 - 向量 IO / 零拷贝：`readv` / `writev` / `sendfile`
 
+## v3.4.1 更新
+
+- `HandleOption` 新增 `handleTcpNoDelay()`，把 `TCP_NODELAY` 能力收敛到统一的 socket option 接口，便于上层 HTTP / WebSocket / HTTP/2 直接复用。
+- 新增回归测试 `test/T104-handle_option_tcp_nodelay.cc`，验证 `TCP_NODELAY` 已被实际开启。
+
 ## v3.4.0 更新
 
 - `Runtime::spawnBlocking(...)` 底层不再为每个阻塞任务单独 `detach` 一个线程，现已改为独立的 bounded elastic blocking executor：有空闲 worker 时复用，没有空闲 worker 时按需扩容，到上限后排队。
-- 源码分发版本元数据已对齐到 `3.4.0`，本轮功能验证完成后会在最终提交上发布新 tag `v3.4.1`。
+- 源码分发版本元数据已对齐到 `3.4.0`。
 
 ## v3.3.0 更新
 

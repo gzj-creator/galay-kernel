@@ -8,6 +8,7 @@
  * - 阻塞/非阻塞模式设置
  * - 地址重用（SO_REUSEADDR）
  * - 端口重用（SO_REUSEPORT）
+ * - 低延迟传输（TCP_NODELAY）
  *
  * @example
  * @code
@@ -130,6 +131,18 @@ public:
      * @endcode
      */
     std::expected<void, IOError> handleReusePort();
+
+    /**
+     * @brief 设置 TCP_NODELAY 选项
+     *
+     * @return std::expected<void, IOError> 成功返回void，失败返回IOError
+     *
+     * @details 禁用 Nagle 算法，减少小包写入时的额外等待。
+     * 适合对延迟敏感的请求/响应和 WebSocket 场景。
+     *
+     * @note 建议在连接建立后尽早调用
+     */
+    std::expected<void, IOError> handleTcpNoDelay();
 
 private:
     GHandle m_handle;  ///< 要配置的socket句柄
