@@ -27,6 +27,11 @@
 - 文件监控：`galay::async::FileWatcher`
 - 向量 IO / 零拷贝：`readv` / `writev` / `sendfile`
 
+## v3.4.2 更新
+
+- `AwaitableBuilder` 新增 `ready(...)` 语义，允许在 builder 链路中直接注入已就绪结果，减少手写状态切换与样板代码。
+- 源码分发版本元数据已对齐到 `3.4.2`，便于 CMake / Bazel 消费方按 tag 获取一致版本。
+
 ## v3.4.1 更新
 
 - `HandleOption` 新增 `handleTcpNoDelay()`，把 `TCP_NODELAY` 能力收敛到统一的 socket option 接口，便于上层 HTTP / WebSocket / HTTP/2 直接复用。
