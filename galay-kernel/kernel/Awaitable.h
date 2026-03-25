@@ -1236,6 +1236,9 @@ inline bool suspendSequenceAwaitable(SequenceAwaitableBase& awaitable,
 template <typename ResultT, size_t InlineN = 4>
 class SequenceAwaitable;
 
+template <typename ResultT>
+class ReadyAwaitable;
+
 template <typename ResultT, size_t InlineN, typename FlowT>
 class AwaitableBuilder;
 
@@ -1527,6 +1530,31 @@ private:
     size_t m_size = 0;
     std::optional<ResultT> m_result;
     bool m_result_set = false;
+};
+
+template <typename ResultT>
+class ReadyAwaitable : public TimeoutSupport<ReadyAwaitable<ResultT>> {
+public:
+    using result_type = ResultT;
+
+    explicit ReadyAwaitable(ResultT ready_result)
+        : m_ready_result(std::move(ready_result)) {}
+
+    bool await_ready() const noexcept {
+        return true;
+    }
+
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise>) const noexcept {
+        return false;
+    }
+
+    auto await_resume() -> ResultT {
+        return std::move(m_ready_result);
+    }
+
+private:
+    ResultT m_ready_result;
 };
 
 template <AwaitableStateMachine MachineT>
@@ -2616,6 +2644,12 @@ public:
         return StateMachineBuilder<MachineTParam>(controller, std::move(machine));
     }
 
+    template <typename ReadyT>
+    requires std::constructible_from<ResultT, ReadyT&&>
+    static auto ready(ReadyT&& result) -> ReadyAwaitable<ResultT> {
+        return ReadyAwaitable<ResultT>(ResultT(std::forward<ReadyT>(result)));
+    }
+
     template <auto Handler>
     AwaitableBuilder& local() {
         m_nodes.push_back(MachineT::template makeLocalNode<Handler>());
@@ -2734,6 +2768,12 @@ public:
         static_assert(std::same_as<typename MachineT::result_type, ResultT>,
                       "AwaitableBuilder::fromStateMachine requires matching result_type");
         return StateMachineBuilder<MachineT>(controller, std::move(machine));
+    }
+
+    template <typename ReadyT>
+    requires std::constructible_from<ResultT, ReadyT&&>
+    static auto ready(ReadyT&& result) -> ReadyAwaitable<ResultT> {
+        return ReadyAwaitable<ResultT>(ResultT(std::forward<ReadyT>(result)));
     }
 };
 
