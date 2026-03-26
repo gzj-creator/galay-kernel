@@ -15,9 +15,6 @@
 
 namespace galay::async
 {
-
-using namespace galay::kernel;
-
 enum class FileOpenMode : int {
     Read      = O_RDONLY,
     Write     = O_WRONLY | O_CREAT,
@@ -46,7 +43,10 @@ public:
     AsyncFile& operator=(AsyncFile&& other) noexcept;
 
     // 打开文件
-    std::expected<void, IOError> open(const std::string& path, FileOpenMode mode, int permissions = 0644);
+    std::expected<void, galay::kernel::IOError> open(
+        const std::string& path,
+        FileOpenMode mode,
+        int permissions = 0644);
 
     /**
      * @brief 异步读取文件
@@ -60,32 +60,32 @@ public:
      * - 返回值为0表示 EOF
      * - 缓冲区生命周期必须持续到 co_await 完成
      */
-    FileReadAwaitable read(char* buffer, size_t length, off_t offset = 0);
+    galay::kernel::FileReadAwaitable read(char* buffer, size_t length, off_t offset = 0);
 
     // 异步写入
-    FileWriteAwaitable write(const char* buffer, size_t length, off_t offset = 0);
+    galay::kernel::FileWriteAwaitable write(const char* buffer, size_t length, off_t offset = 0);
 
     // 异步关闭
-    CloseAwaitable close();
+    galay::kernel::CloseAwaitable close();
 
     // 获取文件句柄
     GHandle handle() const { return m_controller.m_handle; }
 
 
     // 获取文件大小
-    std::expected<size_t, IOError> size() const;
+    std::expected<size_t, galay::kernel::IOError> size() const;
 
     // 同步操作（用于简单场景）
-    std::expected<void, IOError> sync();
+    std::expected<void, galay::kernel::IOError> sync();
 
     /*
      * @brief 获取IO控制器
      * @return IOController* IO控制器
      */
-    IOController* getController() { return &m_controller; }
+    galay::kernel::IOController* getController() { return &m_controller; }
 
 private:
-    IOController m_controller;
+    galay::kernel::IOController m_controller;
 };
 
 } // namespace galay::async

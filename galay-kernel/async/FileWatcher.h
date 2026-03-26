@@ -17,9 +17,6 @@
 
 namespace galay::async
 {
-
-using namespace galay::kernel;
-
 /**
  * @brief 异步文件监控类
  *
@@ -78,14 +75,16 @@ public:
      * @note Linux: 监控目录时，FileWatchResult::name 包含变化的文件名
      * @note macOS: kqueue 需要为每个文件单独添加监控
      */
-    std::expected<int, IOError> addWatch(const std::string& path, FileWatchEvent events = FileWatchEvent::All);
+    std::expected<int, galay::kernel::IOError> addWatch(
+        const std::string& path,
+        galay::kernel::FileWatchEvent events = galay::kernel::FileWatchEvent::All);
 
     /**
      * @brief 移除监控
      * @param wd 监控描述符（addWatch返回的值）
      * @return 成功返回void，失败返回IOError
      */
-    std::expected<void, IOError> removeWatch(int wd);
+    std::expected<void, galay::kernel::IOError> removeWatch(int wd);
 
     /**
      * @brief 异步等待文件事件
@@ -93,7 +92,7 @@ public:
      *
      * @note co_await 后返回 FileWatchResult 或 IOError
      */
-    FileWatchAwaitable watch();
+    galay::kernel::FileWatchAwaitable watch();
 
     /**
      * @brief 检查是否有效
@@ -118,18 +117,18 @@ public:
      * @brief 获取IO控制器
      * @return IOController* IO控制器
      */
-    IOController* getController() { return &m_controller; }
+    galay::kernel::IOController* getController() { return &m_controller; }
 
 private:
     int m_watch_fd;                                ///< Linux: inotify fd, macOS: 当前监控的 fd
-    IOController m_controller;                     ///< IO控制器
+    galay::kernel::IOController m_controller;      ///< IO控制器
     std::unordered_map<int, std::string> m_watches; ///< wd/fd -> path 映射
 
     static constexpr size_t BUFFER_SIZE = 4096;    ///< 事件缓冲区大小
     char m_buffer[BUFFER_SIZE];                    ///< 事件缓冲区
 
 #ifdef USE_KQUEUE
-    FileWatchEvent m_current_events;               ///< macOS: 当前监控的事件类型
+    galay::kernel::FileWatchEvent m_current_events; ///< macOS: 当前监控的事件类型
 #endif
 };
 

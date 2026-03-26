@@ -97,11 +97,21 @@ public:
 
     /**
      * @brief 获取定时器总数（近似值）
+     * @return 当前时间轮中挂起的定时器数量近似值
      */
     size_t size() const { return m_timerManager.size(); }
 
 private:
+    /**
+     * @brief 构造单例对象
+     * @note 只能通过 getInstance() 获取实例
+     */
     TimerScheduler();
+
+    /**
+     * @brief 析构单例对象
+     * @note 销毁前应先调用 stop() 停止后台线程
+     */
     ~TimerScheduler();
 
     /**

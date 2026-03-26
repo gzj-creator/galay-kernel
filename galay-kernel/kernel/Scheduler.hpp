@@ -57,9 +57,13 @@
 namespace galay::kernel
 {
 
+/**
+ * @brief 调度器分类
+ * @details 用于在运行时区分 IO 驱动调度器和纯计算调度器。
+ */
 enum SchedulerType {
-    kIOScheduler,
-    kComputeScheduler
+    kIOScheduler,      ///< 基于 IO 事件循环的调度器
+    kComputeScheduler  ///< 基于工作线程执行的计算调度器
 }; 
 
 /**
@@ -109,7 +113,8 @@ public:
 
     /**
      * @brief 添加定时器到内部时间轮
-     * @param 定时器
+     * @param timer 待注册的定时器对象
+     * @return true 定时器已被调度器接管；false 注册失败
      */
     virtual bool addTimer(Timer::ptr timer) = 0;
 
@@ -135,8 +140,27 @@ public:
     virtual SchedulerType type() = 0;
 
 protected:
+    /**
+     * @brief 将任务与当前调度器绑定
+     * @param task 待绑定的任务引用
+     * @return true 任务原本未绑定或已绑定到当前调度器；false 任务无状态或属于其他调度器
+     * @note 该辅助函数只修改任务所属调度器，不负责入队或恢复执行
+     */
     bool bindTask(TaskRef& task);
+
+    /**
+     * @brief 在当前线程恢复任务
+     * @param task 待恢复的任务引用
+     * @details 若任务记录了 Runtime，会先切换到对应 Runtime 作用域再恢复协程
+     * @note 仅应由调度器执行线程调用
+     */
     void resume(TaskRef& task);
+
+    /**
+     * @brief 将已配置的线程绑核设置应用到当前线程
+     * @return true 绑核设置已成功应用或无需应用；false 平台调用失败
+     * @note 只有在 setAffinity() 设定了具体 CPU 后该函数才会实际执行绑核
+     */
     bool applyConfiguredAffinity();
     std::thread::id m_threadId;  ///< 调度器所属线程ID，在 start() 时设置
 
@@ -176,36 +200,79 @@ inline void Scheduler::resume(TaskRef& task) {
     state->m_handle.resume();
 }
 
+/**
+ * @brief 将 Task 所有权转交给指定调度器并立即入队
+ * @tparam T Task 返回值类型
+ * @param scheduler 目标调度器引用
+ * @param task 待提交的协程任务
+ * @return true 任务成功交给调度器；false 调度器拒绝该任务
+ */
 template <typename T>
 inline bool scheduleTask(Scheduler& scheduler, Task<T>&& task)
 {
     return scheduler.schedule(detail::TaskAccess::detachTask(std::move(task)));
 }
 
+/**
+ * @brief 将 Task 所有权转交给指定调度器并立即入队
+ * @tparam T Task 返回值类型
+ * @param scheduler 目标调度器指针；为空时返回 false
+ * @param task 待提交的协程任务
+ * @return true 任务成功交给调度器；false 调度器为空或调度器拒绝该任务
+ */
 template <typename T>
 inline bool scheduleTask(Scheduler* scheduler, Task<T>&& task)
 {
     return scheduler != nullptr && scheduleTask(*scheduler, std::move(task));
 }
 
+/**
+ * @brief 将 Task 所有权转交给指定调度器并延后执行
+ * @tparam T Task 返回值类型
+ * @param scheduler 目标调度器引用
+ * @param task 待提交的协程任务
+ * @return true 任务已加入延后队列；false 调度器拒绝该任务
+ */
 template <typename T>
 inline bool scheduleTaskDeferred(Scheduler& scheduler, Task<T>&& task)
 {
     return scheduler.scheduleDeferred(detail::TaskAccess::detachTask(std::move(task)));
 }
 
+/**
+ * @brief 将 Task 所有权转交给指定调度器并延后执行
+ * @tparam T Task 返回值类型
+ * @param scheduler 目标调度器指针；为空时返回 false
+ * @param task 待提交的协程任务
+ * @return true 任务已加入延后队列；false 调度器为空或调度器拒绝该任务
+ */
 template <typename T>
 inline bool scheduleTaskDeferred(Scheduler* scheduler, Task<T>&& task)
 {
     return scheduler != nullptr && scheduleTaskDeferred(*scheduler, std::move(task));
 }
 
+/**
+ * @brief 立即在调度器当前执行线程恢复 Task
+ * @tparam T Task 返回值类型
+ * @param scheduler 目标调度器引用
+ * @param task 待执行的协程任务
+ * @return true 任务已被当前线程恢复；false 调度器拒绝该任务
+ * @note 调用方需要保证该接口符合目标调度器的线程约束
+ */
 template <typename T>
 inline bool scheduleTaskImmediately(Scheduler& scheduler, Task<T>&& task)
 {
     return scheduler.scheduleImmediately(detail::TaskAccess::detachTask(std::move(task)));
 }
 
+/**
+ * @brief 立即在调度器当前执行线程恢复 Task
+ * @tparam T Task 返回值类型
+ * @param scheduler 目标调度器指针；为空时返回 false
+ * @param task 待执行的协程任务
+ * @return true 任务已被当前线程恢复；false 调度器为空或调度器拒绝该任务
+ */
 template <typename T>
 inline bool scheduleTaskImmediately(Scheduler* scheduler, Task<T>&& task)
 {

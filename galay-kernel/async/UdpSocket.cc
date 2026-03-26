@@ -8,6 +8,8 @@
 namespace galay::async
 {
 
+using namespace galay::kernel;
+
 UdpSocket::UdpSocket(IPType type)
     : m_controller(create(type))
 {

@@ -22,6 +22,14 @@ namespace galay::kernel
 
 #define GALAY_RUNTIME_SCHEDULER_COUNT_AUTO static_cast<size_t>(-1)
 
+/**
+ * @brief Runtime 的绑核配置。
+ *
+ * @note
+ * - `Mode::None` 表示不主动绑核
+ * - `Mode::Sequential` 按 0..N-1 顺序分配 CPU
+ * - `Mode::Custom` 要求调用方提供与 scheduler 数量完全一致的 CPU 列表
+ */
 struct RuntimeAffinityConfig {
     enum class Mode { None, Sequential, Custom } mode = Mode::None;
     size_t seq_io_count = 0;
@@ -30,6 +38,12 @@ struct RuntimeAffinityConfig {
     std::vector<uint32_t> custom_compute_cpus;
 };
 
+/**
+ * @brief Runtime 的构建配置。
+ *
+ * 当 `*_scheduler_count` 为 `GALAY_RUNTIME_SCHEDULER_COUNT_AUTO` 时，
+ * Runtime 会在首次启动时按当前机器 CPU 数自动创建默认调度器。
+ */
 struct RuntimeConfig {
     size_t io_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
     size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
@@ -38,6 +52,12 @@ struct RuntimeConfig {
 
 class RuntimeHandle;
 
+/**
+ * @brief 运行时入口，负责管理 IO / compute scheduler 与阻塞线程池。
+ *
+ * `Runtime` 可以显式注入 scheduler，也可以在首次提交任务时按配置自动创建默认
+ * scheduler。实例本身不可拷贝；生命周期结束时会调用 `stop()` 停止其管理的调度器。
+ */
 class Runtime
 {
 public:
@@ -47,12 +67,43 @@ public:
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
 
+    /**
+     * @brief 在 runtime 启动前注册一个 IO scheduler。
+     * @return 启动前返回 `true`；若 runtime 已运行则返回 `false`
+     */
     bool addIOScheduler(std::unique_ptr<IOScheduler> scheduler);
+
+    /**
+     * @brief 在 runtime 启动前注册一个 compute scheduler。
+     * @return 启动前返回 `true`；若 runtime 已运行则返回 `false`
+     */
     bool addComputeScheduler(std::unique_ptr<ComputeScheduler> scheduler);
 
+    /**
+     * @brief 启动 runtime 及其管理的 scheduler。
+     *
+     * 若未显式注册 scheduler，会按 `RuntimeConfig` 自动创建默认实例。
+     * 重复调用安全，已运行时直接返回。
+     */
     void start();
+
+    /**
+     * @brief 停止 runtime 及其管理的 scheduler。
+     *
+     * 停止顺序为 compute -> IO -> timer；重复调用安全。
+     */
     void stop();
 
+    /**
+     * @brief 在 runtime 上提交一个根任务并同步等待结果。
+     * @param task 要提交的任务；所有权转移到 runtime
+     * @return 任务返回值；`Task<void>` 时无返回
+     *
+     * @throws std::runtime_error 当 runtime 无可用 scheduler 或任务提交失败
+     * @throws 任务内部抛出的异常会在取结果时重新抛出
+     *
+     * @note 若 runtime 尚未启动，会在内部自动启动
+     */
     template <typename T>
     auto blockOn(Task<T> task) -> T
     {
@@ -70,6 +121,15 @@ public:
         return detail::TaskAccess::takeResult(task);
     }
 
+    /**
+     * @brief 异步提交一个任务并返回可 `join()` 的句柄。
+     * @param task 要提交的任务；所有权转移到 runtime
+     * @return 与任务结果绑定的 `JoinHandle<T>`
+     *
+     * @throws std::runtime_error 当 runtime 无可用 scheduler 或任务提交失败
+     *
+     * @note 若 runtime 尚未启动，会在内部自动启动
+     */
     template <typename T>
     JoinHandle<T> spawn(Task<T> task)
     {
@@ -87,6 +147,16 @@ public:
         return JoinHandle<T>(std::move(completion));
     }
 
+    /**
+     * @brief 在线程池上执行一个阻塞 callable，并返回 join handle。
+     * @param func 可调用对象；会被 move/copy 进阻塞线程池
+     * @return `JoinHandle<Result>`
+     *
+     * @note
+     * - 适合文件阻塞 IO、第三方同步库调用等不可协程化路径
+     * - callable 内部会继承当前 runtime 上下文，因此可安全调用 `RuntimeHandle::tryCurrent()`
+     * - 结果或异常会被捕获并在 `join()` 时交付
+     */
     template <typename F>
     auto spawnBlocking(F&& func) -> JoinHandle<std::invoke_result_t<std::decay_t<F>&>>
     {
@@ -111,6 +181,9 @@ public:
         return JoinHandle<Result>(std::move(completion));
     }
 
+    /**
+     * @brief 获取一个轻量 `RuntimeHandle`，用于把当前 runtime 传递到其他层。
+     */
     RuntimeHandle handle() noexcept;
 
     bool isRunning() const { return m_running.load(std::memory_order_acquire); }
@@ -151,7 +224,16 @@ public:
     {
     }
 
+    /**
+     * @brief 获取当前线程绑定的 runtime handle。
+     * @throws std::runtime_error 若当前执行路径不在 runtime 上下文中
+     */
     static RuntimeHandle current();
+
+    /**
+     * @brief 尝试获取当前线程绑定的 runtime handle。
+     * @return 当前 runtime 存在时返回值，否则返回 `std::nullopt`
+     */
     static std::optional<RuntimeHandle> tryCurrent();
 
     bool isValid() const noexcept { return m_runtime != nullptr; }
@@ -183,18 +265,29 @@ private:
 class RuntimeBuilder
 {
 public:
+    /**
+     * @brief 设置 IO scheduler 数量。
+     * @note 传 `GALAY_RUNTIME_SCHEDULER_COUNT_AUTO` 时由 runtime 按 CPU 数自动推导
+     */
     RuntimeBuilder& ioSchedulerCount(size_t n)
     {
         m_config.io_scheduler_count = n;
         return *this;
     }
 
+    /**
+     * @brief 设置 compute scheduler 数量。
+     * @note 传 `GALAY_RUNTIME_SCHEDULER_COUNT_AUTO` 时由 runtime 按 CPU 数自动推导
+     */
     RuntimeBuilder& computeSchedulerCount(size_t n)
     {
         m_config.compute_scheduler_count = n;
         return *this;
     }
 
+    /**
+     * @brief 对前 `ioCount` / `computeCount` 个 scheduler 依次分配 CPU 亲和性。
+     */
     RuntimeBuilder& sequentialAffinity(size_t ioCount, size_t computeCount)
     {
         m_config.affinity.mode = RuntimeAffinityConfig::Mode::Sequential;
@@ -203,6 +296,10 @@ public:
         return *this;
     }
 
+    /**
+     * @brief 为每个 scheduler 指定显式 CPU 亲和性列表。
+     * @return 列表长度与当前 scheduler 配置完全匹配时返回 `true`
+     */
     bool customAffinity(std::vector<uint32_t> ioCpus, std::vector<uint32_t> computeCpus)
     {
         if (ioCpus.size() != m_config.io_scheduler_count ||
@@ -215,13 +312,23 @@ public:
         return true;
     }
 
+    /**
+     * @brief 直接覆盖完整 affinity 配置。
+     */
     RuntimeBuilder& applyAffinity(const RuntimeAffinityConfig& affinity)
     {
         m_config.affinity = affinity;
         return *this;
     }
 
+    /**
+     * @brief 按当前 builder 配置构造 `Runtime`。
+     */
     Runtime build() const { return Runtime(m_config); }
+
+    /**
+     * @brief 导出当前 builder 累积的配置快照。
+     */
     RuntimeConfig buildConfig() const { return m_config; }
 
 private:

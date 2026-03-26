@@ -16,7 +16,18 @@
 namespace galay::kernel
 {
 
+/**
+ * @brief IO 调度器执行线程的本地状态
+ * @details 保存工作窃取缓冲、本地队列以及 LIFO 调度策略状态。
+ * 该结构仅应在所属调度器线程内访问；`inject_queue` 允许其他线程安全地注入任务。
+ */
 struct IOSchedulerWorkerState {
+    /**
+     * @brief 构造工作线程局部队列状态
+     * @param inject_batch_size 单次从跨线程注入队列中批量拉取的最大数量
+     * @param lifo_limit 连续走 LIFO 槽位的最大次数，超过后回退到 FIFO
+     * @param inject_interval 轮询多少次本地任务后检查一次注入队列
+     */
     explicit IOSchedulerWorkerState(size_t inject_batch_size = GALAY_SCHEDULER_BATCH_SIZE,
                                     uint32_t lifo_limit = 8,
                                     uint32_t inject_interval = 8)
@@ -26,10 +37,19 @@ struct IOSchedulerWorkerState {
     {
     }
 
+    /**
+     * @brief 调整跨线程注入批量缓冲区大小
+     * @param inject_batch_size 目标批量大小；最小会被修正为 1
+     */
     void resizeInjectBuffer(size_t inject_batch_size) {
         inject_buffer.resize(std::max<size_t>(1, inject_batch_size));
     }
 
+    /**
+     * @brief 将任务推入本地执行队列
+     * @param task 待入队的任务；无效任务会被忽略
+     * @details 优先复用 LIFO 槽位以减少最近恢复任务的调度延迟
+     */
     void scheduleLocal(TaskRef task) {
         if (!task.isValid()) {
             return;
@@ -44,6 +64,10 @@ struct IOSchedulerWorkerState {
         local_queue.push_back(std::move(task));
     }
 
+    /**
+     * @brief 将任务以 FIFO 方式追加到本地队列尾部
+     * @param task 待入队的任务；无效任务会被忽略
+     */
     void scheduleLocalDeferred(TaskRef task) {
         if (!task.isValid()) {
             return;
@@ -51,6 +75,11 @@ struct IOSchedulerWorkerState {
         local_queue.push_back(std::move(task));
     }
 
+    /**
+     * @brief 从其他线程安全地注入任务
+     * @param task 待入队任务；无效任务会返回 false
+     * @return true 注入前队列为空，调用方通常应唤醒阻塞中的调度器；false 注入后无需额外唤醒
+     */
     bool scheduleInjected(TaskRef task) {
         if (!task.isValid()) {
             return false;
@@ -61,6 +90,11 @@ struct IOSchedulerWorkerState {
         return was_empty;
     }
 
+    /**
+     * @brief 将跨线程注入队列中的任务搬运到本地队列
+     * @param max_batch 单次最多拉取的任务数；传 0 表示使用缓冲区上限
+     * @return 实际拉取并转移到本地队列的任务数量
+     */
     size_t drainInjected(size_t max_batch = 0) {
         if (inject_buffer.empty()) {
             return 0;
@@ -78,18 +112,34 @@ struct IOSchedulerWorkerState {
         return count;
     }
 
+    /**
+     * @brief 判断是否仍有跨线程注入任务待处理
+     * @return true 仍有任务未从注入队列转移到本地队列
+     */
     bool hasPendingInjected() const {
         return injected_outstanding.load(std::memory_order_acquire) > 0;
     }
 
+    /**
+     * @brief 判断当前轮询周期是否应该检查注入队列
+     * @return true 已达到检查阈值
+     */
     bool shouldCheckInjected() const {
         return polls_since_inject >= inject_check_interval;
     }
 
+    /**
+     * @brief 判断本地执行队列是否仍有任务
+     * @return true LIFO 槽位或 FIFO 队列中仍有待执行任务
+     */
     bool hasLocalWork() const {
         return lifo_slot.has_value() || !local_queue.empty();
     }
 
+    /**
+     * @brief 在取任务前整理本地调度状态
+     * @details 当连续命中 LIFO 槽位过多时，将其回退到 FIFO 队列避免饥饿
+     */
     void prepareForRun() {
         if (lifo_enabled && lifo_slot.has_value() && consecutive_lifo_polls >= lifo_poll_limit) {
             local_queue.push_back(std::move(*lifo_slot));
@@ -99,6 +149,11 @@ struct IOSchedulerWorkerState {
         }
     }
 
+    /**
+     * @brief 从本地状态中取出下一条待执行任务
+     * @param out 成功时写入取出的任务
+     * @return true 取到了任务；false 本地无任务可执行
+     */
     bool popNext(TaskRef& out) {
         prepareForRun();
 
@@ -122,19 +177,22 @@ struct IOSchedulerWorkerState {
         return false;
     }
 
-    std::optional<TaskRef> lifo_slot;
-    std::deque<TaskRef> local_queue;
-    moodycamel::ConcurrentQueue<TaskRef> inject_queue;
-    std::vector<TaskRef> inject_buffer;
-    std::atomic<uint64_t> injected_outstanding{0};
-    uint32_t consecutive_lifo_polls = 0;
-    uint32_t lifo_poll_limit = 8;
-    uint32_t polls_since_inject = 0;
-    uint32_t inject_check_interval = 8;
-    bool lifo_enabled = true;
+    std::optional<TaskRef> lifo_slot;  ///< 最近一次入队的任务，优先以内联 LIFO 方式调度
+    std::deque<TaskRef> local_queue;  ///< 调度器线程本地 FIFO 队列
+    moodycamel::ConcurrentQueue<TaskRef> inject_queue;  ///< 其他线程注入任务的无锁队列
+    std::vector<TaskRef> inject_buffer;  ///< 从 inject_queue 批量转移任务时复用的临时缓冲
+    std::atomic<uint64_t> injected_outstanding{0};  ///< 尚未搬运到本地队列的注入任务数
+    uint32_t consecutive_lifo_polls = 0;  ///< 连续命中 lifo_slot 的次数
+    uint32_t lifo_poll_limit = 8;  ///< 允许连续走 LIFO 的最大次数
+    uint32_t polls_since_inject = 0;  ///< 距离上次检查 inject_queue 已轮询的任务数
+    uint32_t inject_check_interval = 8;  ///< 检查 inject_queue 的轮询间隔
+    bool lifo_enabled = true;  ///< 是否允许优先从 lifo_slot 取任务
 };
 
-// ========== getAwaitable 模板特化 ==========
+/**
+ * @brief IOController::getAwaitable 的显式特化集合
+ * @details 这些访问器把 READ/WRITE 槽位上的 `void*` awaitable 安全转换为具体类型。
+ */
 
 template<>
 inline auto IOController::getAwaitable() -> AcceptAwaitable* {
@@ -196,6 +254,13 @@ inline auto IOController::getAwaitable() -> SendFileAwaitable* {
     return static_cast<SendFileAwaitable*>(m_awaitable[WRITE]);
 }
 
+/**
+ * @brief 完成 awaitable 并在需要时唤醒关联协程
+ * @tparam Awaitable 具体 awaitable 类型
+ * @param controller 触发完成的 IO 控制器
+ * @param awaitable 与该 IO 完成事件关联的 awaitable
+ * @note 仅当 `handleComplete()` 返回 true 时才真正唤醒协程
+ */
 template<typename Awaitable>
 inline void completeAwaitableAndWake(IOController* controller, Awaitable* awaitable) {
     if (awaitable && awaitable->handleComplete(controller->m_handle)) {
@@ -220,6 +285,10 @@ inline void completeAwaitableAndWake(IOController* controller, Awaitable* awaita
 class IOScheduler: public Scheduler
 {
 public:
+    /**
+     * @brief 返回调度器类型
+     * @return 固定返回 kIOScheduler
+     */
     SchedulerType type() override {
         return kIOScheduler;
     }
@@ -315,11 +384,18 @@ public:
      */
     virtual int addSendFile(IOController* controller) = 0;
 
+    /**
+     * @brief 注册组合式序列 IO 事件
+     * @param controller IO 控制器
+     * @return 1 表示序列立即完成，0 表示已登记等待，<0 表示注册失败
+     * @note 主要服务于需要 READ/WRITE 配对推进的 Sequence awaitable
+     */
     virtual int addSequence(IOController* controller) = 0;
 
     /**
      * @brief 删除fd的所有事件
      * @param controller IO控制器
+     * @return 0 表示删除成功，<0 表示删除失败
      */
     virtual int remove(IOController* controller) = 0;
 
@@ -352,6 +428,7 @@ public:
      * @brief 注册定时器
      * @details 添加任务量不大且数量不是特别多的定时任务，如IO超时，sleep等
      * @param timer 定时器共享指针
+     * @return true 定时器已加入当前调度器的时间轮；false 插入失败
      */
     bool addTimer(Timer::ptr timer) override {
         return m_timer_manager.push(timer);

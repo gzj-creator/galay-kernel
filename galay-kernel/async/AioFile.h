@@ -18,9 +18,6 @@ namespace galay::kernel {
 
 namespace galay::async
 {
-
-using namespace galay::kernel;
-
 enum class AioOpenMode : int {
     Read      = O_RDONLY | O_DIRECT,
     Write     = O_WRONLY | O_CREAT | O_DIRECT,
@@ -33,23 +30,23 @@ class AioFile;
  * @brief AIO 提交结果的可等待对象
  */
 struct AioCommitAwaitable {
-    AioCommitAwaitable(IOController* controller,
+    AioCommitAwaitable(galay::kernel::IOController* controller,
                        io_context_t aio_ctx, int event_fd,
                        std::vector<struct iocb*>&& pending_ptrs, size_t pending_count);
 
     bool await_ready() { return m_pending_count == 0; }
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> handle);
-    std::expected<std::vector<ssize_t>, IOError> await_resume();
+    std::expected<std::vector<ssize_t>, galay::kernel::IOError> await_resume();
 
-    IOController* m_controller;
+    galay::kernel::IOController* m_controller;
     io_context_t m_aio_ctx;
     int m_event_fd;
     std::vector<struct iocb*> m_pending_ptrs;  // 拥有所有权，不再是指针
     size_t m_pending_count;
-    Waker m_waker;
+    galay::kernel::Waker m_waker;
     std::vector<ssize_t> m_results;
-    std::expected<std::vector<ssize_t>, IOError> m_result;
+    std::expected<std::vector<ssize_t>, galay::kernel::IOError> m_result;
 };
 
 /**
@@ -81,7 +78,10 @@ public:
     AioFile& operator=(AioFile&& other) noexcept;
 
     // 打开文件 (必须使用 O_DIRECT)
-    std::expected<void, IOError> open(const std::string& path, AioOpenMode mode, int permissions = 0644);
+    std::expected<void, galay::kernel::IOError> open(
+        const std::string& path,
+        AioOpenMode mode,
+        int permissions = 0644);
 
     // 准备读操作 (buffer 必须对齐到 512 字节)
     void preRead(char* buffer, size_t length, off_t offset);
@@ -111,10 +111,10 @@ public:
     bool isValid() const { return m_handle.fd >= 0; }
 
     // 获取文件大小
-    std::expected<size_t, IOError> size() const;
+    std::expected<size_t, galay::kernel::IOError> size() const;
 
     // 同步到磁盘
-    std::expected<void, IOError> sync();
+    std::expected<void, galay::kernel::IOError> sync();
 
     // 分配对齐的缓冲区 (用于 O_DIRECT)
     static char* allocAlignedBuffer(size_t size, size_t alignment = 512);
@@ -124,11 +124,11 @@ public:
      * @brief 获取IO控制器
      * @return IOController* IO控制器
      */
-    IOController* getController() { return &m_controller; }
+    galay::kernel::IOController* getController() { return &m_controller; }
 
 private:
     GHandle m_handle;
-    IOController m_controller;
+    galay::kernel::IOController m_controller;
 
     // libaio 相关
     io_context_t m_aio_ctx;
@@ -145,7 +145,7 @@ private:
 template <typename Promise>
 inline bool galay::async::AioCommitAwaitable::await_suspend(std::coroutine_handle<Promise> handle)
 {
-    m_waker = Waker(handle);
+    m_waker = galay::kernel::Waker(handle);
 
     if (m_pending_count == 0) {
         m_result = std::vector<ssize_t>{};
@@ -154,20 +154,23 @@ inline bool galay::async::AioCommitAwaitable::await_suspend(std::coroutine_handl
 
     int ret = io_submit(m_aio_ctx, m_pending_count, m_pending_ptrs.data());
     if (ret < 0) {
-        m_result = std::unexpected(IOError(kWriteFailed, static_cast<uint32_t>(-ret)));
+        m_result = std::unexpected(
+            galay::kernel::IOError(galay::kernel::kWriteFailed, static_cast<uint32_t>(-ret)));
         return false;
     }
 
     m_controller->m_handle.fd = m_event_fd;
-    m_controller->fillAwaitable(FILEREAD, this);
+    m_controller->fillAwaitable(galay::FILEREAD, this);
     auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != kIOScheduler) {
-        m_result = std::unexpected(IOError(kNotRunningOnIOScheduler, errno));
+    if (scheduler->type() != galay::kernel::kIOScheduler) {
+        m_result = std::unexpected(
+            galay::kernel::IOError(galay::kernel::kNotRunningOnIOScheduler, errno));
         return false;
     }
-    auto io_scheduler = static_cast<IOScheduler*>(scheduler);
+    auto io_scheduler = static_cast<galay::kernel::IOScheduler*>(scheduler);
     if (io_scheduler->addFileRead(m_controller) < 0) {
-        m_result = std::unexpected(IOError(kReadFailed, errno));
+        m_result = std::unexpected(
+            galay::kernel::IOError(galay::kernel::kReadFailed, errno));
         return false;
     }
     return true;

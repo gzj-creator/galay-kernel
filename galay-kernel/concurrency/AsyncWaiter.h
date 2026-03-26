@@ -54,6 +54,8 @@ class AsyncWaiter;
 
 /**
  * @brief AsyncWaiter 的等待体
+ * @tparam T 等待结果类型
+ * @details 支持和 `TimeoutSupport` 组合使用；超时后 `await_resume()` 返回 IOError。
  */
 template<typename T>
 class AsyncWaiterAwaitable : public TimeoutSupport<AsyncWaiterAwaitable<T>>
@@ -61,12 +63,17 @@ class AsyncWaiterAwaitable : public TimeoutSupport<AsyncWaiterAwaitable<T>>
 public:
     static_assert(std::movable<T> && (!std::is_void_v<T>),
                   "AsyncWaiterAwaitable<T> requires movable, non-void T");
+
+    /**
+     * @brief 构造等待体
+     * @param waiter 关联的等待器；调用方需保证其在等待完成前保持有效
+     */
     explicit AsyncWaiterAwaitable(AsyncWaiter<T>* waiter) : m_waiter(waiter) {}
 
-    bool await_ready() const noexcept;
+    bool await_ready() const noexcept;  ///< 如果结果已经 ready，则返回 true 以避免挂起
     template <typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
-    std::expected<T, IOError> await_resume() noexcept;
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;  ///< 注册等待协程并在结果未就绪时挂起
+    std::expected<T, IOError> await_resume() noexcept;  ///< 返回结果；若超时则返回 IOError(kTimeout, 0)
 
 private:
     friend struct WithTimeout<AsyncWaiterAwaitable<T>>;
@@ -76,17 +83,22 @@ private:
 
 /**
  * @brief void 特化的等待体
+ * @details 用于不携带返回值、只传递完成信号的跨线程等待场景。
  */
 template<>
 class AsyncWaiterAwaitable<void> : public TimeoutSupport<AsyncWaiterAwaitable<void>>
 {
 public:
+    /**
+     * @brief 构造等待体
+     * @param waiter 关联的等待器；调用方需保证其在等待完成前保持有效
+     */
     explicit AsyncWaiterAwaitable(AsyncWaiter<void>* waiter) : m_waiter(waiter) {}
 
-    bool await_ready() const noexcept;
+    bool await_ready() const noexcept;  ///< 如果完成信号已经到达，则返回 true 以避免挂起
     template <typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
-    std::expected<void, IOError> await_resume() noexcept { return m_result; }
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;  ///< 注册等待协程并在尚未完成时挂起
+    std::expected<void, IOError> await_resume() noexcept { return m_result; }  ///< 返回完成结果；超时时返回 IOError(kTimeout, 0)
 
 private:
     friend struct WithTimeout<AsyncWaiterAwaitable<void>>;
@@ -120,7 +132,8 @@ public:
 
     /**
      * @brief 等待结果
-     * @return 可等待对象，用于 co_await
+     * @return 与当前等待器绑定的 awaitable，可继续叠加 `.timeout(...)`
+     * @note 每个 AsyncWaiter 设计为单次使用；重复等待同一个实例不受支持
      */
     AsyncWaiterAwaitable<T> wait() {
         return AsyncWaiterAwaitable<T>(this);
@@ -130,7 +143,7 @@ public:
      * @brief 设置结果并唤醒等待的协程
      * @param result 结果值
      * @return true 成功通知，false 已经通知过
-     * @note 会将协程 spawn 回原调度器
+     * @note 允许由其他线程调用；成功后会把等待协程唤醒回其原调度器
      */
     bool notify(T result) {
         // 防止重复通知
@@ -155,7 +168,7 @@ public:
 
     /**
      * @brief 检查是否正在等待
-     * @return true 如果有协程在等待
+     * @return true 当前已有协程注册在该等待器上并处于挂起状态
      */
     bool isWaiting() const {
         return m_waiting.load(std::memory_order_acquire);
@@ -163,7 +176,7 @@ public:
 
     /**
      * @brief 检查结果是否就绪
-     * @return true 如果结果已就绪
+     * @return true 已调用 notify() 且结果对等待侧可见
      */
     bool isReady() const {
         return m_ready.load(std::memory_order_acquire);
@@ -180,6 +193,7 @@ private:
 
 /**
  * @brief void 特化版本
+ * @details 用于只需要完成通知、不需要返回值的场景。
  */
 template<>
 class AsyncWaiter<void>
@@ -192,10 +206,19 @@ public:
     AsyncWaiter(AsyncWaiter&&) = delete;
     AsyncWaiter& operator=(AsyncWaiter&&) = delete;
 
+    /**
+     * @brief 等待完成通知
+     * @return 与当前等待器绑定的 awaitable，可继续叠加 `.timeout(...)`
+     */
     AsyncWaiterAwaitable<void> wait() {
         return AsyncWaiterAwaitable<void>(this);
     }
 
+    /**
+     * @brief 发送完成通知并唤醒等待协程
+     * @return true 首次通知成功；false 已经通知过
+     * @note 允许由其他线程调用；成功后会把等待协程唤醒回其原调度器
+     */
     bool notify() {
         // 防止重复通知
         bool expected = false;
@@ -215,10 +238,18 @@ public:
         return true;
     }
 
+    /**
+     * @brief 检查是否已有协程在等待
+     * @return true 当前已有协程注册在该等待器上并处于挂起状态
+     */
     bool isWaiting() const {
         return m_waiting.load(std::memory_order_acquire);
     }
 
+    /**
+     * @brief 检查完成信号是否已经到达
+     * @return true 已调用 notify() 且结果对等待侧可见
+     */
     bool isReady() const {
         return m_ready.load(std::memory_order_acquire);
     }

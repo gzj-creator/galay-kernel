@@ -21,6 +21,8 @@
 namespace galay::async
 {
 
+using namespace galay::kernel;
+
 #if defined(USE_IOURING) || defined(USE_EPOLL)
 // Linux: 将 FileWatchEvent 转换为 inotify 掩码
 static uint32_t toInotifyMask(FileWatchEvent events)

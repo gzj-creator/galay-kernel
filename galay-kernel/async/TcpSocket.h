@@ -57,9 +57,6 @@
 
 namespace galay::async
 {
-
-using namespace galay::kernel;
-
 /**
  * @brief 异步TCP Socket类
  *
@@ -84,7 +81,7 @@ public:
      * @param type IP协议类型（IPV4/IPV6）
      * @note 创建失败会抛出异常
      */
-    explicit TcpSocket(IPType type = IPType::IPV4);
+    explicit TcpSocket(galay::kernel::IPType type = galay::kernel::IPType::IPV4);
 
     /**
      * @brief 从已有句柄构造Socket
@@ -127,7 +124,7 @@ public:
      * @brief 获取IO控制器指针
      * @return IOController* 内部IO控制器，用于高级操作
      */
-    IOController* controller() { return &m_controller; }
+    galay::kernel::IOController* controller() { return &m_controller; }
 
 
     /**
@@ -142,7 +139,7 @@ public:
      * socket.bind(Host(IPType::IPV4, "0.0.0.0", 8080));
      * @endcode
      */
-    std::expected<void, IOError> bind(const Host& host);
+    std::expected<void, galay::kernel::IOError> bind(const galay::kernel::Host& host);
 
     /**
      * @brief 开始监听连接
@@ -152,7 +149,7 @@ public:
      *
      * @note 仅服务端需要，必须在bind之后调用
      */
-    std::expected<void, IOError> listen(int backlog = 128);
+    std::expected<void, galay::kernel::IOError> listen(int backlog = 128);
 
     /**
      * @brief 获取句柄选项配置器
@@ -164,7 +161,7 @@ public:
      * socket.option().handleNonBlock();   // 设置非阻塞
      * @endcode
      */
-    HandleOption option() { return HandleOption(m_controller.m_handle); }
+    galay::kernel::HandleOption option() { return galay::kernel::HandleOption(m_controller.m_handle); }
 
     /**
      * @brief 异步接受新连接
@@ -186,8 +183,8 @@ public:
      * }
      * @endcode
      */
-    AcceptAwaitable accept(Host* clientHost) {
-        return AcceptAwaitable(&m_controller, clientHost);
+    galay::kernel::AcceptAwaitable accept(galay::kernel::Host* clientHost) {
+        return galay::kernel::AcceptAwaitable(&m_controller, clientHost);
     }
 
     /**
@@ -208,8 +205,8 @@ public:
      * }
      * @endcode
      */
-    ConnectAwaitable connect(const Host& host) {
-        return ConnectAwaitable(&m_controller, host);
+    galay::kernel::ConnectAwaitable connect(const galay::kernel::Host& host) {
+        return galay::kernel::ConnectAwaitable(&m_controller, host);
     }
 
     /**
@@ -236,8 +233,8 @@ public:
      * }
      * @endcode
      */
-    RecvAwaitable recv(char* buffer, size_t length) {
-        return RecvAwaitable(&m_controller, buffer, length);
+    galay::kernel::RecvAwaitable recv(char* buffer, size_t length) {
+        return galay::kernel::RecvAwaitable(&m_controller, buffer, length);
     }
 
     /**
@@ -259,8 +256,8 @@ public:
      * }
      * @endcode
      */
-    SendAwaitable send(const char* buffer, size_t length) {
-        return SendAwaitable(&m_controller, buffer, length);
+    galay::kernel::SendAwaitable send(const char* buffer, size_t length) {
+        return galay::kernel::SendAwaitable(&m_controller, buffer, length);
     }
 
     /**
@@ -273,8 +270,8 @@ public:
      * - 适合使用 vector/span 组织的动态批量缓冲区
      * - 底层 iovec 存储生命周期必须持续到 co_await 完成
      */
-    ReadvAwaitable readv(std::span<const struct iovec> iovecs) {
-        return ReadvAwaitable(&m_controller, iovecs);
+    galay::kernel::ReadvAwaitable readv(std::span<const struct iovec> iovecs) {
+        return galay::kernel::ReadvAwaitable(&m_controller, iovecs);
     }
 
     /**
@@ -290,8 +287,8 @@ public:
      * - count > N 会直接终止进程，而不是静默截断
      */
     template<size_t N>
-    ReadvAwaitable readv(std::array<struct iovec, N>& iovecs, size_t count = N) {
-        return ReadvAwaitable(&m_controller, iovecs, count);
+    galay::kernel::ReadvAwaitable readv(std::array<struct iovec, N>& iovecs, size_t count = N) {
+        return galay::kernel::ReadvAwaitable(&m_controller, iovecs, count);
     }
 
     /**
@@ -307,8 +304,8 @@ public:
      * - count > N 会直接终止进程，而不是静默截断
      */
     template<size_t N>
-    ReadvAwaitable readv(struct iovec (&iovecs)[N], size_t count = N) {
-        return ReadvAwaitable(&m_controller, iovecs, count);
+    galay::kernel::ReadvAwaitable readv(struct iovec (&iovecs)[N], size_t count = N) {
+        return galay::kernel::ReadvAwaitable(&m_controller, iovecs, count);
     }
 
     /**
@@ -321,8 +318,8 @@ public:
      * - 适合使用 vector/span 组织的动态批量缓冲区
      * - 底层 iovec 存储生命周期必须持续到 co_await 完成
      */
-    WritevAwaitable writev(std::span<const struct iovec> iovecs) {
-        return WritevAwaitable(&m_controller, iovecs);
+    galay::kernel::WritevAwaitable writev(std::span<const struct iovec> iovecs) {
+        return galay::kernel::WritevAwaitable(&m_controller, iovecs);
     }
 
     /**
@@ -338,8 +335,8 @@ public:
      * - count > N 会直接终止进程，而不是静默截断
      */
     template<size_t N>
-    WritevAwaitable writev(std::array<struct iovec, N>& iovecs, size_t count = N) {
-        return WritevAwaitable(&m_controller, iovecs, count);
+    galay::kernel::WritevAwaitable writev(std::array<struct iovec, N>& iovecs, size_t count = N) {
+        return galay::kernel::WritevAwaitable(&m_controller, iovecs, count);
     }
 
     /**
@@ -355,8 +352,8 @@ public:
      * - count > N 会直接终止进程，而不是静默截断
      */
     template<size_t N>
-    WritevAwaitable writev(struct iovec (&iovecs)[N], size_t count = N) {
-        return WritevAwaitable(&m_controller, iovecs, count);
+    galay::kernel::WritevAwaitable writev(struct iovec (&iovecs)[N], size_t count = N) {
+        return galay::kernel::WritevAwaitable(&m_controller, iovecs, count);
     }
 
     /**
@@ -386,8 +383,8 @@ public:
      * }
      * @endcode
      */
-    SendFileAwaitable sendfile(int file_fd, off_t offset, size_t count) {
-        return SendFileAwaitable(&m_controller, file_fd, offset, count);
+    galay::kernel::SendFileAwaitable sendfile(int file_fd, off_t offset, size_t count) {
+        return galay::kernel::SendFileAwaitable(&m_controller, file_fd, offset, count);
     }
 
     /**
@@ -401,20 +398,20 @@ public:
      * co_await socket.close();
      * @endcode
      */
-    CloseAwaitable close() {
-        return CloseAwaitable(&m_controller);
+    galay::kernel::CloseAwaitable close() {
+        return galay::kernel::CloseAwaitable(&m_controller);
     }
 
     /*
      * @brief 获取IO控制器
      * @return IOController* IO控制器
      */
-    IOController* getController() { return &m_controller; }
+    galay::kernel::IOController* getController() { return &m_controller; }
 
 private:
-    GHandle create(IPType type);
+    GHandle create(galay::kernel::IPType type);
 private:
-    IOController m_controller;  ///< IO事件控制器
+    galay::kernel::IOController m_controller;  ///< IO事件控制器
 };
 
 } // namespace galay::async

@@ -24,11 +24,19 @@ namespace galay::kernel
 {
 
 template <typename T>
+/**
+ * @brief UnsafeChannel 可接受的元素类型约束
+ * @tparam T 元素类型
+ */
 concept UnsafeChannelValue = std::movable<T>;
 
+/**
+ * @brief UnsafeChannel 的唤醒策略
+ * @details `Inline` 会在发送侧直接恢复等待协程，`Deferred` 会通过 Waker 回到调度器排队恢复。
+ */
 enum class UnsafeChannelWakeMode {
-    Inline,
-    Deferred,
+    Inline,    ///< 发送侧内联恢复等待协程，延迟最低
+    Deferred,  ///< 发送侧仅发布唤醒，等待协程由调度器稍后恢复
 };
 
 template <typename T>
@@ -36,18 +44,24 @@ class UnsafeChannel;
 
 /**
  * @brief 单条接收的等待体
+ * @tparam T 通道元素类型
  */
 template <typename T>
 class UnsafeRecvAwaitable : public TimeoutSupport<UnsafeRecvAwaitable<T>>
 {
 public:
     static_assert(UnsafeChannelValue<T>, "UnsafeRecvAwaitable requires movable T");
+
+    /**
+     * @brief 构造单条接收等待体
+     * @param channel 关联的通道对象；等待完成前必须保持有效
+     */
     explicit UnsafeRecvAwaitable(UnsafeChannel<T>* channel) : m_channel(channel) {}
 
-    bool await_ready() const noexcept;
+    bool await_ready() const noexcept;  ///< 如果通道已有数据，则返回 true 避免挂起
     template <typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
-    std::expected<T, IOError> await_resume() noexcept;
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;  ///< 在通道为空时注册等待协程
+    std::expected<T, IOError> await_resume() noexcept;  ///< 返回单条消息；超时则返回 IOError(kTimeout, 0)
 
 private:
     friend struct WithTimeout<UnsafeRecvAwaitable<T>>;
@@ -57,19 +71,26 @@ private:
 
 /**
  * @brief 批量接收的等待体
+ * @tparam T 通道元素类型
  */
 template <typename T>
 class UnsafeRecvBatchAwaitable : public TimeoutSupport<UnsafeRecvBatchAwaitable<T>>
 {
 public:
     static_assert(UnsafeChannelValue<T>, "UnsafeRecvBatchAwaitable requires movable T");
+
+    /**
+     * @brief 构造批量接收等待体
+     * @param channel 关联的通道对象；等待完成前必须保持有效
+     * @param maxCount 单次恢复时最多返回的元素数
+     */
     explicit UnsafeRecvBatchAwaitable(UnsafeChannel<T>* channel, size_t maxCount)
         : m_channel(channel), m_maxCount(maxCount) {}
 
-    bool await_ready() const noexcept;
+    bool await_ready() const noexcept;  ///< 如果通道已有数据，则返回 true 避免挂起
     template <typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
-    std::expected<std::vector<T>, IOError> await_resume() noexcept;
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;  ///< 在通道为空时注册等待协程
+    std::expected<std::vector<T>, IOError> await_resume() noexcept;  ///< 返回最多 m_maxCount 条消息；超时则返回 IOError(kTimeout, 0)
 
 private:
     friend struct WithTimeout<UnsafeRecvBatchAwaitable<T>>;
@@ -89,13 +110,19 @@ class UnsafeRecvBatchedAwaitable : public TimeoutSupport<UnsafeRecvBatchedAwaita
 {
 public:
     static_assert(UnsafeChannelValue<T>, "UnsafeRecvBatchedAwaitable requires movable T");
+
+    /**
+     * @brief 构造攒批接收等待体
+     * @param channel 关联的通道对象；等待完成前必须保持有效
+     * @param limit 唤醒前至少需要累积的元素数
+     */
     explicit UnsafeRecvBatchedAwaitable(UnsafeChannel<T>* channel, size_t limit)
         : m_channel(channel), m_limit(limit) {}
 
-    bool await_ready() const noexcept;
+    bool await_ready() const noexcept;  ///< 如果当前已达到攒批阈值，则返回 true 避免挂起
     template <typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
-    std::expected<std::vector<T>, IOError> await_resume() noexcept;
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;  ///< 在未达到阈值时注册等待协程
+    std::expected<std::vector<T>, IOError> await_resume() noexcept;  ///< 返回累计数据；纯超时且无数据时返回 IOError(kTimeout, 0)
 
 private:
     friend struct WithTimeout<UnsafeRecvBatchedAwaitable<T>>;
@@ -127,8 +154,12 @@ class UnsafeChannel
 {
 public:
     static_assert(UnsafeChannelValue<T>, "UnsafeChannel requires movable T");
-    static constexpr size_t DEFAULT_BATCH_SIZE = 1024;
+    static constexpr size_t DEFAULT_BATCH_SIZE = 1024;  ///< 批量接收默认上限
 
+    /**
+     * @brief 构造单调度器通道
+     * @param wake_mode 数据到达时唤醒等待协程的策略
+     */
     explicit UnsafeChannel(UnsafeChannelWakeMode wake_mode = UnsafeChannelWakeMode::Inline)
         : m_wake_mode(wake_mode)
     {
@@ -143,6 +174,7 @@ public:
      * @brief 发送单条数据
      * @param value 要发送的数据
      * @param immediately 是否立即唤醒 waiter，true=立即唤醒，false=等待达到阈值
+     * @return true 数据已进入通道
      * @warning 仅在调度器线程内调用
      */
     bool send(T&& value, bool immediately = false) {
@@ -154,6 +186,13 @@ public:
         return true;
     }
 
+    /**
+     * @brief 复制发送单条数据
+     * @param value 要复制进通道的数据
+     * @param immediately 是否立即唤醒 waiter，true=立即唤醒，false=等待达到阈值
+     * @return true 数据已进入通道
+     * @warning 仅在调度器线程内调用
+     */
     bool send(const T& value, bool immediately = false) requires std::copy_constructible<T> {
         m_queue.push_back(value);
         ++m_size;
@@ -167,6 +206,7 @@ public:
      * @brief 批量发送数据
      * @param values 要发送的数据批次
      * @param immediately 是否立即唤醒 waiter，true=立即唤醒，false=等待达到阈值
+     * @return true 批次数据已全部进入通道
      * @warning 仅在调度器线程内调用
      */
     bool sendBatch(const std::vector<T>& values, bool immediately = false) requires std::copy_constructible<T> {
@@ -181,6 +221,13 @@ public:
         return true;
     }
 
+    /**
+     * @brief 移动发送一批数据
+     * @param values 要移动进通道的数据批次
+     * @param immediately 是否立即唤醒 waiter，true=立即唤醒，false=等待达到阈值
+     * @return true 批次数据已全部进入通道
+     * @warning 仅在调度器线程内调用
+     */
     bool sendBatch(std::vector<T>&& values, bool immediately = false) {
         if (values.empty()) return true;
         for (auto& value : values) {
@@ -195,6 +242,7 @@ public:
 
     /**
      * @brief 异步接收单条数据
+     * @return 可 `co_await` 的等待体；若叠加 `.timeout(...)`，超时后返回 IOError
      */
     UnsafeRecvAwaitable<T> recv() {
         return UnsafeRecvAwaitable<T>(this);
@@ -202,6 +250,8 @@ public:
 
     /**
      * @brief 异步批量接收数据
+     * @param maxCount 单次最多取出的元素个数
+     * @return 可 `co_await` 的等待体；恢复后返回最多 `maxCount` 条数据
      */
     UnsafeRecvBatchAwaitable<T> recvBatch(size_t maxCount = DEFAULT_BATCH_SIZE) {
         return UnsafeRecvBatchAwaitable<T>(this, maxCount);
@@ -213,6 +263,8 @@ public:
      * 等待队列积累到 limit 条数据才唤醒消费者，配合 .timeout() 使用：
      *   co_await channel.recvBatched(100).timeout(std::chrono::milliseconds(50));
      * 超时时若队列中有部分数据，返回已有数据而非错误。
+     * @param limit 唤醒前至少需要积累的消息数
+     * @return 可 `co_await` 的等待体；恢复后返回当前队列中的全部数据
      */
     UnsafeRecvBatchedAwaitable<T> recvBatched(size_t limit) {
         return UnsafeRecvBatchedAwaitable<T>(this, limit);
@@ -220,6 +272,7 @@ public:
 
     /**
      * @brief 非阻塞接收单条数据
+     * @return 取到数据时返回该值；通道为空时返回 std::nullopt
      */
     std::optional<T> tryRecv() {
         if (m_size == 0) {
@@ -233,6 +286,8 @@ public:
 
     /**
      * @brief 非阻塞批量接收数据
+     * @param maxCount 单次最多取出的元素个数
+     * @return 取到数据时返回最多 `maxCount` 条元素；通道为空时返回 std::nullopt
      */
     std::optional<std::vector<T>> tryRecvBatch(size_t maxCount = DEFAULT_BATCH_SIZE) {
         if (m_size == 0) {
@@ -251,6 +306,7 @@ public:
 
     /**
      * @brief 获取队列大小
+     * @return 当前待接收元素数量
      */
     size_t size() const {
         return m_size;
@@ -258,6 +314,7 @@ public:
 
     /**
      * @brief 检查队列是否为空
+     * @return true 当前通道内没有待消费元素
      */
     bool empty() const {
         return m_size == 0;

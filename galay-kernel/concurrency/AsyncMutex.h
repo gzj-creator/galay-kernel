@@ -4,8 +4,9 @@
  * @author galay-kernel
  * @version 1.0.0
  *
- * @details 提供协程友好的互斥锁，使用无锁队列实现。
- * 当锁被占用时，协程会挂起而不是阻塞线程。
+ * @details 提供协程友好的互斥锁。当锁被占用时，调用方会挂起当前协程，
+ * 而不是阻塞底层线程。`lock()` / `lock().timeout(...)` 的返回值均为
+ * `std::expected<void, IOError>`：成功时为 value，超时或失败时为 error。
  *
  * 特性：
  * - 无锁等待队列（基于 moodycamel::ConcurrentQueue）
@@ -13,25 +14,30 @@
  * - 公平性：FIFO 顺序唤醒等待协程
  * - 线程安全
  * - 支持超时
- * - 零分配：等待体复用，减少内存分配开销
+ * - timeout / 直接抢锁成功后会清理 waiter，避免残留唤醒
  *
  * 使用方式：
  * @code
  * AsyncMutex mutex;
  *
- * Task<void> task() {
- *     co_await mutex.lock();
+ * galay::kernel::Task<void> task() {
+ *     auto locked = co_await mutex.lock();
+ *     if (!locked) {
+ *         co_return;
+ *     }
  *     // 临界区
  *     mutex.unlock();
  *     co_return;
  * }
  *
  * // 使用超时
- * Task<void> task2() {
- *     bool acquired = co_await mutex.lock().timeout(100ms);
- *     if (acquired) {
+ * galay::kernel::Task<void> task2() {
+ *     auto locked = co_await mutex.lock().timeout(100ms);
+ *     if (locked) {
  *         // 临界区
  *         mutex.unlock();
+ *     } else if (galay::kernel::IOError::contains(locked.error().code(), galay::kernel::kTimeout)) {
+ *         // 超时
  *     }
  *     co_return;
  * }
@@ -47,12 +53,24 @@
 #include <concurrentqueue/moodycamel/concurrentqueue.h>
 #include <atomic>
 #include <coroutine>
+#include <memory>
 
 namespace galay::kernel
 {
 
 class AsyncMutex;
 class AsyncLockGuard;
+
+struct AsyncMutexWaiter
+{
+    explicit AsyncMutexWaiter(Waker waiter_waker)
+        : waker(std::move(waiter_waker))
+    {
+    }
+
+    Waker waker;
+    std::atomic<bool> active{true};
+};
 
 
 /**
@@ -66,12 +84,21 @@ public:
     bool await_ready() const noexcept;
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
-    std::expected<void, IOError> await_resume() noexcept { return m_result; }
+    std::expected<void, IOError> await_resume() noexcept
+    {
+        cancelWaiter();
+        m_waiter.reset();
+        return m_result;
+    }
 
 private:
     friend struct WithTimeout<AsyncMutexAwaitable>;
+    void markTimeout() noexcept;
+    void cancelWaiter() noexcept;
+
     AsyncMutex* m_mutex;
     std::expected<void, IOError> m_result;
+    std::shared_ptr<AsyncMutexWaiter> m_waiter;
 };
 
 /**
@@ -104,39 +131,58 @@ public:
     AsyncMutex& operator=(AsyncMutex&&) = delete;
 
     /**
-     * @brief 获取锁
-     * @return 可等待对象，用于 co_await
+     * @brief 异步获取锁。
+     * @return 可等待对象；`co_await` 成功时返回 value，timeout 时返回 `IOError(kTimeout, ...)`
+     *
+     * @note
+     * - 不会阻塞底层线程，只会挂起当前协程
+     * - waiter 在 timeout 或入队后直接抢锁成功时会自动失效，避免残留唤醒
      */
     AsyncMutexAwaitable lock() {
         return AsyncMutexAwaitable(this);
     }
 
     /**
-     * @brief 释放锁并唤醒一个等待的协程
-     * @note 必须由持有锁的协程调用
+     * @brief 释放锁并唤醒一个仍然有效的等待协程。
+     *
+     * @note
+     * - 必须仅由当前持锁路径调用
+     * - 如果队列中的 waiter 已 timeout 或已失效，会被跳过而不会重新占锁
      */
     void unlock() {
         m_locked.store(false, std::memory_order_release);
-        Waker waker;
-        while (m_waiters.try_dequeue(waker))
+        std::shared_ptr<AsyncMutexWaiter> waiter;
+        while (m_waiters.try_dequeue(waiter))
         {
+            if (!waiter) {
+                continue;
+            }
+
+            bool expected = true;
+            if (!waiter->active.compare_exchange_strong(expected, false,
+                                                        std::memory_order_acq_rel,
+                                                        std::memory_order_acquire)) {
+                continue;
+            }
+
             // 尝试获取锁
             if (tryLock())
             {
                 // 成功获取锁，唤醒该协程
-                waker.wakeUp();
+                waiter->waker.wakeUp();
                 return;
             } else {
-                // 说明在 unlock  ----   dequeue时间内有lock
-                m_waiters.enqueue(waker);
+                // 在释放与唤醒之间如果锁被其他协程重新获取，恢复 waiter 并重新排队。
+                waiter->active.store(true, std::memory_order_release);
+                m_waiters.enqueue(std::move(waiter));
                 return;
             }
         }
     }
 
     /**
-     * @brief 检查锁是否被占用
-     * @return true 锁被占用
+     * @brief 观察当前锁状态。
+     * @return `true` 表示当前有路径持锁；该结果只适合诊断/断言，不应用作无竞争同步条件
      */
     bool isLocked() const {
         return m_locked.load(std::memory_order_acquire);
@@ -158,7 +204,7 @@ private:
     }
 
     std::atomic<bool> m_locked{false};                      ///< 锁状态
-    moodycamel::ConcurrentQueue<Waker> m_waiters;           ///< 无锁等待队列
+    moodycamel::ConcurrentQueue<std::shared_ptr<AsyncMutexWaiter>> m_waiters;  ///< 无锁等待队列
 };
 
 // AsyncMutexAwaitable 实现
@@ -172,13 +218,26 @@ inline bool AsyncMutexAwaitable::await_ready() const noexcept {
 
 template <typename Promise>
 inline bool AsyncMutexAwaitable::await_suspend(std::coroutine_handle<Promise> handle) noexcept {
-    m_mutex->m_waiters.enqueue(Waker(handle));
+    m_waiter = std::make_shared<AsyncMutexWaiter>(Waker(handle));
+    m_mutex->m_waiters.enqueue(m_waiter);
     // 再次检查，防止在入队期间锁被释放
     if (m_mutex->tryLock()) {
+        cancelWaiter();
         m_result = {};
         return false;  // 不挂起
     }
     return true;
+}
+
+inline void AsyncMutexAwaitable::markTimeout() noexcept {
+    cancelWaiter();
+    m_result = std::unexpected(IOError(kTimeout, 0));
+}
+
+inline void AsyncMutexAwaitable::cancelWaiter() noexcept {
+    if (m_waiter) {
+        m_waiter->active.store(false, std::memory_order_release);
+    }
 }
 } // namespace galay::kernel
 

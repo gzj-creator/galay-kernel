@@ -13,6 +13,8 @@
 namespace galay::async
 {
 
+using namespace galay::kernel;
+
 // AioCommitAwaitable 实现
 
 AioCommitAwaitable::AioCommitAwaitable(IOController* controller,

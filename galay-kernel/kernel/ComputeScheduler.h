@@ -71,6 +71,10 @@ public:
     ComputeScheduler& operator=(const ComputeScheduler&) = delete;
 
 
+    /**
+     * @brief 返回调度器类型
+     * @return 固定返回 kComputeScheduler
+     */
     SchedulerType type() override {
         return kComputeScheduler;
     }
@@ -87,7 +91,20 @@ public:
      */
     void stop() override;
 
+    /**
+     * @brief 将计算任务排入工作线程
+     * @param task 待执行的任务引用
+     * @return true 任务已成功入队；false 任务无效或已绑定到其他调度器
+     * @note 任务会在线程池中的计算线程恢复执行
+     */
     bool schedule(TaskRef task) override;
+
+    /**
+     * @brief 将计算任务按延后语义排入工作线程
+     * @param task 待执行的任务引用
+     * @return true 任务已成功入队；false 任务无效或已绑定到其他调度器
+     * @note 当前实现与 schedule() 共享同一工作队列，但保留独立语义入口
+     */
     bool scheduleDeferred(TaskRef task) override;
 
     /**
@@ -108,6 +125,7 @@ public:
      * @brief 注册定时器
      * @details 添加任务量不大且数量不是特别多的定时任务，如IO超时，sleep等
      * @param timer 定时器共享指针
+     * @return true 定时器已成功交给全局 TimerScheduler；false 添加失败
      */
     bool addTimer(Timer::ptr timer) override {
         return TimerScheduler::getInstance()->addTimer(timer);    

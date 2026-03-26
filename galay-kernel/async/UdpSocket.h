@@ -58,9 +58,6 @@
 
 namespace galay::async
 {
-
-using namespace galay::kernel;
-
 /**
  * @brief 异步UDP Socket类
  *
@@ -86,7 +83,7 @@ public:
      * @param type IP协议类型（IPV4/IPV6）
      * @note 创建失败会抛出异常
      */
-    explicit UdpSocket(IPType type = IPType::IPV4);
+    explicit UdpSocket(galay::kernel::IPType type = galay::kernel::IPType::IPV4);
 
     /**
      * @brief 从已有句柄构造Socket
@@ -129,7 +126,7 @@ public:
      * @brief 获取IO控制器指针
      * @return IOController* 内部IO控制器，用于高级操作
      */
-    IOController* controller() { return &m_controller; }
+    galay::kernel::IOController* controller() { return &m_controller; }
 
 
     /**
@@ -144,7 +141,7 @@ public:
      * socket.bind(Host(IPType::IPV4, "0.0.0.0", 8080));
      * @endcode
      */
-    std::expected<void, IOError> bind(const Host& host);
+    std::expected<void, galay::kernel::IOError> bind(const galay::kernel::Host& host);
 
     /**
      * @brief 获取句柄选项配置器
@@ -156,7 +153,7 @@ public:
      * socket.option().handleNonBlock();   // 设置非阻塞
      * @endcode
      */
-    HandleOption option() { return HandleOption(m_controller.m_handle); }
+    galay::kernel::HandleOption option() { return galay::kernel::HandleOption(m_controller.m_handle); }
 
     /**
      * @brief 异步接收数据报
@@ -182,7 +179,10 @@ public:
      * }
      * @endcode
      */
-    RecvFromAwaitable recvfrom(char* buffer, size_t length, Host* from);
+    galay::kernel::RecvFromAwaitable recvfrom(
+        char* buffer,
+        size_t length,
+        galay::kernel::Host* from);
 
     /**
      * @brief 异步发送数据报
@@ -206,7 +206,10 @@ public:
      * }
      * @endcode
      */
-    SendToAwaitable sendto(const char* buffer, size_t length, const Host& to);
+    galay::kernel::SendToAwaitable sendto(
+        const char* buffer,
+        size_t length,
+        const galay::kernel::Host& to);
 
     /**
      * @brief 异步关闭socket
@@ -219,18 +222,18 @@ public:
      * co_await socket.close();
      * @endcode
      */
-    CloseAwaitable close();
+    galay::kernel::CloseAwaitable close();
 
     /*
      * @brief 获取IO控制器
      * @return IOController* IO控制器
      */
-    IOController* getController() { return &m_controller; }
+    galay::kernel::IOController* getController() { return &m_controller; }
 private:
-    GHandle create(IPType type);
+    GHandle create(galay::kernel::IPType type);
 
 private:
-    IOController m_controller;  ///< IO事件控制器
+    galay::kernel::IOController m_controller;  ///< IO事件控制器
 };
 
 } // namespace galay::async

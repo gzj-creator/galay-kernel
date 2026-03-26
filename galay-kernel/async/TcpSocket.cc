@@ -6,6 +6,8 @@
 namespace galay::async
 {
 
+using namespace galay::kernel;
+
 TcpSocket::TcpSocket(IPType type)
     : m_controller(create(type))
 {

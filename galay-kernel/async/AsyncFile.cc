@@ -10,6 +10,8 @@
 namespace galay::async
 {
 
+using namespace galay::kernel;
+
 AsyncFile::AsyncFile()
     : m_controller(GHandle::invalid())
 {
