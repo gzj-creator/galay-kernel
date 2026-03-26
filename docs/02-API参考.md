@@ -23,12 +23,13 @@
 
 ## 安装包头文件边界
 
-- 稳定 direct-include 入口由包配置变量 `GALAY_KERNEL_SUPPORTED_HEADERS` 给出
-- 仅为内联 / 模板依赖而安装的内部头由 `GALAY_KERNEL_INTERNAL_HEADERS` 给出
+- 当前包配置文件会导出 `GALAY_KERNEL_VERSION`、`GALAY_KERNEL_BACKEND`、`GALAY_KERNEL_INCLUDE_DIR`
+- 稳定 direct-include 入口以本页“稳定公开头快速索引”和实际安装树中的公开头为准
+- 当前源码尚未额外导出 `GALAY_KERNEL_SUPPORTED_HEADERS` / `GALAY_KERNEL_INTERNAL_HEADERS` 这类头文件边界变量
 - `Awaitable.h`、`IOController.hpp`、`Timeout.hpp`、`Scheduler.hpp`、`IOScheduler.hpp` 默认仍属于低层扩展 / 排障入口；日常业务优先使用 `Runtime`、`TcpSocket`、`UdpSocket` 等高层接口
 - 其中 `Awaitable.h` 在 `v3.2.0` 起承载正式的组合式扩展面：`SequenceAwaitable`、`SequenceStep`、`AwaitableBuilder`、`ParseStatus`
 - `v3.3.0` 进一步补充 `AwaitContext`、`SequenceOwnerDomain` 与共享 state-machine `.timeout(...)` 收口，便于 builder / direct awaitable 统一扩展
-- 仓库内最小消费夹具位于 `test/package-consumer/`，安装后同样可通过 `GALAY_KERNEL_PACKAGE_CONSUMER_FIXTURE_DIR` 定位
+- 当前工作树未包含受版本控制的 package consumer fixture；如需验证安装消费，请单独准备最小 consumer 工程
 
 ## 稳定公开头快速索引
 
@@ -111,7 +112,7 @@
 
 注意：
 
-- `galay.kernel` 是聚合导出入口，适合模块消费；direct-include 仍以 `GALAY_KERNEL_SUPPORTED_HEADERS` / `GALAY_KERNEL_INTERNAL_HEADERS` 为准
+- `galay.kernel` 是聚合导出入口，适合模块消费；direct-include 仍以本页列出的稳定公开头与实际安装树内容为准
 - `Scheduler.hpp`、`IOScheduler.hpp` 会进入模块可见面，但当前仍不应把它们当成稳定的 direct-include 业务入口头
 
 ## 地址、错误与字节缓冲工具
@@ -764,8 +765,8 @@ builder iovec 公开面：
 
 ## 交叉验证入口
 
-- package consumer：`test/package-consumer/`
-- 测试入口统一通过 `test/` 与 package consumer 夹具交叉验证公开 API 面
+- 当前工作树未包含受版本控制的 package consumer fixture
+- 公开 API 面当前主要通过 `test/` 与 `examples/` 交叉验证
 - 调度 / 运行时：`test/T11-compute_scheduler.cc`、`test/T12-mixed_scheduler.cc`
 - task / sleep：`test/T1-task_chain.cc`
 - 并发：`test/T13-async_mutex.cc`、`test/T14-mpsc_channel.cc`、`test/T17-unsafe_channel.cc`

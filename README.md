@@ -129,11 +129,13 @@ cmake --build build --parallel
 cmake --install build --prefix /tmp/galay-kernel-install
 ```
 
-安装后的包元数据会显式区分两类头文件：
+安装后的包配置当前导出：
 
-- `GALAY_KERNEL_SUPPORTED_HEADERS`：受当前文档与兼容性承诺约束的 direct-include 入口头
-- `GALAY_KERNEL_INTERNAL_HEADERS`：仅因内联 / 模板依赖而随包安装的内部头，避免直接 `#include`
-- `GALAY_KERNEL_PACKAGE_CONSUMER_FIXTURE_DIR`：安装树中的最小 `find_package` consumer fixture
+- `galay-kernel::galay-kernel`
+- `galay-kernel::galay-kernel-modules`（仅当模块 target 真实生成并安装）
+- `GALAY_KERNEL_VERSION`
+- `GALAY_KERNEL_BACKEND`
+- `GALAY_KERNEL_INCLUDE_DIR`
 
 消费方式：
 
@@ -142,7 +144,7 @@ find_package(galay-kernel CONFIG REQUIRED)
 target_link_libraries(your_app PRIVATE galay-kernel::galay-kernel)
 ```
 
-仓库内的 source-controlled consumer fixture 位于 `test/package-consumer/`。
+当前工作树未包含受版本控制的 `find_package` consumer fixture，也未额外导出 `GALAY_KERNEL_SUPPORTED_HEADERS` / `GALAY_KERNEL_INTERNAL_HEADERS` / `GALAY_KERNEL_PACKAGE_CONSUMER_FIXTURE_DIR` 这类安装包边界变量；direct-include 边界以当前文档列出的公开头与实际安装树内容为准。
 
 安装消费、`find_package` 与 CI 验证统一看 `docs/00-快速开始.md`、`docs/02-API参考.md`、`docs/07-常见问题.md`。
 
