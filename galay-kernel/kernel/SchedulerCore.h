@@ -9,17 +9,24 @@
 
 namespace galay::kernel {
 
+/**
+ * @brief 调度器主循环阶段
+ * @details 供测试和诊断观察一次事件循环迭代所处的阶段。
+ */
 enum class SchedulerCoreStage {
-    CollectRemote,
-    CollectCompletions,
-    RunReady,
-    Poll,
+    CollectRemote,       ///< 拉取跨线程注入任务
+    CollectCompletions,  ///< 收集后端完成事件
+    RunReady,            ///< 恢复 ready 队列中的任务
+    Poll,                ///< 进入后端 poll 等待
 };
 
+/**
+ * @brief 一次 ready pass 的统计结果
+ */
 struct SchedulerReadyPassSummary {
-    size_t ran = 0;
-    size_t drainedRemote = 0;
-    size_t passes = 0;
+    size_t ran = 0;  ///< 实际恢复执行的任务数
+    size_t drainedRemote = 0;  ///< 从跨线程注入队列拉取的任务数
+    size_t passes = 0;  ///< 实际执行的 pass 数
 };
 
 class SchedulerCore

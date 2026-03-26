@@ -7,25 +7,27 @@
 namespace galay::kernel
 {
 
-// Error codes
+/**
+ * @brief galay-kernel 统一 IO 错误码
+ */
 enum IOErrorCode : uint32_t {
-    kDisconnectError = 0,
-    kNotReady,
-    kParamInvalid,
-    kRecvFailed,
-    kSendFailed,
-    kAcceptFailed,
-    kConnectFailed,
-    kBindFailed,
-    kListenFailed,
-    kOpenFailed,
-    kReadFailed,
-    kWriteFailed,
-    kStatFailed,
-    kSyncFailed,
-    kSeekFailed,
+    kDisconnectError = 0,  ///< 连接已断开或关闭失败
+    kNotReady,             ///< 资源尚未准备好或当前状态不允许该操作
+    kParamInvalid,         ///< 调用参数无效
+    kRecvFailed,           ///< 接收数据失败
+    kSendFailed,           ///< 发送数据失败
+    kAcceptFailed,         ///< 接收新连接失败
+    kConnectFailed,        ///< 发起连接失败
+    kBindFailed,           ///< 绑定地址失败
+    kListenFailed,         ///< 开始监听失败
+    kOpenFailed,           ///< 打开文件失败
+    kReadFailed,           ///< 读取失败
+    kWriteFailed,          ///< 写入失败
+    kStatFailed,           ///< 查询文件状态失败
+    kSyncFailed,           ///< 同步文件到磁盘失败
+    kSeekFailed,           ///< 调整文件偏移失败
     kTimeout,              ///< 操作超时
-    kNotRunningOnIOScheduler
+    kNotRunningOnIOScheduler  ///< 当前执行上下文不在 IO scheduler 上
 };
 
 /**

@@ -20,7 +20,7 @@
 namespace galay::kernel
 {
 
-#define GALAY_RUNTIME_SCHEDULER_COUNT_AUTO static_cast<size_t>(-1)
+#define GALAY_RUNTIME_SCHEDULER_COUNT_AUTO static_cast<size_t>(-1)  ///< 自动按 CPU 数量推导 scheduler 个数
 
 /**
  * @brief Runtime 的绑核配置。
@@ -31,11 +31,11 @@ namespace galay::kernel
  * - `Mode::Custom` 要求调用方提供与 scheduler 数量完全一致的 CPU 列表
  */
 struct RuntimeAffinityConfig {
-    enum class Mode { None, Sequential, Custom } mode = Mode::None;
-    size_t seq_io_count = 0;
-    size_t seq_compute_count = 0;
-    std::vector<uint32_t> custom_io_cpus;
-    std::vector<uint32_t> custom_compute_cpus;
+    enum class Mode { None, Sequential, Custom } mode = Mode::None;  ///< 绑核分配模式
+    size_t seq_io_count = 0;  ///< Sequential 模式下参与分配的 IO scheduler 数
+    size_t seq_compute_count = 0;  ///< Sequential 模式下参与分配的 compute scheduler 数
+    std::vector<uint32_t> custom_io_cpus;  ///< Custom 模式下 IO scheduler 的目标 CPU 列表
+    std::vector<uint32_t> custom_compute_cpus;  ///< Custom 模式下 compute scheduler 的目标 CPU 列表
 };
 
 /**
@@ -45,9 +45,9 @@ struct RuntimeAffinityConfig {
  * Runtime 会在首次启动时按当前机器 CPU 数自动创建默认调度器。
  */
 struct RuntimeConfig {
-    size_t io_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
-    size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
-    RuntimeAffinityConfig affinity;
+    size_t io_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;  ///< IO scheduler 数；AUTO 表示按 CPU 自动推导
+    size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;  ///< compute scheduler 数；AUTO 表示按 CPU 自动推导
+    RuntimeAffinityConfig affinity;  ///< Runtime 的绑核策略
 };
 
 class RuntimeHandle;
@@ -61,8 +61,8 @@ class RuntimeHandle;
 class Runtime
 {
 public:
-    explicit Runtime(const RuntimeConfig& config = RuntimeConfig{});
-    ~Runtime();
+    explicit Runtime(const RuntimeConfig& config = RuntimeConfig{});  ///< 用给定配置构造 Runtime，尚未启动
+    ~Runtime();  ///< 析构时停止所有受管 scheduler 和阻塞执行器
 
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
@@ -186,39 +186,43 @@ public:
      */
     RuntimeHandle handle() noexcept;
 
-    bool isRunning() const { return m_running.load(std::memory_order_acquire); }
-    size_t getIOSchedulerCount() const { return m_io_schedulers.size(); }
-    size_t getComputeSchedulerCount() const { return m_compute_schedulers.size(); }
+    bool isRunning() const { return m_running.load(std::memory_order_acquire); }  ///< Runtime 当前是否已启动
+    size_t getIOSchedulerCount() const { return m_io_schedulers.size(); }  ///< 返回当前受管 IO scheduler 数量
+    size_t getComputeSchedulerCount() const { return m_compute_schedulers.size(); }  ///< 返回当前受管 compute scheduler 数量
 
-    IOScheduler* getIOScheduler(size_t index);
-    ComputeScheduler* getComputeScheduler(size_t index);
-    IOScheduler* getNextIOScheduler();
-    ComputeScheduler* getNextComputeScheduler();
+    IOScheduler* getIOScheduler(size_t index);  ///< 按索引返回 IO scheduler；越界时返回 nullptr
+    ComputeScheduler* getComputeScheduler(size_t index);  ///< 按索引返回 compute scheduler；越界时返回 nullptr
+    IOScheduler* getNextIOScheduler();  ///< 以轮询方式返回下一个 IO scheduler；不存在时返回 nullptr
+    ComputeScheduler* getNextComputeScheduler();  ///< 以轮询方式返回下一个 compute scheduler；不存在时返回 nullptr
 
 private:
-    void createDefaultSchedulers();
-    void applyAffinityConfig();
-    void ensureStarted();
-    Scheduler* acquireDefaultScheduler();
-    void bindTaskToRuntime(const TaskRef& task, Scheduler* scheduler);
-    bool submitTask(const TaskRef& task);
-    static size_t getCPUCount();
+    void createDefaultSchedulers();  ///< 按配置或 CPU 数生成默认 scheduler 集合
+    void applyAffinityConfig();  ///< 把 RuntimeAffinityConfig 应用到所有已注册 scheduler
+    void ensureStarted();  ///< 若 Runtime 尚未启动则触发一次启动
+    Scheduler* acquireDefaultScheduler();  ///< 为根任务选出一个默认调度器
+    void bindTaskToRuntime(const TaskRef& task, Scheduler* scheduler);  ///< 给根任务绑定 Runtime 与目标调度器
+    bool submitTask(const TaskRef& task);  ///< 把根任务提交到其所属调度器
+    static size_t getCPUCount();  ///< 返回当前机器可用 CPU 数量
 
-    std::vector<std::unique_ptr<IOScheduler>> m_io_schedulers;
-    std::vector<std::unique_ptr<ComputeScheduler>> m_compute_schedulers;
+    std::vector<std::unique_ptr<IOScheduler>> m_io_schedulers;  ///< Runtime 持有的 IO scheduler 集合
+    std::vector<std::unique_ptr<ComputeScheduler>> m_compute_schedulers;  ///< Runtime 持有的 compute scheduler 集合
 
-    std::atomic<uint32_t> m_io_index{0};
-    std::atomic<uint32_t> m_compute_index{0};
+    std::atomic<uint32_t> m_io_index{0};  ///< IO scheduler 轮询游标
+    std::atomic<uint32_t> m_compute_index{0};  ///< compute scheduler 轮询游标
 
-    BlockingExecutor m_blockingExecutor;
-    RuntimeConfig m_config;
-    std::atomic<bool> m_running{false};
+    BlockingExecutor m_blockingExecutor;  ///< 阻塞任务线程池
+    RuntimeConfig m_config;  ///< Runtime 启动和绑核配置
+    std::atomic<bool> m_running{false};  ///< Runtime 是否已经启动
 };
 
+/**
+ * @brief Runtime 的轻量句柄
+ * @details 用于在协程或阻塞线程池回调中访问当前 Runtime，而不暴露所有权。
+ */
 class RuntimeHandle
 {
 public:
-    RuntimeHandle() noexcept = default;
+    RuntimeHandle() noexcept = default;  ///< 构造空 handle
     explicit RuntimeHandle(Runtime* runtime) noexcept
         : m_runtime(runtime)
     {
@@ -236,7 +240,7 @@ public:
      */
     static std::optional<RuntimeHandle> tryCurrent();
 
-    bool isValid() const noexcept { return m_runtime != nullptr; }
+    bool isValid() const noexcept { return m_runtime != nullptr; }  ///< 当前是否绑定到有效 Runtime
 
     template <typename T>
     JoinHandle<T> spawn(Task<T> task) const
@@ -251,7 +255,7 @@ public:
     }
 
 private:
-    Runtime* requireRuntime() const
+    Runtime* requireRuntime() const  ///< 返回绑定的 Runtime；未绑定时抛出异常
     {
         if (m_runtime == nullptr) {
             throw std::runtime_error("runtime handle is not bound to a runtime");
@@ -259,7 +263,7 @@ private:
         return m_runtime;
     }
 
-    Runtime* m_runtime = nullptr;
+    Runtime* m_runtime = nullptr;  ///< 关联的 Runtime，生命周期由外部持有
 };
 
 class RuntimeBuilder

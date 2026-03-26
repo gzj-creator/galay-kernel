@@ -74,7 +74,7 @@ public:
      * - Linux/macOS: 使用fcntl清除O_NONBLOCK标志
      * - Windows: 使用ioctlsocket设置FIONBIO为0
      */
-    std::expected<void, IOError> handleBlock();
+    std::expected<void, IOError> handleBlock();  ///< 设置句柄为阻塞模式
 
     /**
      * @brief 设置句柄为非阻塞模式
@@ -92,7 +92,7 @@ public:
      * socket.option().handleNonBlock();  // 异步IO前必须调用
      * @endcode
      */
-    std::expected<void, IOError> handleNonBlock();
+    std::expected<void, IOError> handleNonBlock();  ///< 设置句柄为非阻塞模式
 
     /**
      * @brief 设置地址重用选项（SO_REUSEADDR）
@@ -109,7 +109,7 @@ public:
      * socket.bind(host);  // 即使地址处于TIME_WAIT也能绑定
      * @endcode
      */
-    std::expected<void, IOError> handleReuseAddr();
+    std::expected<void, IOError> handleReuseAddr();  ///< 设置 SO_REUSEADDR 选项
 
     /**
      * @brief 设置端口重用选项（SO_REUSEPORT）
@@ -130,7 +130,7 @@ public:
      * socket.bind(Host(IPType::IPV4, "0.0.0.0", 8080));
      * @endcode
      */
-    std::expected<void, IOError> handleReusePort();
+    std::expected<void, IOError> handleReusePort();  ///< 设置 SO_REUSEPORT 选项
 
     /**
      * @brief 设置 TCP_NODELAY 选项
@@ -142,7 +142,7 @@ public:
      *
      * @note 建议在连接建立后尽早调用
      */
-    std::expected<void, IOError> handleTcpNoDelay();
+    std::expected<void, IOError> handleTcpNoDelay();  ///< 设置 TCP_NODELAY 选项
 
 private:
     GHandle m_handle;  ///< 要配置的socket句柄

@@ -262,10 +262,10 @@ namespace galay::kernel
          * buffer.produce(n);
          * @endcode
          */
-        size_t getWriteIovecs(struct iovec* out, size_t max_iovecs = 2) const;
+        size_t getWriteIovecs(struct iovec* out, size_t max_iovecs = 2) const;  ///< 输出当前可写区的 iovec 视图
 
         template<size_t N>
-        size_t getWriteIovecs(std::array<struct iovec, N>& out) const {
+        size_t getWriteIovecs(std::array<struct iovec, N>& out) const {  ///< 输出可写区 iovec 到固定大小数组
             return getWriteIovecs(out.data(), N);
         }
 
@@ -282,10 +282,10 @@ namespace galay::kernel
          * buffer.consume(n);
          * @endcode
          */
-        size_t getReadIovecs(struct iovec* out, size_t max_iovecs = 2) const;
+        size_t getReadIovecs(struct iovec* out, size_t max_iovecs = 2) const;  ///< 输出当前可读区的 iovec 视图
 
         template<size_t N>
-        size_t getReadIovecs(std::array<struct iovec, N>& out) const {
+        size_t getReadIovecs(std::array<struct iovec, N>& out) const {  ///< 输出可读区 iovec 到固定大小数组
             return getReadIovecs(out.data(), N);
         }
 

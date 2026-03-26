@@ -141,7 +141,7 @@ public:
      * socket.bind(Host(IPType::IPV4, "0.0.0.0", 8080));
      * @endcode
      */
-    std::expected<void, galay::kernel::IOError> bind(const galay::kernel::Host& host);
+    std::expected<void, galay::kernel::IOError> bind(const galay::kernel::Host& host);  ///< 绑定本地地址；成功返回 void，失败返回 IOError
 
     /**
      * @brief 获取句柄选项配置器
@@ -222,7 +222,7 @@ public:
      * co_await socket.close();
      * @endcode
      */
-    galay::kernel::CloseAwaitable close();
+    galay::kernel::CloseAwaitable close();  ///< 异步关闭 socket，恢复后返回关闭结果
 
     /*
      * @brief 获取IO控制器
@@ -230,7 +230,7 @@ public:
      */
     galay::kernel::IOController* getController() { return &m_controller; }
 private:
-    GHandle create(galay::kernel::IPType type);
+    GHandle create(galay::kernel::IPType type);  ///< 按协议版本创建底层 UDP socket；失败时返回无效句柄
 
 private:
     galay::kernel::IOController m_controller;  ///< IO事件控制器

@@ -18,10 +18,14 @@ namespace galay::kernel {
 
 namespace galay::async
 {
+/**
+ * @brief AIO 文件打开模式
+ * @details 基于 `O_DIRECT` 打开文件，要求调用方使用对齐缓冲区。
+ */
 enum class AioOpenMode : int {
-    Read      = O_RDONLY | O_DIRECT,
-    Write     = O_WRONLY | O_CREAT | O_DIRECT,
-    ReadWrite = O_RDWR | O_CREAT | O_DIRECT,
+    Read      = O_RDONLY | O_DIRECT,  ///< 只读直通模式
+    Write     = O_WRONLY | O_CREAT | O_DIRECT,  ///< 只写直通模式，必要时创建文件
+    ReadWrite = O_RDWR | O_CREAT | O_DIRECT,  ///< 读写直通模式，必要时创建文件
 };
 
 class AioFile;
@@ -30,23 +34,31 @@ class AioFile;
  * @brief AIO 提交结果的可等待对象
  */
 struct AioCommitAwaitable {
+    /**
+     * @brief 构造批量 AIO 提交等待体
+     * @param controller 关联的 IO 控制器
+     * @param aio_ctx libaio 上下文
+     * @param event_fd 用于完成通知的 eventfd
+     * @param pending_ptrs 本次待提交的 iocb 指针集合，所有权转移到等待体
+     * @param pending_count 本次实际需要提交的操作数
+     */
     AioCommitAwaitable(galay::kernel::IOController* controller,
                        io_context_t aio_ctx, int event_fd,
                        std::vector<struct iocb*>&& pending_ptrs, size_t pending_count);
 
-    bool await_ready() { return m_pending_count == 0; }
+    bool await_ready() { return m_pending_count == 0; }  ///< 没有待提交操作时无需挂起
     template <typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> handle);
-    std::expected<std::vector<ssize_t>, galay::kernel::IOError> await_resume();
+    bool await_suspend(std::coroutine_handle<Promise> handle);  ///< 提交所有挂起 AIO 操作，并在需要时挂起当前协程
+    std::expected<std::vector<ssize_t>, galay::kernel::IOError> await_resume();  ///< 返回各提交操作的结果；失败时返回 IOError
 
-    galay::kernel::IOController* m_controller;
-    io_context_t m_aio_ctx;
-    int m_event_fd;
-    std::vector<struct iocb*> m_pending_ptrs;  // 拥有所有权，不再是指针
-    size_t m_pending_count;
-    galay::kernel::Waker m_waker;
-    std::vector<ssize_t> m_results;
-    std::expected<std::vector<ssize_t>, galay::kernel::IOError> m_result;
+    galay::kernel::IOController* m_controller;  ///< 关联的 IO 控制器
+    io_context_t m_aio_ctx;  ///< libaio 上下文
+    int m_event_fd;  ///< 完成通知用 eventfd
+    std::vector<struct iocb*> m_pending_ptrs;  ///< 待提交 iocb 指针集合，等待体拥有其生命周期
+    size_t m_pending_count;  ///< 本次需要提交的操作数
+    galay::kernel::Waker m_waker;  ///< 完成后恢复提交协程的唤醒器
+    std::vector<ssize_t> m_results;  ///< 每个 iocb 对应的原始返回值
+    std::expected<std::vector<ssize_t>, galay::kernel::IOError> m_result;  ///< 聚合后的提交结果
 };
 
 /**
@@ -83,26 +95,13 @@ public:
         AioOpenMode mode,
         int permissions = 0644);
 
-    // 准备读操作 (buffer 必须对齐到 512 字节)
-    void preRead(char* buffer, size_t length, off_t offset);
-
-    // 准备写操作 (buffer 必须对齐到 512 字节)
-    void preWrite(const char* buffer, size_t length, off_t offset);
-
-    // 批量准备读操作
-    void preReadBatch(const std::vector<std::tuple<char*, size_t, off_t>>& reads);
-
-    // 批量准备写操作
-    void preWriteBatch(const std::vector<std::tuple<const char*, size_t, off_t>>& writes);
-
-    // 提交所有准备的操作并返回等待体
-    AioCommitAwaitable commit();
-
-    // 清除已准备但未提交的操作
-    void clear();
-
-    // 关闭文件
-    void close();
+    void preRead(char* buffer, size_t length, off_t offset);  ///< 预登记一次异步读；buffer 必须满足 O_DIRECT 对齐要求
+    void preWrite(const char* buffer, size_t length, off_t offset);  ///< 预登记一次异步写；buffer 必须满足 O_DIRECT 对齐要求
+    void preReadBatch(const std::vector<std::tuple<char*, size_t, off_t>>& reads);  ///< 批量预登记读操作
+    void preWriteBatch(const std::vector<std::tuple<const char*, size_t, off_t>>& writes);  ///< 批量预登记写操作
+    AioCommitAwaitable commit();  ///< 提交当前累计的所有操作并返回等待体
+    void clear();  ///< 清空已预登记但尚未提交的操作
+    void close();  ///< 关闭文件句柄并释放相关 AIO 资源
 
     // 获取文件句柄
     GHandle handle() const { return m_handle; }
@@ -110,34 +109,27 @@ public:
     // 检查是否有效
     bool isValid() const { return m_handle.fd >= 0; }
 
-    // 获取文件大小
-    std::expected<size_t, galay::kernel::IOError> size() const;
-
-    // 同步到磁盘
-    std::expected<void, galay::kernel::IOError> sync();
-
-    // 分配对齐的缓冲区 (用于 O_DIRECT)
-    static char* allocAlignedBuffer(size_t size, size_t alignment = 512);
-    static void freeAlignedBuffer(char* buffer);
+    std::expected<size_t, galay::kernel::IOError> size() const;  ///< 返回文件当前大小
+    std::expected<void, galay::kernel::IOError> sync();  ///< 把文件内容同步到磁盘
+    static char* allocAlignedBuffer(size_t size, size_t alignment = 512);  ///< 分配满足 O_DIRECT 要求的对齐缓冲区
+    static void freeAlignedBuffer(char* buffer);  ///< 释放由 allocAlignedBuffer() 返回的缓冲区
 
     /*
      * @brief 获取IO控制器
      * @return IOController* IO控制器
      */
-    galay::kernel::IOController* getController() { return &m_controller; }
+    galay::kernel::IOController* getController() { return &m_controller; }  ///< 返回内部 IO 控制器指针供高级用法访问
 
 private:
-    GHandle m_handle;
-    galay::kernel::IOController m_controller;
+    GHandle m_handle;  ///< 当前文件句柄
+    galay::kernel::IOController m_controller;  ///< 批量提交完成通知使用的 IO 控制器
 
-    // libaio 相关
-    io_context_t m_aio_ctx;
-    int m_event_fd;
-    int m_max_events;
+    io_context_t m_aio_ctx;  ///< libaio 上下文
+    int m_event_fd;  ///< 完成通知 eventfd
+    int m_max_events;  ///< libaio 队列深度上限
 
-    // 待提交的操作
-    std::vector<struct iocb> m_pending_cbs;
-    std::vector<struct iocb*> m_pending_ptrs;
+    std::vector<struct iocb> m_pending_cbs;  ///< 待提交操作对象集合
+    std::vector<struct iocb*> m_pending_ptrs;  ///< 指向 m_pending_cbs 的提交指针数组
 };
 
 } // namespace galay::async

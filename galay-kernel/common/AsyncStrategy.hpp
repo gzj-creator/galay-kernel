@@ -262,9 +262,9 @@ public:
         return m_nodes.back().node;
     }
 
-    size_t size() const { return m_nodes.size(); }
+    size_t size() const { return m_nodes.size(); }  ///< 返回当前可选节点数量
 
-    void append(Type node, uint32_t weight) {
+    void append(Type node, uint32_t weight) {  ///< 追加一个带权节点到负载均衡器
         m_nodes.emplace_back(std::move(node), weight);
         m_total_weight += weight;
     }

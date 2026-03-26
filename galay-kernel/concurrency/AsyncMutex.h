@@ -79,11 +79,11 @@ struct AsyncMutexWaiter
 class AsyncMutexAwaitable : public TimeoutSupport<AsyncMutexAwaitable>
 {
 public:
-    explicit AsyncMutexAwaitable(AsyncMutex* mutex) : m_mutex(mutex) {}
+    explicit AsyncMutexAwaitable(AsyncMutex* mutex) : m_mutex(mutex) {}  ///< 构造与指定互斥锁绑定的等待体
 
-    bool await_ready() const noexcept;
+    bool await_ready() const noexcept;  ///< 若当前可直接抢锁则返回 true，避免挂起
     template <typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept;  ///< 注册 waiter，并在未抢到锁时挂起当前协程
     std::expected<void, IOError> await_resume() noexcept
     {
         cancelWaiter();
@@ -93,8 +93,8 @@ public:
 
 private:
     friend struct WithTimeout<AsyncMutexAwaitable>;
-    void markTimeout() noexcept;
-    void cancelWaiter() noexcept;
+    void markTimeout() noexcept;  ///< 标记等待超时，并让残留 waiter 在 unlock() 时失效
+    void cancelWaiter() noexcept;  ///< 让当前 waiter 失效，防止后续陈旧唤醒
 
     AsyncMutex* m_mutex;
     std::expected<void, IOError> m_result;

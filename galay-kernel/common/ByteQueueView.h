@@ -8,9 +8,13 @@
 
 namespace galay::kernel {
 
+/**
+ * @brief 面向解析器的只增字节队列视图
+ * @details 以单个连续 `std::vector<char>` 存储数据，支持追加、查看和消费。
+ */
 class ByteQueueView {
 public:
-    ByteQueueView() = default;
+    ByteQueueView() = default;  ///< 构造空字节队列视图
 
     explicit ByteQueueView(size_t reserve_size) {
         reserve(reserve_size);

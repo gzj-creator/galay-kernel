@@ -15,12 +15,15 @@
 
 namespace galay::async
 {
+/**
+ * @brief 普通异步文件打开模式
+ */
 enum class FileOpenMode : int {
-    Read      = O_RDONLY,
-    Write     = O_WRONLY | O_CREAT,
-    ReadWrite = O_RDWR | O_CREAT,
-    Append    = O_WRONLY | O_CREAT | O_APPEND,
-    Truncate  = O_WRONLY | O_CREAT | O_TRUNC,
+    Read      = O_RDONLY,  ///< 只读
+    Write     = O_WRONLY | O_CREAT,  ///< 只写，必要时创建文件
+    ReadWrite = O_RDWR | O_CREAT,  ///< 读写，必要时创建文件
+    Append    = O_WRONLY | O_CREAT | O_APPEND,  ///< 追加写
+    Truncate  = O_WRONLY | O_CREAT | O_TRUNC,  ///< 打开时截断文件
 };
 
 /**
@@ -60,29 +63,23 @@ public:
      * - 返回值为0表示 EOF
      * - 缓冲区生命周期必须持续到 co_await 完成
      */
-    galay::kernel::FileReadAwaitable read(char* buffer, size_t length, off_t offset = 0);
+    galay::kernel::FileReadAwaitable read(char* buffer, size_t length, off_t offset = 0);  ///< 异步读取文件，恢复后返回实际读取字节数
 
-    // 异步写入
-    galay::kernel::FileWriteAwaitable write(const char* buffer, size_t length, off_t offset = 0);
-
-    // 异步关闭
-    galay::kernel::CloseAwaitable close();
+    galay::kernel::FileWriteAwaitable write(const char* buffer, size_t length, off_t offset = 0);  ///< 异步写入文件，恢复后返回实际写入字节数
+    galay::kernel::CloseAwaitable close();  ///< 异步关闭文件句柄
 
     // 获取文件句柄
     GHandle handle() const { return m_controller.m_handle; }
 
 
-    // 获取文件大小
-    std::expected<size_t, galay::kernel::IOError> size() const;
-
-    // 同步操作（用于简单场景）
-    std::expected<void, galay::kernel::IOError> sync();
+    std::expected<size_t, galay::kernel::IOError> size() const;  ///< 返回文件当前大小
+    std::expected<void, galay::kernel::IOError> sync();  ///< 把文件内容同步到磁盘
 
     /*
      * @brief 获取IO控制器
      * @return IOController* IO控制器
      */
-    galay::kernel::IOController* getController() { return &m_controller; }
+    galay::kernel::IOController* getController() { return &m_controller; }  ///< 返回内部 IO 控制器指针供高级用法访问
 
 private:
     galay::kernel::IOController m_controller;

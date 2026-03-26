@@ -7,11 +7,15 @@
 namespace galay::kernel
 {
 
+/**
+ * @brief 任务唤醒器
+ * @details 持有 `TaskRef`，可在其他线程或回调中把关联协程重新交回所属调度器。
+ */
 class Waker
 {
 public:
-    Waker() = default;
-    explicit Waker(TaskRef task) noexcept;
+    Waker() = default;  ///< 构造空 waker
+    explicit Waker(TaskRef task) noexcept;  ///< 以任务引用构造唤醒器
     template <typename Promise>
     requires requires(const Promise& promise) {
         { promise.taskRefView() } -> std::same_as<const TaskRef&>;
@@ -20,21 +24,21 @@ public:
         : m_task(handle.promise().taskRefView())
     {
     }
-    Waker(const Waker& other) = default;
-    Waker(Waker&& waker) noexcept = default;
-    Waker& operator=(const Waker& other) = default;
-    Waker& operator=(Waker&& other) noexcept = default;
+    Waker(const Waker& other) = default;  ///< 拷贝唤醒器，底层共享同一任务引用
+    Waker(Waker&& waker) noexcept = default;  ///< 移动唤醒器
+    Waker& operator=(const Waker& other) = default;  ///< 拷贝赋值唤醒器
+    Waker& operator=(Waker&& other) noexcept = default;  ///< 移动赋值唤醒器
 
-    Scheduler* getScheduler();
+    Scheduler* getScheduler();  ///< 返回关联任务的所属调度器；无任务时返回 nullptr
 
-    void wakeUp();
+    void wakeUp();  ///< 请求恢复关联任务；若任务无效或调度器不可用则静默忽略
 
 private:
-    TaskRef m_task;
+    TaskRef m_task;  ///< 被唤醒的目标任务
 };
 
 
 
-}
+} // namespace galay::kernel
 
-#endif
+#endif // GALAY_KERNEL_WAKER_H

@@ -139,7 +139,7 @@ public:
      * socket.bind(Host(IPType::IPV4, "0.0.0.0", 8080));
      * @endcode
      */
-    std::expected<void, galay::kernel::IOError> bind(const galay::kernel::Host& host);
+    std::expected<void, galay::kernel::IOError> bind(const galay::kernel::Host& host);  ///< 绑定本地地址；成功返回 void，失败返回 IOError
 
     /**
      * @brief 开始监听连接
@@ -409,7 +409,7 @@ public:
     galay::kernel::IOController* getController() { return &m_controller; }
 
 private:
-    GHandle create(galay::kernel::IPType type);
+    GHandle create(galay::kernel::IPType type);  ///< 按协议版本创建底层 socket；失败时返回无效句柄
 private:
     galay::kernel::IOController m_controller;  ///< IO事件控制器
 };

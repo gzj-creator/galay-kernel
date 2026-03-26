@@ -60,36 +60,51 @@ namespace galay::kernel
 
 // ==================== 第一层：AwaitableBase ====================
 
+/**
+ * @brief 所有 awaitable 的公共基类
+ * @details 在 io_uring 模式下保存当前 SQE 对应的事件类型，供完成回调核对。
+ */
 struct AwaitableBase {
 #ifdef USE_IOURING
-    IOEventType m_sqe_type = IOEventType::INVALID;
+    IOEventType m_sqe_type = IOEventType::INVALID;  ///< 当前 SQE 对应的事件类型
 #endif
-    virtual ~AwaitableBase() = default;
+    virtual ~AwaitableBase() = default;  ///< 虚析构，允许通过基类安全释放具体 awaitable
 };
 
+/**
+ * @brief await 挂起时可提取的上下文信息
+ * @details 供状态机或高级 builder 在首次挂起时获取父任务与调度器信息。
+ */
 struct AwaitContext {
-    TaskRef task;
-    Scheduler* scheduler = nullptr;
+    TaskRef task;  ///< 当前挂起任务的轻量引用
+    Scheduler* scheduler = nullptr;  ///< 当前任务所属调度器
 };
 
+/**
+ * @brief Sequence awaitable 对 IOController 读写槽位的占用范围
+ */
 enum class SequenceOwnerDomain : uint8_t {
-    Read,
-    Write,
-    ReadWrite
+    Read,       ///< 仅占用读槽位
+    Write,      ///< 仅占用写槽位
+    ReadWrite   ///< 同时占用读写槽位
 };
 
 // ==================== 第二层：IOContextBase ====================
 
+/**
+ * @brief IO 上下文抽象基类
+ * @details 保存一次 IO 操作的参数与完成回调接口，供 reactor 在完成事件到达时回填结果。
+ */
 struct IOContextBase: public AwaitableBase {
 #ifdef USE_IOURING
-    virtual bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) = 0;
+    virtual bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) = 0;  ///< 消费 CQE 并返回该操作是否已完成
 #else
-    virtual bool handleComplete(GHandle handle) = 0;
+    virtual bool handleComplete(GHandle handle) = 0;  ///< 在传统后端上消费一次就绪事件并返回该操作是否已完成
 #endif
 
     // SequenceAwaitable 调度时可由上下文动态指定下一次等待方向；
     // 返回 INVALID 表示沿用静态 task.type。
-    virtual IOEventType type() const { return IOEventType::INVALID; }
+    virtual IOEventType type() const { return IOEventType::INVALID; }  ///< 返回动态事件方向；INVALID 表示沿用静态事件类型
 };
 
 struct AcceptIOContext;
@@ -134,9 +149,9 @@ constexpr SequenceInterestMask sequenceInterestMask(IOEventType type) noexcept {
     return mask;
 }
 
-SequenceInterestMask collectSequenceInterestMask(const IOController* controller) noexcept;
-SequenceInterestMask syncSequenceInterestMask(IOController* controller) noexcept;
-void clearSequenceInterestMask(IOController* controller) noexcept;
+SequenceInterestMask collectSequenceInterestMask(const IOController* controller) noexcept;  ///< 汇总 controller 上所有 sequence awaitable 的关注位
+SequenceInterestMask syncSequenceInterestMask(IOController* controller) noexcept;  ///< 重新计算并写回 controller 的 sequence 关注位
+void clearSequenceInterestMask(IOController* controller) noexcept;  ///< 清空 controller 的 sequence 关注位与 armed 位
 
 inline uint32_t normalizeAwaitableErrno(int ret) noexcept {
     return (ret < 0 && ret != -1)
@@ -310,6 +325,10 @@ template <typename ResultT>
 struct expected_traits;
 
 template <typename T, typename E>
+/**
+ * @brief `std::expected<T, E>` 的 traits 特化
+ * @details 供 sequence/state-machine 逻辑从 `expected` 结果类型中提取 value/error 类型。
+ */
 struct expected_traits<std::expected<T, E>> {
     using value_type = T;
     using error_type = E;
@@ -321,20 +340,27 @@ struct expected_traits<std::expected<T, E>> {
 
 // ---- Accept ----
 
+/**
+ * @brief accept 操作的上下文
+ */
 struct AcceptIOContext: public IOContextBase {
     AcceptIOContext(Host* host)
         : m_host(host) {}
 
 #ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;  ///< 处理 io_uring accept 完成事件
 #else
-    bool handleComplete(GHandle handle) override;
+    bool handleComplete(GHandle handle) override;  ///< 处理传统后端 accept 就绪事件
 #endif
 
-    Host* m_host;
-    std::expected<GHandle, IOError> m_result;
+    Host* m_host;  ///< 输出客户端地址；允许为 nullptr
+    std::expected<GHandle, IOError> m_result;  ///< 接受连接的结果句柄
 };
 
+/**
+ * @brief accept 的可等待对象
+ * @details `co_await` 后返回新连接句柄，超时或失败时返回 `IOError`。
+ */
 struct AcceptAwaitable: public AcceptIOContext, public TimeoutSupport<AcceptAwaitable> {
     AcceptAwaitable(IOController* controller, Host* host)
         : AcceptIOContext(host), m_controller(controller) {}
@@ -345,29 +371,35 @@ struct AcceptAwaitable: public AcceptIOContext, public TimeoutSupport<AcceptAwai
         return detail::suspendRegisteredAwaitable<AcceptAwaitable, ACCEPT, kAcceptFailed>(
             *this, handle);
     }
-    std::expected<GHandle, IOError> await_resume();
+    std::expected<GHandle, IOError> await_resume();  ///< 返回 accept 结果；若失败则返回 IOError
 
-    IOController* m_controller;
-    Waker m_waker;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
 };
 
 // ---- Recv ----
 
+/**
+ * @brief recv 操作的上下文
+ */
 struct RecvIOContext: public IOContextBase {
     RecvIOContext(char* buffer, size_t length)
         : m_buffer(buffer), m_length(length) {}
 
 #ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;  ///< 处理 io_uring recv 完成事件
 #else
-    bool handleComplete(GHandle handle) override;
+    bool handleComplete(GHandle handle) override;  ///< 处理传统后端 recv 就绪事件
 #endif
 
-    char* m_buffer;
-    size_t m_length;
-    std::expected<size_t, IOError> m_result;
+    char* m_buffer;  ///< 接收缓冲区
+    size_t m_length;  ///< 请求接收的最大字节数
+    std::expected<size_t, IOError> m_result;  ///< 实际接收字节数或错误
 };
 
+/**
+ * @brief recv 的可等待对象
+ */
 struct RecvAwaitable: public RecvIOContext, public TimeoutSupport<RecvAwaitable> {
     RecvAwaitable(IOController* controller, char* buffer, size_t length)
         : RecvIOContext(buffer, length), m_controller(controller) {}
@@ -378,29 +410,35 @@ struct RecvAwaitable: public RecvIOContext, public TimeoutSupport<RecvAwaitable>
         return detail::suspendRegisteredAwaitable<RecvAwaitable, RECV, kRecvFailed>(
             *this, handle);
     }
-    std::expected<size_t, IOError> await_resume();
+    std::expected<size_t, IOError> await_resume();  ///< 返回实际接收字节数；0 可能表示 EOF
 
-    IOController* m_controller;
-    Waker m_waker;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
 };
 
 // ---- Send ----
 
+/**
+ * @brief send 操作的上下文
+ */
 struct SendIOContext: public IOContextBase {
     SendIOContext(const char* buffer, size_t length)
         : m_buffer(buffer), m_length(length) {}
 
 #ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;  ///< 处理 io_uring send 完成事件
 #else
-    bool handleComplete(GHandle handle) override;
+    bool handleComplete(GHandle handle) override;  ///< 处理传统后端 send 就绪事件
 #endif
 
-    const char* m_buffer;
-    size_t m_length;
-    std::expected<size_t, IOError> m_result;
+    const char* m_buffer;  ///< 发送缓冲区
+    size_t m_length;  ///< 请求发送的字节数
+    std::expected<size_t, IOError> m_result;  ///< 实际发送字节数或错误
 };
 
+/**
+ * @brief send 的可等待对象
+ */
 struct SendAwaitable: public SendIOContext, public TimeoutSupport<SendAwaitable> {
     SendAwaitable(IOController* controller, const char* buffer, size_t length)
         : SendIOContext(buffer, length), m_controller(controller) {}
@@ -411,14 +449,17 @@ struct SendAwaitable: public SendIOContext, public TimeoutSupport<SendAwaitable>
         return detail::suspendRegisteredAwaitable<SendAwaitable, SEND, kSendFailed>(
             *this, handle);
     }
-    std::expected<size_t, IOError> await_resume();
+    std::expected<size_t, IOError> await_resume();  ///< 返回实际发送字节数；可能小于请求长度
 
-    IOController* m_controller;
-    Waker m_waker;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
 };
 
 // ---- Readv ----
 
+/**
+ * @brief readv 操作的上下文
+ */
 struct ReadvIOContext: public IOContextBase {
     explicit ReadvIOContext(std::span<const struct iovec> iovecs)
         : m_iovecs(iovecs) {
@@ -444,9 +485,9 @@ struct ReadvIOContext: public IOContextBase {
     }
 
 #ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;  ///< 处理 io_uring readv 完成事件
 #else
-    bool handleComplete(GHandle handle) override;
+    bool handleComplete(GHandle handle) override;  ///< 处理传统后端 readv 就绪事件
 #endif
 
     static size_t validateBorrowedCountOrAbort(size_t count, size_t capacity, const char* op) {
@@ -461,8 +502,8 @@ struct ReadvIOContext: public IOContextBase {
         std::abort();
     }
 
-    std::span<const struct iovec> m_iovecs;
-    std::expected<size_t, IOError> m_result;
+    std::span<const struct iovec> m_iovecs;  ///< 借用的 iovec 数组视图
+    std::expected<size_t, IOError> m_result;  ///< 实际读取字节数或错误
 
 #ifdef USE_IOURING
     void initMsghdr() {
@@ -470,10 +511,13 @@ struct ReadvIOContext: public IOContextBase {
         m_msg.msg_iovlen = m_iovecs.size();
     }
 
-    struct msghdr m_msg{};
+    struct msghdr m_msg{};  ///< io_uring 使用的辅助 msghdr
 #endif
 };
 
+/**
+ * @brief readv 的可等待对象
+ */
 struct ReadvAwaitable: public ReadvIOContext, public TimeoutSupport<ReadvAwaitable> {
     ReadvAwaitable(IOController* controller, std::span<const struct iovec> iovecs)
         : ReadvIOContext(iovecs), m_controller(controller) {}
@@ -492,14 +536,17 @@ struct ReadvAwaitable: public ReadvIOContext, public TimeoutSupport<ReadvAwaitab
         return detail::suspendRegisteredAwaitable<ReadvAwaitable, READV, kRecvFailed>(
             *this, handle);
     }
-    std::expected<size_t, IOError> await_resume();
+    std::expected<size_t, IOError> await_resume();  ///< 返回实际读取字节数或错误
 
-    IOController* m_controller;
-    Waker m_waker;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
 };
 
 // ---- Writev ----
 
+/**
+ * @brief writev 操作的上下文
+ */
 struct WritevIOContext: public IOContextBase {
     explicit WritevIOContext(std::span<const struct iovec> iovecs)
         : m_iovecs(iovecs) {
@@ -525,9 +572,9 @@ struct WritevIOContext: public IOContextBase {
     }
 
 #ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;  ///< 处理 io_uring writev 完成事件
 #else
-    bool handleComplete(GHandle handle) override;
+    bool handleComplete(GHandle handle) override;  ///< 处理传统后端 writev 就绪事件
 #endif
 
     static size_t validateBorrowedCountOrAbort(size_t count, size_t capacity, const char* op) {
@@ -542,8 +589,8 @@ struct WritevIOContext: public IOContextBase {
         std::abort();
     }
 
-    std::span<const struct iovec> m_iovecs;
-    std::expected<size_t, IOError> m_result;
+    std::span<const struct iovec> m_iovecs;  ///< 借用的 iovec 数组视图
+    std::expected<size_t, IOError> m_result;  ///< 实际写入字节数或错误
 
 #ifdef USE_IOURING
     void initMsghdr() {
@@ -551,10 +598,13 @@ struct WritevIOContext: public IOContextBase {
         m_msg.msg_iovlen = m_iovecs.size();
     }
 
-    struct msghdr m_msg{};
+    struct msghdr m_msg{};  ///< io_uring 使用的辅助 msghdr
 #endif
 };
 
+/**
+ * @brief writev 的可等待对象
+ */
 struct WritevAwaitable: public WritevIOContext, public TimeoutSupport<WritevAwaitable> {
     WritevAwaitable(IOController* controller, std::span<const struct iovec> iovecs)
         : WritevIOContext(iovecs), m_controller(controller) {}
@@ -573,28 +623,34 @@ struct WritevAwaitable: public WritevIOContext, public TimeoutSupport<WritevAwai
         return detail::suspendRegisteredAwaitable<WritevAwaitable, WRITEV, kSendFailed>(
             *this, handle);
     }
-    std::expected<size_t, IOError> await_resume();
+    std::expected<size_t, IOError> await_resume();  ///< 返回实际写入字节数或错误
 
-    IOController* m_controller;
-    Waker m_waker;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
 };
 
 // ---- Connect ----
 
+/**
+ * @brief connect 操作的上下文
+ */
 struct ConnectIOContext: public IOContextBase {
     ConnectIOContext(const Host& host)
         : m_host(host) {}
 
 #ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;  ///< 处理 io_uring connect 完成事件
 #else
-    bool handleComplete(GHandle handle) override;
+    bool handleComplete(GHandle handle) override;  ///< 处理传统后端 connect 就绪事件
 #endif
 
-    Host m_host;
-    std::expected<void, IOError> m_result;
+    Host m_host;  ///< 目标地址
+    std::expected<void, IOError> m_result;  ///< 连接结果
 };
 
+/**
+ * @brief connect 的可等待对象
+ */
 struct ConnectAwaitable: public ConnectIOContext, public TimeoutSupport<ConnectAwaitable> {
     ConnectAwaitable(IOController* controller, const Host& host)
         : ConnectIOContext(host), m_controller(controller) {}
@@ -605,14 +661,18 @@ struct ConnectAwaitable: public ConnectIOContext, public TimeoutSupport<ConnectA
         return detail::suspendRegisteredAwaitable<ConnectAwaitable, CONNECT, kConnectFailed>(
             *this, handle);
     }
-    std::expected<void, IOError> await_resume();
+    std::expected<void, IOError> await_resume();  ///< 返回连接结果；失败时返回 IOError
 
-    IOController* m_controller;
-    Waker m_waker;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
 };
 
 // ---- Close (直接继承 AwaitableBase，无 IOContext) ----
 
+/**
+ * @brief close 的可等待对象
+ * @details 关闭请求会立即尝试向当前 IO scheduler 提交，恢复后返回关闭结果。
+ */
 struct CloseAwaitable: public AwaitableBase, public TimeoutSupport<CloseAwaitable> {
     CloseAwaitable(IOController* controller)
         : m_controller(controller) {}
@@ -634,37 +694,43 @@ struct CloseAwaitable: public AwaitableBase, public TimeoutSupport<CloseAwaitabl
         m_result = std::unexpected(IOError(kDisconnectError, detail::normalizeAwaitableErrno(res)));
         return false;
     }
-    std::expected<void, IOError> await_resume();
+    std::expected<void, IOError> await_resume();  ///< 返回关闭结果；失败时返回 IOError
 
-    IOController* m_controller;
-    Waker m_waker;
-    std::expected<void, IOError> m_result;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
+    std::expected<void, IOError> m_result;  ///< 关闭操作结果
 };
 
 // ---- RecvFrom ----
 
+/**
+ * @brief recvfrom 操作的上下文
+ */
 struct RecvFromIOContext: public IOContextBase {
     RecvFromIOContext(char* buffer, size_t length, Host* from)
         : m_buffer(buffer), m_length(length), m_from(from) {}
 
 #ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;  ///< 处理 io_uring recvfrom 完成事件
 #else
-    bool handleComplete(GHandle handle) override;
+    bool handleComplete(GHandle handle) override;  ///< 处理传统后端 recvfrom 就绪事件
 #endif
 
-    char* m_buffer;
-    size_t m_length;
-    Host* m_from;
-    std::expected<size_t, IOError> m_result;
+    char* m_buffer;  ///< 接收缓冲区
+    size_t m_length;  ///< 请求接收的最大字节数
+    Host* m_from;  ///< 输出对端地址；允许为 nullptr
+    std::expected<size_t, IOError> m_result;  ///< 实际接收字节数或错误
 
 #ifdef USE_IOURING
-    struct msghdr m_msg;
-    struct iovec m_iov;
-    sockaddr_storage m_addr;
+    struct msghdr m_msg;  ///< io_uring 使用的辅助 msghdr
+    struct iovec m_iov;  ///< io_uring 使用的单段 iovec
+    sockaddr_storage m_addr;  ///< io_uring 使用的临时地址缓冲
 #endif
 };
 
+/**
+ * @brief recvfrom 的可等待对象
+ */
 struct RecvFromAwaitable: public RecvFromIOContext, public TimeoutSupport<RecvFromAwaitable> {
     RecvFromAwaitable(IOController* controller, char* buffer, size_t length, Host* from)
         : RecvFromIOContext(buffer, length, from), m_controller(controller) {}
@@ -675,35 +741,41 @@ struct RecvFromAwaitable: public RecvFromIOContext, public TimeoutSupport<RecvFr
         return detail::suspendRegisteredAwaitable<RecvFromAwaitable, RECVFROM, kRecvFailed>(
             *this, handle);
     }
-    std::expected<size_t, IOError> await_resume();
+    std::expected<size_t, IOError> await_resume();  ///< 返回实际接收字节数或错误
 
-    IOController* m_controller;
-    Waker m_waker;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
 };
 
 // ---- SendTo ----
 
+/**
+ * @brief sendto 操作的上下文
+ */
 struct SendToIOContext: public IOContextBase {
     SendToIOContext(const char* buffer, size_t length, const Host& to)
         : m_buffer(buffer), m_length(length), m_to(to) {}
 
 #ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;  ///< 处理 io_uring sendto 完成事件
 #else
-    bool handleComplete(GHandle handle) override;
+    bool handleComplete(GHandle handle) override;  ///< 处理传统后端 sendto 就绪事件
 #endif
 
-    const char* m_buffer;
-    size_t m_length;
-    Host m_to;
-    std::expected<size_t, IOError> m_result;
+    const char* m_buffer;  ///< 发送缓冲区
+    size_t m_length;  ///< 请求发送的字节数
+    Host m_to;  ///< 目标地址
+    std::expected<size_t, IOError> m_result;  ///< 实际发送字节数或错误
 
 #ifdef USE_IOURING
-    struct msghdr m_msg;
-    struct iovec m_iov;
+    struct msghdr m_msg;  ///< io_uring 使用的辅助 msghdr
+    struct iovec m_iov;  ///< io_uring 使用的单段 iovec
 #endif
 };
 
+/**
+ * @brief sendto 的可等待对象
+ */
 struct SendToAwaitable: public SendToIOContext, public TimeoutSupport<SendToAwaitable> {
     SendToAwaitable(IOController* controller, const char* buffer, size_t length, const Host& to)
         : SendToIOContext(buffer, length, to), m_controller(controller) {}
@@ -714,14 +786,17 @@ struct SendToAwaitable: public SendToIOContext, public TimeoutSupport<SendToAwai
         return detail::suspendRegisteredAwaitable<SendToAwaitable, SENDTO, kSendFailed>(
             *this, handle);
     }
-    std::expected<size_t, IOError> await_resume();
+    std::expected<size_t, IOError> await_resume();  ///< 返回实际发送字节数或错误
 
-    IOController* m_controller;
-    Waker m_waker;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
 };
 
 // ---- FileRead ----
 
+/**
+ * @brief 文件读操作的上下文
+ */
 struct FileReadIOContext: public IOContextBase {
 #ifdef USE_EPOLL
     FileReadIOContext(char* buffer, size_t length, off_t offset,
@@ -734,24 +809,27 @@ struct FileReadIOContext: public IOContextBase {
 #endif
 
 #ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;  ///< 处理 io_uring 文件读完成事件
 #else
-    bool handleComplete(GHandle handle) override;
+    bool handleComplete(GHandle handle) override;  ///< 处理传统后端文件读完成事件
 #endif
 
-    char* m_buffer;
-    size_t m_length;
-    off_t m_offset;
-    std::expected<size_t, IOError> m_result;
+    char* m_buffer;  ///< 读取缓冲区
+    size_t m_length;  ///< 请求读取的字节数
+    off_t m_offset;  ///< 文件偏移
+    std::expected<size_t, IOError> m_result;  ///< 实际读取字节数或错误
 
 #ifdef USE_EPOLL
-    int m_event_fd;
-    io_context_t m_aio_ctx;
-    size_t m_expect_count;
-    size_t m_finished_count{0};
+    int m_event_fd;  ///< epoll + libaio 模式下的 eventfd
+    io_context_t m_aio_ctx;  ///< epoll + libaio 模式下的 AIO 上下文
+    size_t m_expect_count;  ///< 期望完成的 AIO 操作数
+    size_t m_finished_count{0};  ///< 已完成的 AIO 操作数
 #endif
 };
 
+/**
+ * @brief 文件读的可等待对象
+ */
 struct FileReadAwaitable: public FileReadIOContext, public TimeoutSupport<FileReadAwaitable> {
 #ifdef USE_EPOLL
     FileReadAwaitable(IOController* controller,
@@ -772,14 +850,17 @@ struct FileReadAwaitable: public FileReadIOContext, public TimeoutSupport<FileRe
         return detail::suspendRegisteredAwaitable<FileReadAwaitable, FILEREAD, kReadFailed>(
             *this, handle);
     }
-    std::expected<size_t, IOError> await_resume();
+    std::expected<size_t, IOError> await_resume();  ///< 返回实际读取字节数或错误
 
-    IOController* m_controller;
-    Waker m_waker;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
 };
 
 // ---- FileWrite ----
 
+/**
+ * @brief 文件写操作的上下文
+ */
 struct FileWriteIOContext: public IOContextBase {
 #ifdef USE_EPOLL
     FileWriteIOContext(const char* buffer, size_t length, off_t offset,
@@ -792,24 +873,27 @@ struct FileWriteIOContext: public IOContextBase {
 #endif
 
 #ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;  ///< 处理 io_uring 文件写完成事件
 #else
-    bool handleComplete(GHandle handle) override;
+    bool handleComplete(GHandle handle) override;  ///< 处理传统后端文件写完成事件
 #endif
 
-    const char* m_buffer;
-    size_t m_length;
-    off_t m_offset;
-    std::expected<size_t, IOError> m_result;
+    const char* m_buffer;  ///< 写入缓冲区
+    size_t m_length;  ///< 请求写入的字节数
+    off_t m_offset;  ///< 文件偏移
+    std::expected<size_t, IOError> m_result;  ///< 实际写入字节数或错误
 
 #ifdef USE_EPOLL
-    int m_event_fd;
-    io_context_t m_aio_ctx;
-    size_t m_expect_count;
-    size_t m_finished_count{0};
+    int m_event_fd;  ///< epoll + libaio 模式下的 eventfd
+    io_context_t m_aio_ctx;  ///< epoll + libaio 模式下的 AIO 上下文
+    size_t m_expect_count;  ///< 期望完成的 AIO 操作数
+    size_t m_finished_count{0};  ///< 已完成的 AIO 操作数
 #endif
 };
 
+/**
+ * @brief 文件写的可等待对象
+ */
 struct FileWriteAwaitable: public FileWriteIOContext, public TimeoutSupport<FileWriteAwaitable> {
 #ifdef USE_EPOLL
     FileWriteAwaitable(IOController* controller,
@@ -830,14 +914,17 @@ struct FileWriteAwaitable: public FileWriteIOContext, public TimeoutSupport<File
         return detail::suspendRegisteredAwaitable<FileWriteAwaitable, FILEWRITE, kWriteFailed>(
             *this, handle);
     }
-    std::expected<size_t, IOError> await_resume();
+    std::expected<size_t, IOError> await_resume();  ///< 返回实际写入字节数或错误
 
-    IOController* m_controller;
-    Waker m_waker;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
 };
 
 // ---- FileWatch ----
 
+/**
+ * @brief 文件监控操作的上下文
+ */
 struct FileWatchIOContext: public IOContextBase {
 #ifdef USE_KQUEUE
     FileWatchIOContext(char* buffer, size_t buffer_size, FileWatchEvent events)
@@ -848,19 +935,22 @@ struct FileWatchIOContext: public IOContextBase {
 #endif
 
 #ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;  ///< 处理 io_uring 文件监控完成事件
 #else
-    bool handleComplete(GHandle handle) override;
+    bool handleComplete(GHandle handle) override;  ///< 处理传统后端文件监控事件
 #endif
 
-    char* m_buffer;
-    size_t m_buffer_size;
+    char* m_buffer;  ///< 监控事件输出缓冲区
+    size_t m_buffer_size;  ///< 输出缓冲区容量
 #ifdef USE_KQUEUE
-    FileWatchEvent m_events;
+    FileWatchEvent m_events;  ///< kqueue 模式下的监控事件掩码
 #endif
-    std::expected<FileWatchResult, IOError> m_result;
+    std::expected<FileWatchResult, IOError> m_result;  ///< 文件监控结果或错误
 };
 
+/**
+ * @brief 文件监控的可等待对象
+ */
 struct FileWatchAwaitable: public FileWatchIOContext, public TimeoutSupport<FileWatchAwaitable> {
 #ifdef USE_KQUEUE
     FileWatchAwaitable(IOController* controller,
@@ -881,30 +971,36 @@ struct FileWatchAwaitable: public FileWatchIOContext, public TimeoutSupport<File
         return detail::suspendRegisteredAwaitable<FileWatchAwaitable, FILEWATCH, kReadFailed>(
             *this, handle);
     }
-    std::expected<FileWatchResult, IOError> await_resume();
+    std::expected<FileWatchResult, IOError> await_resume();  ///< 返回文件监控结果或错误
 
-    IOController* m_controller;
-    Waker m_waker;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
 };
 
 // ---- SendFile ----
 
+/**
+ * @brief sendfile 操作的上下文
+ */
 struct SendFileIOContext: public IOContextBase {
     SendFileIOContext(int file_fd, off_t offset, size_t count)
         : m_file_fd(file_fd), m_offset(offset), m_count(count) {}
 
 #ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;
+    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override;  ///< 处理 io_uring sendfile 完成事件
 #else
-    bool handleComplete(GHandle handle) override;
+    bool handleComplete(GHandle handle) override;  ///< 处理传统后端 sendfile 就绪事件
 #endif
 
-    int m_file_fd;
-    off_t m_offset;
-    size_t m_count;
-    std::expected<size_t, IOError> m_result;
+    int m_file_fd;  ///< 源文件 fd
+    off_t m_offset;  ///< 发送起始偏移
+    size_t m_count;  ///< 请求发送的字节数
+    std::expected<size_t, IOError> m_result;  ///< 实际发送字节数或错误
 };
 
+/**
+ * @brief sendfile 的可等待对象
+ */
 struct SendFileAwaitable: public SendFileIOContext, public TimeoutSupport<SendFileAwaitable> {
     SendFileAwaitable(IOController* controller, int file_fd, off_t offset, size_t count)
         : SendFileIOContext(file_fd, offset, count), m_controller(controller) {}
@@ -915,46 +1011,59 @@ struct SendFileAwaitable: public SendFileIOContext, public TimeoutSupport<SendFi
         return detail::suspendRegisteredAwaitable<SendFileAwaitable, SENDFILE, kSendFailed>(
             *this, handle);
     }
-    std::expected<size_t, IOError> await_resume();
+    std::expected<size_t, IOError> await_resume();  ///< 返回实际发送字节数或错误
 
-    IOController* m_controller;
-    Waker m_waker;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
 };
 
+/**
+ * @brief Sequence awaitable 的推进结果
+ */
 enum class SequenceProgress {
-    kNeedWait,
-    kCompleted,
+    kNeedWait,    ///< 还需要等待新的 IO 事件
+    kCompleted,   ///< 当前 sequence 已结束
 };
 
+/**
+ * @brief parser 步骤的推进结果
+ */
 enum class ParseStatus {
-    kNeedMore,
-    kContinue,
-    kCompleted,
+    kNeedMore,    ///< 需要重新挂载接收步骤以获取更多输入
+    kContinue,    ///< 继续执行后续步骤
+    kCompleted,   ///< 当前 parser 步骤已完成
 };
 
+/**
+ * @brief 状态机对外发出的动作信号
+ */
 enum class MachineSignal {
-    kContinue,
-    kWaitRead,
-    kWaitReadv,
-    kWaitWrite,
-    kWaitWritev,
-    kWaitConnect,
-    kComplete,
-    kFail,
+    kContinue,     ///< 继续内联推进状态机
+    kWaitRead,     ///< 等待 recv
+    kWaitReadv,    ///< 等待 readv
+    kWaitWrite,    ///< 等待 send
+    kWaitWritev,   ///< 等待 writev
+    kWaitConnect,  ///< 等待 connect
+    kComplete,     ///< 状态机已完成并产生结果
+    kFail,         ///< 状态机失败
 };
 
 template <typename ResultT>
+/**
+ * @brief 状态机单步动作描述
+ * @tparam ResultT 状态机结果类型
+ */
 struct MachineAction {
-    MachineSignal signal = MachineSignal::kContinue;
-    char* read_buffer = nullptr;
-    size_t read_length = 0;
-    const struct iovec* iovecs = nullptr;
-    size_t iov_count = 0;
-    const char* write_buffer = nullptr;
-    size_t write_length = 0;
-    Host connect_host{};
-    std::optional<ResultT> result;
-    std::optional<IOError> error;
+    MachineSignal signal = MachineSignal::kContinue;  ///< 当前动作类型
+    char* read_buffer = nullptr;  ///< read/recv 目标缓冲区
+    size_t read_length = 0;  ///< read/recv 请求长度
+    const struct iovec* iovecs = nullptr;  ///< readv/writev 的 iovec 指针
+    size_t iov_count = 0;  ///< iovec 数量
+    const char* write_buffer = nullptr;  ///< send/write 源缓冲区
+    size_t write_length = 0;  ///< send/write 请求长度
+    Host connect_host{};  ///< connect 目标地址
+    std::optional<ResultT> result;  ///< 成功结果
+    std::optional<IOError> error;  ///< 失败结果
 
     static MachineAction continue_() {
         return MachineAction{};
@@ -1023,11 +1132,18 @@ concept AwaitableStateMachine =
         { machine.onWrite(std::move(io_result)) } -> std::same_as<void>;
     };
 
+/**
+ * @brief 组合式 sequence awaitable 的抽象基类
+ * @details 负责占用 IOController 的读写域、统一挂起/恢复流程以及错误传递。
+ */
 struct SequenceAwaitableBase: public AwaitableBase {
+    /**
+     * @brief sequence 队列中的单个任务条目
+     */
     struct IOTask {
-        IOEventType type;
-        void* task = nullptr;
-        IOContextBase* context = nullptr;
+        IOEventType type;  ///< 默认事件类型
+        void* task = nullptr;  ///< 具体任务对象指针
+        IOContextBase* context = nullptr;  ///< 具体 IO 上下文指针
     };
 
     explicit SequenceAwaitableBase(IOController* controller,
@@ -1036,10 +1152,10 @@ struct SequenceAwaitableBase: public AwaitableBase {
         , m_requested_domain(requested_domain)
         , m_registered_domain(requested_domain) {}
 
-    virtual IOTask* front() = 0;
-    virtual const IOTask* front() const = 0;
-    virtual void popFront() = 0;
-    virtual bool empty() const = 0;
+    virtual IOTask* front() = 0;  ///< 返回当前队首任务；为空时返回 nullptr
+    virtual const IOTask* front() const = 0;  ///< 返回当前队首任务的只读视图；为空时返回 nullptr
+    virtual void popFront() = 0;  ///< 弹出当前队首任务
+    virtual bool empty() const = 0;  ///< 当前是否没有待执行的 sequence 条目
 
     IOEventType resolveTaskEventType(const IOTask& task) const {
         if (task.context == nullptr) {
@@ -1133,19 +1249,19 @@ struct SequenceAwaitableBase: public AwaitableBase {
     }
 
 #ifdef USE_IOURING
-    virtual SequenceProgress prepareForSubmit() = 0;
-    virtual SequenceProgress onActiveEvent(struct io_uring_cqe* cqe, GHandle handle) = 0;
+    virtual SequenceProgress prepareForSubmit() = 0;  ///< 为 io_uring 准备下一条待提交任务
+    virtual SequenceProgress onActiveEvent(struct io_uring_cqe* cqe, GHandle handle) = 0;  ///< 处理 io_uring 当前活动任务的完成事件
 #else
-    virtual SequenceProgress prepareForSubmit(GHandle handle) = 0;
-    virtual SequenceProgress onActiveEvent(GHandle handle) = 0;
+    virtual SequenceProgress prepareForSubmit(GHandle handle) = 0;  ///< 为传统后端准备下一条待执行任务
+    virtual SequenceProgress onActiveEvent(GHandle handle) = 0;  ///< 处理传统后端当前活动任务的就绪事件
 #endif
 
-    std::optional<IOError> m_error;
-    IOController* m_controller;
-    Waker m_waker;
-    SequenceOwnerDomain m_requested_domain = SequenceOwnerDomain::ReadWrite;
-    SequenceOwnerDomain m_registered_domain = SequenceOwnerDomain::ReadWrite;
-    bool m_registered = false;
+    std::optional<IOError> m_error;  ///< 当前 sequence 错误
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    Waker m_waker;  ///< 恢复等待协程的唤醒器
+    SequenceOwnerDomain m_requested_domain = SequenceOwnerDomain::ReadWrite;  ///< 期望占用的读写域
+    SequenceOwnerDomain m_registered_domain = SequenceOwnerDomain::ReadWrite;  ///< 实际已登记的读写域
+    bool m_registered = false;  ///< 当前是否已登记到 controller
 };
 
 namespace detail {
@@ -1242,6 +1358,11 @@ class ReadyAwaitable;
 template <typename ResultT, size_t InlineN, typename FlowT>
 class AwaitableBuilder;
 
+/**
+ * @brief Sequence awaitable 的辅助操作视图
+ * @tparam ResultT sequence 结果类型
+ * @tparam InlineN sequence 的内联任务容量
+ */
 template <typename ResultT, size_t InlineN = 4>
 class SequenceOps {
 public:
@@ -1272,20 +1393,29 @@ private:
     SequenceAwaitable<ResultT, InlineN>& m_owner;
 };
 
+/**
+ * @brief 固定容量的组合式 sequence awaitable
+ * @tparam ResultT sequence 结果类型
+ * @tparam InlineN 可内联存放的任务条目数
+ */
 template <typename ResultT, size_t InlineN>
 class SequenceAwaitable : public SequenceAwaitableBase {
 public:
+    /**
+     * @brief sequence 中单个步骤的抽象基类
+     * @details 支持纯本地步骤与真实 IO 步骤的统一排队和回调分发。
+     */
     struct TaskBase {
         virtual ~TaskBase() = default;
-        virtual IOContextBase* contextBase() = 0;
-        virtual IOEventType defaultEventType() const = 0;
-        virtual void beforeSubmit() {}
-        virtual bool isLocal() const = 0;
+        virtual IOContextBase* contextBase() = 0;  ///< 返回步骤关联的 IOContext；本地步骤可返回 nullptr
+        virtual IOEventType defaultEventType() const = 0;  ///< 返回该步骤默认使用的 IO 事件类型
+        virtual void beforeSubmit() {}  ///< 在真正提交给后端前执行的可选钩子
+        virtual bool isLocal() const = 0;  ///< 当前步骤是否为纯本地步骤
 #ifdef USE_IOURING
-        virtual bool onEvent(SequenceAwaitable& owner, struct io_uring_cqe* cqe, GHandle handle) = 0;
+        virtual bool onEvent(SequenceAwaitable& owner, struct io_uring_cqe* cqe, GHandle handle) = 0;  ///< 处理 io_uring 事件并返回该步骤是否完成
 #else
-        virtual bool onReady(SequenceAwaitable& owner, GHandle handle) = 0;
-        virtual bool onEvent(SequenceAwaitable& owner, GHandle handle) = 0;
+        virtual bool onReady(SequenceAwaitable& owner, GHandle handle) = 0;  ///< 在传统后端提交前尝试同步推进该步骤
+        virtual bool onEvent(SequenceAwaitable& owner, GHandle handle) = 0;  ///< 处理传统后端就绪事件并返回该步骤是否完成
 #endif
     };
 
@@ -1395,7 +1525,7 @@ public:
         clear();
     }
 
-    SequenceOps<ResultT, InlineN> ops() {
+    SequenceOps<ResultT, InlineN> ops() {  ///< 返回 sequence 操作辅助视图
         return SequenceOps<ResultT, InlineN>(*this);
     }
 
@@ -1525,17 +1655,21 @@ private:
         }
     }
 
-    std::array<IOTask, InlineN> m_tasks{};
-    size_t m_head = 0;
-    size_t m_size = 0;
-    std::optional<ResultT> m_result;
-    bool m_result_set = false;
+    std::array<IOTask, InlineN> m_tasks{};  ///< 环形任务缓冲区
+    size_t m_head = 0;  ///< 队首索引
+    size_t m_size = 0;  ///< 当前排队任务数
+    std::optional<ResultT> m_result;  ///< sequence 成功结果
+    bool m_result_set = false;  ///< sequence 是否已经产出成功结果
 };
 
+/**
+ * @brief 立即就绪的 awaitable
+ * @tparam ResultT 返回值类型
+ */
 template <typename ResultT>
 class ReadyAwaitable : public TimeoutSupport<ReadyAwaitable<ResultT>> {
 public:
-    using result_type = ResultT;
+    using result_type = ResultT;  ///< await_resume() 返回值类型
 
     explicit ReadyAwaitable(ResultT ready_result)
         : m_ready_result(std::move(ready_result)) {}
@@ -1554,9 +1688,13 @@ public:
     }
 
 private:
-    ResultT m_ready_result;
+    ResultT m_ready_result;  ///< 预先准备好的结果值
 };
 
+/**
+ * @brief 基于用户状态机的 sequence awaitable
+ * @tparam MachineT 满足 AwaitableStateMachine 概念的状态机类型
+ */
 template <AwaitableStateMachine MachineT>
 class StateMachineAwaitable
     : public SequenceAwaitableBase
@@ -1842,13 +1980,16 @@ public:
 #endif
 
 private:
+    /**
+     * @brief 当前活动 IO 步骤类型
+     */
     enum class ActiveKind {
-        kNone,
-        kRead,
-        kReadv,
-        kWrite,
-        kWritev,
-        kConnect,
+        kNone,      ///< 当前没有活动 IO
+        kRead,      ///< 当前活动步骤为 recv/read
+        kReadv,     ///< 当前活动步骤为 readv
+        kWrite,     ///< 当前活动步骤为 send/write
+        kWritev,    ///< 当前活动步骤为 writev
+        kConnect,   ///< 当前活动步骤为 connect
     };
 
     static constexpr size_t kInlineTransitionCap = 64;
@@ -1981,20 +2122,24 @@ private:
         m_active_kind = ActiveKind::kNone;
     }
 
-    MachineT m_machine;
-    RecvIOContext m_recv_context;
-    ReadvIOContext m_readv_context;
-    SendIOContext m_send_context;
-    WritevIOContext m_writev_context;
-    ConnectIOContext m_connect_context;
-    IOTask m_active_task{};
-    bool m_has_active_task = false;
-    ActiveKind m_active_kind = ActiveKind::kNone;
-    bool m_context_bound = false;
-    std::optional<result_type> m_result;
-    bool m_result_set = false;
+    MachineT m_machine;  ///< 用户提供的状态机对象
+    RecvIOContext m_recv_context;  ///< 复用的 recv 上下文
+    ReadvIOContext m_readv_context;  ///< 复用的 readv 上下文
+    SendIOContext m_send_context;  ///< 复用的 send 上下文
+    WritevIOContext m_writev_context;  ///< 复用的 writev 上下文
+    ConnectIOContext m_connect_context;  ///< 复用的 connect 上下文
+    IOTask m_active_task{};  ///< 当前已激活的 sequence 任务
+    bool m_has_active_task = false;  ///< 当前是否已有活动任务
+    ActiveKind m_active_kind = ActiveKind::kNone;  ///< 当前活动任务类型
+    bool m_context_bound = false;  ///< 是否已把 AwaitContext 绑定给状态机
+    std::optional<result_type> m_result;  ///< 状态机成功结果
+    bool m_result_set = false;  ///< 状态机是否已产出成功结果
 };
 
+/**
+ * @brief 状态机构造器
+ * @tparam MachineT 状态机类型
+ */
 template <AwaitableStateMachine MachineT>
 class StateMachineBuilder {
 public:
@@ -2011,12 +2156,20 @@ public:
     }
 
 private:
-    IOController* m_controller;
-    MachineT m_machine;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    MachineT m_machine;  ///< 用户提供的状态机实例
 };
 
+/**
+ * @brief 绑定 IOContext 的 sequence 步骤
+ * @tparam ResultT sequence 结果类型
+ * @tparam InlineN 内联任务容量
+ * @tparam FlowT 宿主 flow 类型
+ * @tparam BaseContextT 具体 IOContext 类型
+ * @tparam Handler 宿主 flow 上的回调成员函数
+ */
 template <typename ResultT, size_t InlineN, typename FlowT, typename BaseContextT, auto Handler>
-struct SequenceStep : public SequenceAwaitable<ResultT, InlineN>::TaskBase, public BaseContextT {
+struct SequenceStep : public SequenceAwaitable<ResultT, InlineN>::TaskBase, public BaseContextT {  ///< 绑定具体 IOContext 的 sequence 步骤实现
     static_assert(std::is_base_of_v<IOContextBase, BaseContextT>,
                   "SequenceStep requires an IOContextBase-derived base context");
 
@@ -2067,9 +2220,12 @@ struct SequenceStep : public SequenceAwaitable<ResultT, InlineN>::TaskBase, publ
 #endif
 
 private:
-    FlowT* m_owner;
+    FlowT* m_owner;  ///< 宿主 flow 对象
 };
 
+/**
+ * @brief 纯本地 sequence 步骤
+ */
 template <typename ResultT, size_t InlineN, typename FlowT, auto Handler>
 struct LocalSequenceStep : public SequenceAwaitable<ResultT, InlineN>::TaskBase {
     explicit LocalSequenceStep(FlowT* owner)
@@ -2108,9 +2264,12 @@ struct LocalSequenceStep : public SequenceAwaitable<ResultT, InlineN>::TaskBase 
 #endif
 
 private:
-    FlowT* m_owner;
+    FlowT* m_owner;  ///< 宿主 flow 对象
 };
 
+/**
+ * @brief 带可重挂起接收逻辑的 parser 步骤
+ */
 template <typename ResultT, size_t InlineN, typename FlowT, auto Handler>
 struct ParserSequenceStep : public SequenceAwaitable<ResultT, InlineN>::TaskBase {
     explicit ParserSequenceStep(FlowT* owner,
@@ -2167,47 +2326,59 @@ private:
         return true;
     }
 
-    FlowT* m_owner;
-    typename SequenceAwaitable<ResultT, InlineN>::TaskBase* m_rearm_step;
+    FlowT* m_owner;  ///< 宿主 flow 对象
+    typename SequenceAwaitable<ResultT, InlineN>::TaskBase* m_rearm_step;  ///< NeedMore 时重新排队的接收步骤
 };
 
 namespace detail {
 
+/**
+ * @brief 线性状态机实现
+ * @tparam ResultT 线性状态机结果类型
+ * @tparam InlineN 内联 sequence 容量
+ * @tparam FlowT 宿主 flow 类型
+ */
 template <typename ResultT, size_t InlineN, typename FlowT>
 class LinearMachine {
 public:
-    using result_type = ResultT;
-    using OpsT = SequenceOps<ResultT, InlineN>;
+    using result_type = ResultT;  ///< 最终结果类型
+    using OpsT = SequenceOps<ResultT, InlineN>;  ///< 运行时可用的操作视图
 
-    static constexpr size_t kInvalidIndex = static_cast<size_t>(-1);
+    static constexpr size_t kInvalidIndex = static_cast<size_t>(-1);  ///< 无效节点索引哨兵值
 
+    /**
+     * @brief 线性状态机节点类型
+     */
     enum class NodeKind : uint8_t {
-        kRecv,
-        kReadv,
-        kSend,
-        kWritev,
-        kConnect,
-        kParse,
-        kLocal,
-        kFinish,
+        kRecv,     ///< recv 节点
+        kReadv,    ///< readv 节点
+        kSend,     ///< send 节点
+        kWritev,   ///< writev 节点
+        kConnect,  ///< connect 节点
+        kParse,    ///< parser 节点
+        kLocal,    ///< 本地同步节点
+        kFinish,   ///< 结束节点
     };
 
     using IOHandlerFn = void(*)(FlowT*, OpsT&, IOContextBase&);
     using LocalHandlerFn = void(*)(FlowT*, OpsT&);
     using ParseHandlerFn = ParseStatus(*)(FlowT*, OpsT&);
 
+    /**
+     * @brief 单个线性状态机节点描述
+     */
     struct Node {
-        NodeKind kind = NodeKind::kLocal;
-        IOHandlerFn io_handler = nullptr;
-        LocalHandlerFn local_handler = nullptr;
-        ParseHandlerFn parse_handler = nullptr;
-        char* read_buffer = nullptr;
-        const char* write_buffer = nullptr;
-        const struct iovec* iovecs = nullptr;
-        size_t iov_count = 0;
-        size_t io_length = 0;
-        Host connect_host{};
-        size_t parse_rearm_recv_index = kInvalidIndex;
+        NodeKind kind = NodeKind::kLocal;  ///< 节点类型
+        IOHandlerFn io_handler = nullptr;  ///< IO 节点回调
+        LocalHandlerFn local_handler = nullptr;  ///< 本地节点回调
+        ParseHandlerFn parse_handler = nullptr;  ///< parser 节点回调
+        char* read_buffer = nullptr;  ///< recv 缓冲区
+        const char* write_buffer = nullptr;  ///< send 缓冲区
+        const struct iovec* iovecs = nullptr;  ///< readv/writev iovec 指针
+        size_t iov_count = 0;  ///< iovec 数量
+        size_t io_length = 0;  ///< 单缓冲 IO 请求长度
+        Host connect_host{};  ///< connect 目标地址
+        size_t parse_rearm_recv_index = kInvalidIndex;  ///< parser NeedMore 时重挂起的接收节点索引
     };
 
     using NodeList = std::vector<Node>;
@@ -2453,13 +2624,16 @@ public:
     }
 
 private:
+    /**
+     * @brief 当前挂起中的 IO 类型
+     */
     enum class PendingIO : uint8_t {
-        kNone,
-        kRead,
-        kReadv,
-        kWrite,
-        kWritev,
-        kConnect,
+        kNone,     ///< 当前没有挂起 IO
+        kRead,     ///< 当前挂起 recv/read
+        kReadv,    ///< 当前挂起 readv
+        kWrite,    ///< 当前挂起 send/write
+        kWritev,   ///< 当前挂起 writev
+        kConnect,  ///< 当前挂起 connect
     };
 
     template <typename ContextT, auto Handler>
@@ -2604,31 +2778,37 @@ private:
         m_error = std::move(error);
     }
 
-    IOController* m_controller;
-    FlowT* m_flow;
-    NodeList m_nodes;
-    size_t m_cursor = 0;
-    PendingIO m_pending_io = PendingIO::kNone;
-    size_t m_pending_index = kInvalidIndex;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    FlowT* m_flow;  ///< 宿主 flow 对象
+    NodeList m_nodes;  ///< 线性节点列表
+    size_t m_cursor = 0;  ///< 当前执行到的节点索引
+    PendingIO m_pending_io = PendingIO::kNone;  ///< 当前挂起中的 IO 类型
+    size_t m_pending_index = kInvalidIndex;  ///< 当前挂起节点索引
 
-    SequenceAwaitable<ResultT, InlineN> m_ops_owner;
-    RecvIOContext m_recv_context;
-    ReadvIOContext m_readv_context;
-    SendIOContext m_send_context;
-    WritevIOContext m_writev_context;
-    ConnectIOContext m_connect_context;
+    SequenceAwaitable<ResultT, InlineN> m_ops_owner;  ///< 复用的 sequence 操作容器
+    RecvIOContext m_recv_context;  ///< recv 上下文缓存
+    ReadvIOContext m_readv_context;  ///< readv 上下文缓存
+    SendIOContext m_send_context;  ///< send 上下文缓存
+    WritevIOContext m_writev_context;  ///< writev 上下文缓存
+    ConnectIOContext m_connect_context;  ///< connect 上下文缓存
 
-    std::optional<result_type> m_result;
-    std::optional<IOError> m_error;
+    std::optional<result_type> m_result;  ///< 成功结果
+    std::optional<IOError> m_error;  ///< 错误结果
 };
 
 } // namespace detail
 
+/**
+ * @brief awaitable 构造器
+ * @tparam ResultT awaitable 结果类型
+ * @tparam InlineN 线性状态机和 sequence 的内联容量
+ * @tparam FlowT 宿主 flow 类型；默认为无宿主
+ */
 template <typename ResultT, size_t InlineN = 4, typename FlowT = void>
 class AwaitableBuilder {
 public:
-    using MachineT = detail::LinearMachine<ResultT, InlineN, FlowT>;
-    using MachineNode = typename MachineT::Node;
+    using MachineT = detail::LinearMachine<ResultT, InlineN, FlowT>;  ///< 内部线性状态机类型
+    using MachineNode = typename MachineT::Node;  ///< 线性状态机节点类型
 
     AwaitableBuilder(IOController* controller, FlowT& flow)
         : m_controller(controller)
@@ -2754,12 +2934,15 @@ private:
         );
     }
 
-    IOController* m_controller;
-    FlowT* m_flow;
-    std::vector<MachineNode> m_nodes;
-    size_t m_last_recv_index = MachineT::kInvalidIndex;
+    IOController* m_controller;  ///< 关联的 IO 控制器
+    FlowT* m_flow;  ///< 宿主 flow 对象
+    std::vector<MachineNode> m_nodes;  ///< 构造中的线性节点列表
+    size_t m_last_recv_index = MachineT::kInvalidIndex;  ///< 最近一次接收节点索引，供 parser 重挂起使用
 };
 
+/**
+ * @brief 无宿主 flow 的 awaitable builder 特化
+ */
 template <typename ResultT, size_t InlineN>
 class AwaitableBuilder<ResultT, InlineN, void> {
 public:
