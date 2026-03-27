@@ -310,7 +310,7 @@ configure_and_build() {
   local build_root="$2"
   local -a cmake_args=(
     -DCMAKE_BUILD_TYPE=Release
-    -DBUILD_TESTS=OFF
+    -DBUILD_TESTING=OFF
     -DBUILD_EXAMPLES=OFF
     -DBUILD_BENCHMARKS=ON
   )

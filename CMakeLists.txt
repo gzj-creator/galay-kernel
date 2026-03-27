@@ -10,6 +10,24 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # 构建选项 / 平台选项
 include(cmake/option.cmake)
 
+# 使用标准 BUILD_TESTING 作为测试主入口；未显式开启时默认关闭。
+# 保留 BUILD_TESTS 作为兼容别名，避免旧脚本立即失效。
+set(GALAY_KERNEL_BUILD_TESTS_COMPAT FALSE)
+if(DEFINED BUILD_TESTS AND NOT DEFINED BUILD_TESTING)
+    set(BUILD_TESTING ${BUILD_TESTS} CACHE BOOL "Build the testing tree." FORCE)
+    set(GALAY_KERNEL_BUILD_TESTS_COMPAT TRUE)
+elseif(NOT DEFINED BUILD_TESTING)
+    set(BUILD_TESTING OFF CACHE BOOL "Build the testing tree." FORCE)
+endif()
+
+# 在启用测试的构建树里，make test 应先构建 all 再执行 CTest。
+set(CMAKE_SKIP_TEST_ALL_DEPENDENCY FALSE)
+include(CTest)
+
+if(GALAY_KERNEL_BUILD_TESTS_COMPAT)
+    message(DEPRECATION "BUILD_TESTS is deprecated; use BUILD_TESTING instead.")
+endif()
+
 # C++23 命名模块有效性判定（参考 galay-rpc 规则）
 set(GALAY_KERNEL_CPP23_MODULES_EFFECTIVE FALSE)
 set(GALAY_KERNEL_MODULES_SUPPORTED FALSE)
@@ -84,7 +102,7 @@ message(STATUS "galay-kernel backend selected: ${GALAY_KERNEL_BACKEND}")
 # 包含子目录
 add_subdirectory(galay-kernel)
 
-if(BUILD_TESTS)
+if(BUILD_TESTING)
     add_subdirectory(test)
 endif()
 

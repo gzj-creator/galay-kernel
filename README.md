@@ -109,8 +109,10 @@
 
 ## 快速构建
 
+默认情况下 `BUILD_TESTING=OFF`，适合发布或只构建库本体。需要开发验证时，再显式打开测试树：
+
 ```bash
-cmake -S . -B build -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON -DBUILD_BENCHMARKS=ON
+cmake -S . -B build -DBUILD_TESTING=ON -DBUILD_EXAMPLES=ON -DBUILD_BENCHMARKS=ON
 cmake --build build --parallel
 ```
 
@@ -177,7 +179,7 @@ python3 -m unittest \
   scripts.tests.test_run_single_benchmark_triplet \
   scripts.tests.test_parse_benchmark_triplet
 
-cmake -S . -B build-awaitable-state-machine -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON -DBUILD_BENCHMARKS=ON
+cmake -S . -B build-awaitable-state-machine -DBUILD_TESTING=ON -DBUILD_EXAMPLES=ON -DBUILD_BENCHMARKS=ON
 cmake --build build-awaitable-state-machine --parallel
 
 bash scripts/run_test_matrix.sh \

@@ -1,7 +1,7 @@
 # 测试可执行文件 - 自动扫描目录
 
-# 扫描所有 T*.cc 测试文件
-file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "T*.cc")
+# 扫描 test/ 下所有测试源文件，并统一注册到 CTest
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "*.cc")
 
 # 为每个测试文件创建可执行文件
 foreach(TEST_SOURCE ${TEST_SOURCES})
@@ -12,4 +12,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     add_executable(${TEST_NAME} ${TEST_SOURCE})
     target_link_libraries(${TEST_NAME} PRIVATE galay-kernel)
     target_include_directories(${TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR})
+
+    add_test(NAME ${TEST_NAME} COMMAND $<TARGET_FILE:${TEST_NAME}>)
+    set_tests_properties(${TEST_NAME} PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endforeach()
