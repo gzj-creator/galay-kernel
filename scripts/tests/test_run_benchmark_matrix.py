@@ -206,6 +206,7 @@ class RunBenchmarkMatrixTest(unittest.TestCase):
                     **os.environ,
                     "BENCH_TIMEOUT_SECONDS": "1",
                     "BENCH_TIMEOUT_KILL_AFTER_SECONDS": "1",
+                    "BENCH_SERVER_STARTUP_SECONDS": "0.1",
                 },
             )
 

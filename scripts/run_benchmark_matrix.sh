@@ -86,6 +86,7 @@ else
 fi
 BENCH_TIMEOUT_KILL_AFTER_SECONDS="${BENCH_TIMEOUT_KILL_AFTER_SECONDS:-2}"
 BENCH_REPEAT_COOLDOWN_SECONDS="${BENCH_REPEAT_COOLDOWN_SECONDS:-2}"
+BENCH_SERVER_STARTUP_SECONDS="${BENCH_SERVER_STARTUP_SECONDS:-1}"
 
 if [[ ! -d "$BIN_DIR" ]]; then
   echo "bin dir not found: $BIN_DIR" >&2
@@ -268,7 +269,7 @@ run_matrix_once() {
     "${server_cmd[@]}" </dev/null >"$server_log" 2>&1 &
     server_pid=$!
     trap 'cleanup_pid "$server_pid"' EXIT
-    sleep 1
+    sleep "$BENCH_SERVER_STARTUP_SECONDS"
     run_with_timeout "$client" "$client_log" "${client_cmd[@]}"
     cleanup_pid "$server_pid"
     trap - EXIT

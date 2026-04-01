@@ -102,7 +102,7 @@ int KqueueReactor::addConnect(IOController* controller) {
         return 1;
     }
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -113,7 +113,7 @@ int KqueueReactor::addRecv(IOController* controller) {
         return 1;
     }
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -124,7 +124,7 @@ int KqueueReactor::addSend(IOController* controller) {
         return 1;
     }
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -135,7 +135,7 @@ int KqueueReactor::addReadv(IOController* controller) {
         return 1;
     }
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -146,7 +146,7 @@ int KqueueReactor::addWritev(IOController* controller) {
         return 1;
     }
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -241,7 +241,7 @@ int KqueueReactor::addSendFile(IOController* controller) {
         return 1;
     }
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -354,23 +354,17 @@ void KqueueReactor::processEvent(struct kevent& ev) {
 
     if (t & SEQUENCE) {
         SequenceAwaitableBase* owner = nullptr;
-        uint8_t fired_mask = 0;
         if (ev.filter == EVFILT_READ) {
-            fired_mask = detail::sequenceSlotMask(IOController::READ);
             owner = controller->m_sequence_owner[IOController::READ];
             if (owner != nullptr && !owner->waitsOn(IOController::READ)) {
                 owner = nullptr;
             }
         } else if (ev.filter == EVFILT_WRITE) {
-            fired_mask = detail::sequenceSlotMask(IOController::WRITE);
             owner = controller->m_sequence_owner[IOController::WRITE];
             if (owner != nullptr && !owner->waitsOn(IOController::WRITE)) {
                 owner = nullptr;
             }
         }
-
-        controller->m_sequence_armed_mask =
-            static_cast<uint8_t>(controller->m_sequence_armed_mask & ~fired_mask);
 
         if (owner == nullptr) {
             return;
@@ -437,10 +431,10 @@ int KqueueReactor::applySequenceInterest(IOController* controller, uint8_t desir
         append_change(IOController::WRITE, EV_DELETE);
     }
     if (sequenceMaskUsesSlot(to_add, IOController::READ)) {
-        append_change(IOController::READ, EV_ADD | EV_ONESHOT);
+        append_change(IOController::READ, EV_ADD | EV_CLEAR);
     }
     if (sequenceMaskUsesSlot(to_add, IOController::WRITE)) {
-        append_change(IOController::WRITE, EV_ADD | EV_ONESHOT);
+        append_change(IOController::WRITE, EV_ADD | EV_CLEAR);
     }
 
     const int ret = kevent(m_kqueue_fd, evs, ev_count, nullptr, 0, nullptr);
