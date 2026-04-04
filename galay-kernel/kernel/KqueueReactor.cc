@@ -28,32 +28,32 @@ KqueueReactor::KqueueReactor(int max_events, std::atomic<uint64_t>& last_error_c
     }
 
     if (pipe(m_notify_pipe) == -1) {
-        close(m_kqueue_fd);
+        galay_close(m_kqueue_fd);
         throw std::runtime_error("Failed to create notification pipe");
     }
 
     int flags = fcntl(m_notify_pipe[0], F_GETFL, 0);
     if (flags < 0 || fcntl(m_notify_pipe[0], F_SETFL, flags | O_NONBLOCK) < 0) {
-        close(m_notify_pipe[0]);
-        close(m_notify_pipe[1]);
-        close(m_kqueue_fd);
+        galay_close(m_notify_pipe[0]);
+        galay_close(m_notify_pipe[1]);
+        galay_close(m_kqueue_fd);
         throw std::runtime_error("Failed to set notification pipe read end non-blocking");
     }
 
     flags = fcntl(m_notify_pipe[1], F_GETFL, 0);
     if (flags < 0 || fcntl(m_notify_pipe[1], F_SETFL, flags | O_NONBLOCK) < 0) {
-        close(m_notify_pipe[0]);
-        close(m_notify_pipe[1]);
-        close(m_kqueue_fd);
+        galay_close(m_notify_pipe[0]);
+        galay_close(m_notify_pipe[1]);
+        galay_close(m_kqueue_fd);
         throw std::runtime_error("Failed to set notification pipe write end non-blocking");
     }
 
     struct kevent ev;
     EV_SET(&ev, m_notify_pipe[0], EVFILT_READ, EV_ADD, 0, 0, nullptr);
     if (kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr) < 0) {
-        close(m_notify_pipe[0]);
-        close(m_notify_pipe[1]);
-        close(m_kqueue_fd);
+        galay_close(m_notify_pipe[0]);
+        galay_close(m_notify_pipe[1]);
+        galay_close(m_kqueue_fd);
         throw std::runtime_error("Failed to register notification pipe to kqueue");
     }
 
@@ -62,13 +62,13 @@ KqueueReactor::KqueueReactor(int max_events, std::atomic<uint64_t>& last_error_c
 
 KqueueReactor::~KqueueReactor() {
     if (m_kqueue_fd != -1) {
-        close(m_kqueue_fd);
+        galay_close(m_kqueue_fd);
     }
     if (m_notify_pipe[0] != -1) {
-        close(m_notify_pipe[0]);
+        galay_close(m_notify_pipe[0]);
     }
     if (m_notify_pipe[1] != -1) {
-        close(m_notify_pipe[1]);
+        galay_close(m_notify_pipe[1]);
     }
 }
 
@@ -168,7 +168,7 @@ int KqueueReactor::addClose(IOController* controller) {
     controller->m_sequence_owner[IOController::WRITE] = nullptr;
     detail::clearSequenceInterestMask(controller);
 
-    close(fd);
+    galay_close(fd);
     controller->m_handle = GHandle::invalid();
     return 0;
 }
@@ -263,7 +263,31 @@ int KqueueReactor::remove(IOController* controller) {
     return kevent(m_kqueue_fd, evs, 2, nullptr, 0, nullptr);
 }
 
+int KqueueReactor::flushPendingChanges() {
+    if (m_pending_changes.empty()) {
+        return 0;
+    }
+    while (true) {
+        const int ret = kevent(m_kqueue_fd, m_pending_changes.data(),
+                               static_cast<int>(m_pending_changes.size()),
+                               nullptr, 0, nullptr);
+        if (ret >= 0) {
+            m_pending_changes.clear();
+            return 0;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        const uint32_t sys = static_cast<uint32_t>(errno);
+        detail::storeBackendError(m_last_error_code, kNotReady, sys);
+        return -1;
+    }
+}
+
 void KqueueReactor::poll(const struct timespec& timeout, WakeCoordinator& wake_coordinator) {
+    if (flushPendingChanges() < 0) {
+        return;
+    }
     const int nev = kevent(m_kqueue_fd, nullptr, 0, m_events.data(), m_max_events, &timeout);
     if (nev < 0) {
         if (errno == EINTR) {

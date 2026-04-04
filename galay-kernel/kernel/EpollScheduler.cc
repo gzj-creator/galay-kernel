@@ -1,15 +1,15 @@
 #include "EpollScheduler.h"
+#include "IOSchedulerEventLoop.hpp"
 
 #ifdef USE_EPOLL
 
 namespace galay::kernel
 {
 
-EpollScheduler::EpollScheduler(int max_events, int batch_size, int check_interval_ms)
+EpollScheduler::EpollScheduler(int max_events, int batch_size)
     : m_running(false)
     , m_max_events(max_events)
     , m_batch_size(batch_size)
-    , m_check_interval_ms(check_interval_ms)
     , m_worker(static_cast<size_t>(batch_size))
     , m_wake_coordinator(m_sleeping, m_wakeup_pending)
     , m_core(m_worker, static_cast<size_t>(batch_size))
@@ -177,42 +177,27 @@ bool EpollScheduler::scheduleImmediately(TaskRef task)
 
 void EpollScheduler::processPendingTasks()
 {
-    (void)m_core.runReadyPass(
-        [this](TaskRef& next) { Scheduler::resume(next); },
-        [this](size_t drained) { m_wake_coordinator.onRemoteCollected(drained); });
+    detail::ioSchedulerProcessPendingTasks(
+        m_core,
+        m_wake_coordinator,
+        [this](TaskRef& next) { resume(next); });
 }
 
 void EpollScheduler::eventLoop()
 {
-    uint64_t tick_duration_ns = m_timer_manager.during();
-    int timeout_ms = static_cast<int>(tick_duration_ns / 2000000ULL);
-    if (timeout_ms < 1) {
-        timeout_ms = 1;
-    }
-    const size_t batch_size = m_batch_size > 0 ? static_cast<size_t>(m_batch_size) : 1;
-    size_t local_followup_pass_limit = 4096 / batch_size;
-    if (local_followup_pass_limit == 0) {
-        local_followup_pass_limit = 1;
-    }
-    if (local_followup_pass_limit > 16) {
-        local_followup_pass_limit = 16;
-    }
-
-    while (m_running.load(std::memory_order_acquire)) {
-        (void)m_core.runLocalFollowupPasses(
-            local_followup_pass_limit,
-            [this](TaskRef& next) { Scheduler::resume(next); },
-            [this](size_t drained) { m_wake_coordinator.onRemoteCollected(drained); });
-        m_timer_manager.tick();
-        m_wake_coordinator.markSleeping();
-        if (m_core.hasPendingWork()) {
-            m_wake_coordinator.markAwake();
-            continue;
-        }
-
-        m_reactor.poll(timeout_ms, m_wake_coordinator);
-        m_wake_coordinator.markAwake();
-    }
+    detail::runIOSchedulerEventLoop(
+        m_running,
+        m_core,
+        m_timer_manager,
+        m_wake_coordinator,
+        static_cast<size_t>(m_batch_size),
+        [this](TaskRef& next) { resume(next); },
+        [this]() {
+            const uint64_t tick_ns = m_timer_manager.during();
+            const int timeout_ms = detail::halfTickPollTimeoutMilliseconds(tick_ns);
+            m_reactor.poll(timeout_ms, m_wake_coordinator);
+        },
+        []() {});
 }
 
 }

@@ -1,13 +1,43 @@
 # 收集源文件
-file(GLOB_RECURSE SOURCES
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
     "*/*.cc"
 )
 
 # 收集头文件
-file(GLOB_RECURSE HEADERS
+file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS
     "*/*.h"
     "*/*.hpp"
 )
+
+set(GALAY_KERNEL_CONCURRENTQUEUE_INCLUDE_DIR "" CACHE PATH
+    "Directory containing concurrentqueue/moodycamel/concurrentqueue.h")
+if(NOT GALAY_KERNEL_CONCURRENTQUEUE_INCLUDE_DIR)
+    unset(GALAY_KERNEL_CONCURRENTQUEUE_INCLUDE_DIR CACHE)
+    find_path(GALAY_KERNEL_CONCURRENTQUEUE_INCLUDE_DIR
+        NAMES
+            moodycamel/concurrentqueue.h
+            moodycamel/blockingconcurrentqueue.h
+        HINTS
+            /opt/homebrew/include
+            /usr/local/include
+            /usr/include
+        PATH_SUFFIXES
+            concurrentqueue
+    )
+endif()
+
+if(NOT GALAY_KERNEL_CONCURRENTQUEUE_INCLUDE_DIR)
+    message(FATAL_ERROR
+        "concurrentqueue headers not found. Set GALAY_KERNEL_CONCURRENTQUEUE_INCLUDE_DIR "
+        "to the include prefix containing concurrentqueue/moodycamel/concurrentqueue.h")
+endif()
+
+if(NOT TARGET concurrentqueue::concurrentqueue)
+    add_library(concurrentqueue::concurrentqueue INTERFACE IMPORTED GLOBAL)
+    set_target_properties(concurrentqueue::concurrentqueue PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${GALAY_KERNEL_CONCURRENTQUEUE_INCLUDE_DIR}"
+    )
+endif()
 
 # 创建库目标
 add_library(galay-kernel ${SOURCES} ${HEADERS})
@@ -19,8 +49,6 @@ elseif(GALAY_KERNEL_BACKEND STREQUAL "io_uring")
     target_compile_definitions(galay-kernel PUBLIC USE_IOURING)
 elseif(GALAY_KERNEL_BACKEND STREQUAL "kqueue")
     target_compile_definitions(galay-kernel PUBLIC USE_KQUEUE)
-elseif(GALAY_KERNEL_BACKEND STREQUAL "iocp")
-    target_compile_definitions(galay-kernel PUBLIC USE_IOCP)
 else()
     message(FATAL_ERROR "GALAY_KERNEL_BACKEND is not set correctly: ${GALAY_KERNEL_BACKEND}")
 endif()
@@ -37,6 +65,8 @@ target_include_directories(galay-kernel
 if(PLATFORM_LIBS)
     target_link_libraries(galay-kernel PUBLIC ${PLATFORM_LIBS})
 endif()
+
+target_link_libraries(galay-kernel PUBLIC concurrentqueue::concurrentqueue)
 
 # 设置库的编译选项
 target_compile_options(galay-kernel PRIVATE

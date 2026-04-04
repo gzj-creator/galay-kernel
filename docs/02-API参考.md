@@ -21,9 +21,12 @@
 
 当前仓库没有 `ENABLE_LOG` 选项，也没有 `spdlog` 依赖链路。
 
+当前不支持 Windows/IOCP 后端；Windows 配置阶段会直接失败并提示 `Windows/IOCP backend not yet implemented`。
+
 ## 安装包头文件边界
 
 - 当前包配置文件会导出 `GALAY_KERNEL_VERSION`、`GALAY_KERNEL_BACKEND`、`GALAY_KERNEL_INCLUDE_DIR`
+- 若 `concurrentqueue` 头文件不在标准系统前缀，consumer 需要额外传入 `GALAY_KERNEL_CONCURRENTQUEUE_INCLUDE_DIR`
 - 稳定 direct-include 入口以本页“稳定公开头快速索引”和实际安装树中的公开头为准
 - 当前源码尚未额外导出 `GALAY_KERNEL_SUPPORTED_HEADERS` / `GALAY_KERNEL_INTERNAL_HEADERS` 这类头文件边界变量
 - `Awaitable.h`、`IOController.hpp`、`Timeout.hpp`、`Scheduler.hpp`、`IOScheduler.hpp` 默认仍属于低层扩展 / 排障入口；日常业务优先使用 `Runtime`、`TcpSocket`、`UdpSocket` 等高层接口
@@ -398,8 +401,8 @@
 
 具体 IO 调度器：
 
-- `EpollScheduler(int max_events = GALAY_SCHEDULER_MAX_EVENTS, int batch_size = GALAY_SCHEDULER_BATCH_SIZE, int check_interval_ms = GALAY_SCHEDULER_CHECK_INTERVAL_MS)`
-- `KqueueScheduler(int max_events = GALAY_SCHEDULER_MAX_EVENTS, int batch_size = GALAY_SCHEDULER_BATCH_SIZE, int check_interval_ms = GALAY_SCHEDULER_CHECK_INTERVAL_MS)`
+- `EpollScheduler(int max_events = GALAY_SCHEDULER_MAX_EVENTS, int batch_size = GALAY_SCHEDULER_BATCH_SIZE)`
+- `KqueueScheduler(int max_events = GALAY_SCHEDULER_MAX_EVENTS, int batch_size = GALAY_SCHEDULER_BATCH_SIZE)`
 - `IOUringScheduler(int queue_depth = GALAY_SCHEDULER_QUEUE_DEPTH, int batch_size = GALAY_SCHEDULER_BATCH_SIZE)`
 
 这些后端当前共同公开：

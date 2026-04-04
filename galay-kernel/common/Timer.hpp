@@ -1,6 +1,7 @@
 #ifndef GALAY_TIMER_HPP
 #define GALAY_TIMER_HPP
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -11,10 +12,11 @@
 namespace galay::kernel
 {
 
-#define DONE        1 << 0
-#define CANCEL      1 << 1
-
-#define TIMEOUT     1 << 2      //用于TimeoutTimer判断IO超时
+enum class TimerFlag : int {
+    kDone = 1 << 0,
+    kCancel = 1 << 1,
+    kTimeout = 1 << 2,
+};
 
 class Timer
 {
@@ -29,10 +31,20 @@ public:
         m_expireTime = 0;
     }
 
-    virtual void handleTimeout() { m_flag |= DONE; }
-    bool done() { return m_flag & DONE; }
-    void cancel() { m_flag |= CANCEL; }
-    bool cancelled() { return m_flag & CANCEL; }
+    virtual void handleTimeout() {
+        m_flag.fetch_or(static_cast<int>(TimerFlag::kDone), std::memory_order_release);
+    }
+    bool done() const {
+        return (m_flag.load(std::memory_order_acquire) &
+                static_cast<int>(TimerFlag::kDone)) != 0;
+    }
+    void cancel() {
+        m_flag.fetch_or(static_cast<int>(TimerFlag::kCancel), std::memory_order_release);
+    }
+    bool cancelled() const {
+        return (m_flag.load(std::memory_order_acquire) &
+                static_cast<int>(TimerFlag::kCancel)) != 0;
+    }
 
     uint64_t getDelay() const { return m_delay; }
 
@@ -49,7 +61,7 @@ public:
     }
 
 protected:
-    int m_flag = 0;
+    std::atomic<int> m_flag{0};
     uint64_t m_delay = 0;                  // 相对时间延迟（纳秒）
     mutable uint64_t m_expireTime = 0;     // 绝对到期时间（纳秒，延迟计算）
 };

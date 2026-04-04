@@ -9,12 +9,57 @@
 #include "galay-kernel/common/TimerManager.hpp"
 #include <algorithm>
 #include <atomic>
+#include <ctime>
 #include <deque>
 #include <optional>
 #include <concurrentqueue/moodycamel/concurrentqueue.h>
 
 namespace galay::kernel
 {
+
+/**
+ * @def GALAY_KERNEL_IO_POLL_WAIT_MAX_NS
+ * @brief 与 TimerManager tick 对齐的 poll 阻塞上限（纳秒），与 io_uring 默认等待一致
+ */
+#ifndef GALAY_KERNEL_IO_POLL_WAIT_MAX_NS
+#define GALAY_KERNEL_IO_POLL_WAIT_MAX_NS 10000000ULL
+#endif
+
+namespace detail {
+
+/**
+ * @brief 由时间轮 tick 推导半 tick 的 poll 等待（纳秒），带下限与上限，供 kqueue/io_uring 使用
+ */
+inline uint64_t halfTickPollWaitNanoseconds(uint64_t tick_duration_ns) noexcept {
+    uint64_t half = tick_duration_ns / 2;
+    constexpr uint64_t kZeroFallbackNs = 1000000ULL;
+    if (half == 0) {
+        half = kZeroFallbackNs;
+    }
+    if (half > GALAY_KERNEL_IO_POLL_WAIT_MAX_NS) {
+        half = GALAY_KERNEL_IO_POLL_WAIT_MAX_NS;
+    }
+    return half;
+}
+
+/**
+ * @brief 由时间轮 tick 推导 epoll_wait 超时毫秒数（半 tick，至少 1ms）
+ */
+inline int halfTickPollTimeoutMilliseconds(uint64_t tick_duration_ns) noexcept {
+    int ms = static_cast<int>(tick_duration_ns / 2000000ULL);
+    return ms < 1 ? 1 : ms;
+}
+
+/**
+ * @brief 填充 kevent 使用的 timespec，与 `halfTickPollWaitNanoseconds` 语义一致
+ */
+inline void fillTimespecHalfTick(struct ::timespec& ts, uint64_t tick_duration_ns) noexcept {
+    const uint64_t ns = halfTickPollWaitNanoseconds(tick_duration_ns);
+    ts.tv_sec = static_cast<::time_t>(ns / 1000000000ULL);
+    ts.tv_nsec = static_cast<long>(ns % 1000000000ULL);
+}
+
+}  // namespace detail
 
 /**
  * @brief IO 调度器执行线程的本地状态
@@ -278,7 +323,6 @@ inline void completeAwaitableAndWake(IOController* controller, Awaitable* awaita
  * @note
  * - macOS: KqueueScheduler (kqueue)
  * - Linux: EpollScheduler (epoll) 或 IOUringScheduler (io_uring)
- * - Windows: IOCPScheduler (IOCP)
  *
  * @see KqueueScheduler
  */

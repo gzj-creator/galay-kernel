@@ -45,15 +45,6 @@
 #define GALAY_SCHEDULER_BATCH_SIZE 256
 #endif
 
-/**
- * @def GALAY_SCHEDULER_CHECK_INTERVAL_MS
- * @brief 调度器检查间隔（毫秒）
- * @note 可在编译时通过 -DGALAY_SCHEDULER_CHECK_INTERVAL_MS=xxx 覆盖
- */
-#ifndef GALAY_SCHEDULER_CHECK_INTERVAL_MS
-#define GALAY_SCHEDULER_CHECK_INTERVAL_MS 1
-#endif
-
 namespace galay::kernel
 {
 

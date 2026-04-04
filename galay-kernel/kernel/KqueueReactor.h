@@ -48,15 +48,25 @@ public:
 
     void poll(const struct timespec& timeout, WakeCoordinator& wake_coordinator);  ///< 轮询事件并通过 wake coordinator 分发唤醒
 
+    /**
+     * @brief 将 m_pending_changes 中的 kevent 提交到内核
+     * @return 0 成功；-1 失败（已记录 lastError，失败的 batch 会保留待下次重试）
+     * @note 当前运行时主要走立即注册，此接口保留给可选批量场景，并在每轮 follow-up 后尝试提交
+     */
+    int flushPendingChanges();
+
 private:
     void processEvent(struct kevent& ev);  ///< 消费单个 kevent 事件并唤醒对应 awaitable
     int syncSequenceRegistration(IOController* controller);  ///< 同步 sequence awaitable 的注册状态
     int applySequenceInterest(IOController* controller, uint8_t desired_mask);  ///< 把 sequence 感兴趣的读写位应用到 kqueue
 
+    static constexpr size_t BATCH_THRESHOLD = 32;  ///< 预留给批量注册场景的提交阈值
+
     int m_kqueue_fd = -1;  ///< kqueue 描述符
     int m_notify_pipe[2] = {-1, -1};  ///< 跨线程唤醒管道
     int m_max_events = 0;  ///< 单次 poll 处理的最大事件数
     std::vector<struct kevent> m_events;  ///< kevent 复用缓冲区
+    std::vector<struct kevent> m_pending_changes;  ///< 待批量提交的 kevent 变更缓冲
     std::atomic<uint64_t>& m_last_error_code;  ///< 最近一次后端错误编码输出槽位
 };
 

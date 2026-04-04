@@ -151,15 +151,16 @@ inline bool galay::async::AioCommitAwaitable::await_suspend(std::coroutine_handl
         return false;
     }
 
-    m_controller->m_handle.fd = m_event_fd;
-    m_controller->fillAwaitable(galay::FILEREAD, this);
     auto scheduler = m_waker.getScheduler();
-    if (scheduler->type() != galay::kernel::kIOScheduler) {
+    if (scheduler == nullptr || scheduler->type() != galay::kernel::kIOScheduler) {
         m_result = std::unexpected(
             galay::kernel::IOError(galay::kernel::kNotRunningOnIOScheduler, errno));
         return false;
     }
     auto io_scheduler = static_cast<galay::kernel::IOScheduler*>(scheduler);
+
+    m_controller->m_handle.fd = m_event_fd;
+    m_controller->fillAwaitable(FILEREAD, this);
     if (io_scheduler->addFileRead(m_controller) < 0) {
         m_result = std::unexpected(
             galay::kernel::IOError(galay::kernel::kReadFailed, errno));

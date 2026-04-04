@@ -298,7 +298,7 @@ void testOutOfRangeTimer() {
     g_passedTests++;
 }
 
-// 测试10：零延迟定时器测试
+// 测试10：子 tick 延迟定时器（向上取整到下一 tick 后触发）
 void testExpiredTimer() {
     std::cout << "\n[Test 10] Testing zero-delay timer..." << std::endl;
     g_totalTests++;
@@ -306,13 +306,17 @@ void testExpiredTimer() {
     TimingWheelTimerManager manager(1000000ULL); // 1ms精度
 
     int count = 0;
-    // 创建一个延迟小于1个tick的定时器（0.5ms < 1ms）
+    // 延迟小于 1 个 tick（0.5ms < 1ms）：push 时向上取整到 1 tick，先入轮，不立即回调
     auto timer = std::make_shared<CBTimer>(std::chrono::microseconds(500), [&count]() { count++; });
 
-    // 添加定时器，由于延迟小于1个tick，应该立即执行
     bool pushed = manager.push(timer);
-    assert(pushed && "Zero-delay timer should be pushed and executed immediately");
-    assert(count == 1 && "Zero-delay timer should fire immediately");
+    assert(pushed && "Sub-tick timer should be accepted into the wheel");
+    assert(count == 0 && "Sub-tick delay is not executed inside push()");
+    assert(manager.size() == 1 && "Timer should remain until tick advances");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    manager.tick();
+    assert(count == 1 && "Timer should fire after wall time passes tick boundary");
     assert(manager.empty() && "Manager should be empty");
 
     std::cout << "  ✓ Test 10 passed!" << std::endl;

@@ -9,6 +9,7 @@
     #include <sys/socket.h>
     #include <netinet/in.h>
     #include <arpa/inet.h>
+    #include <unistd.h>
 
     // Linux 后端必须由构建系统显式指定，避免库与下游编译单元出现宏不一致。
     #if defined(USE_EPOLL) && defined(USE_IOURING)
@@ -27,9 +28,10 @@
         static GHandle invalid() { return GHandle{}; }  ///< 返回无效句柄
         int fd = -1;  ///< 底层文件描述符
 
-        bool operator==(const GHandle& other) { return fd == other.fd; }  ///< 比较两个句柄是否指向同一 fd
-        bool operator==(GHandle&& other) { return fd == other.fd; }  ///< 与右值句柄比较底层 fd
+        bool operator==(const GHandle& other) const { return fd == other.fd; }  ///< 比较两个句柄是否指向同一 fd
     };
+
+    inline int galay_close(int fd) { return ::close(fd); }
 
     #include <sys/epoll.h>
 
@@ -37,6 +39,7 @@
     #include <sys/socket.h>
     #include <netinet/in.h>
     #include <arpa/inet.h>
+    #include <unistd.h>
     #ifndef USE_KQUEUE
         #define USE_KQUEUE
     #endif
@@ -50,17 +53,16 @@
         static GHandle invalid() { return GHandle{}; }  ///< 返回无效句柄
         int fd = -1;  ///< 底层文件描述符
 
-        bool operator==(const GHandle& other) { return fd == other.fd; }  ///< 比较两个句柄是否指向同一 fd
-        bool operator==(GHandle&& other) { return fd == other.fd; }  ///< 与右值句柄比较底层 fd
+        bool operator==(const GHandle& other) const { return fd == other.fd; }  ///< 比较两个句柄是否指向同一 fd
     };
+
+    inline int galay_close(int fd) { return ::close(fd); }
 
     #include <sys/event.h>
 
 #elif defined(WIN32) || defined(_WIN32) || defined(_WIN32_) || defined(WIN64) || defined(_WIN64) || defined(_WIN64_)
     #include <WinSock2.h>
     #pragma comment(lib,"ws2_32.lib")
-    #define USE_IOCP
-    #define close(x) closesocket(x)
 
     // Windows-specific handle structure
     /**
@@ -71,9 +73,10 @@
         static GHandle invalid() { return GHandle{INVALID_SOCKET}; }  ///< 返回无效句柄
         SOCKET fd = INVALID_SOCKET;  ///< 底层 socket 句柄
 
-        bool operator==(const GHandle& other) { return fd == other.fd; }  ///< 比较两个句柄是否相等
-        bool operator==(GHandle&& other) { return fd == other.fd; }  ///< 与右值句柄比较底层值
+        bool operator==(const GHandle& other) const { return fd == other.fd; }  ///< 比较两个句柄是否相等
     };
+
+    inline int galay_close(SOCKET fd) { return closesocket(fd); }
 
     // Windows-specific type definitions
     typedef int socklen_t;

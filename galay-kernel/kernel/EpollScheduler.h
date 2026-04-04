@@ -20,10 +20,6 @@
 #define GALAY_SCHEDULER_BATCH_SIZE 256
 #endif
 
-#ifndef GALAY_SCHEDULER_CHECK_INTERVAL_MS
-#define GALAY_SCHEDULER_CHECK_INTERVAL_MS 1
-#endif
-
 namespace galay::kernel
 {
 
@@ -41,11 +37,9 @@ public:
      * @brief 构造 epoll 调度器
      * @param max_events epoll_wait 单次最多返回的事件数
      * @param batch_size 跨线程注入任务的批处理大小
-     * @param check_interval_ms 空闲轮询时检查超时和注入队列的间隔
      */
     EpollScheduler(int max_events = GALAY_SCHEDULER_MAX_EVENTS,
-                   int batch_size = GALAY_SCHEDULER_BATCH_SIZE,
-                   int check_interval_ms = GALAY_SCHEDULER_CHECK_INTERVAL_MS);
+                   int batch_size = GALAY_SCHEDULER_BATCH_SIZE);
 
     /**
      * @brief 析构调度器
@@ -95,7 +89,6 @@ protected:
 
     int m_max_events;
     int m_batch_size;
-    int m_check_interval_ms;
 
     std::atomic<uint64_t> m_last_error_code{0};
     std::atomic<bool> m_sleeping{true};

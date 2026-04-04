@@ -92,55 +92,8 @@ struct IOController {
 #endif
     }
 
-    /**
-     * @brief 复制构造 IO 控制器
-     * @param other 被复制的控制器
-     * @note awaitable 指针和序列状态会被浅拷贝；io_uring 状态会重新绑定到新对象
-     */
-    IOController(const IOController& other) noexcept
-        : m_handle(other.m_handle)
-        , m_type(other.m_type)
-        , m_awaitable{other.m_awaitable[READ], other.m_awaitable[WRITE]}
-        , m_sequence_owner{other.m_sequence_owner[READ], other.m_sequence_owner[WRITE]}
-        , m_sequence_interest_mask(other.m_sequence_interest_mask)
-        , m_sequence_armed_mask(other.m_sequence_armed_mask)
-#ifdef USE_EPOLL
-        , m_registered_events(other.m_registered_events)
-#endif
-#ifdef USE_IOURING
-        , m_sqe_state{
-            std::make_shared<SqeState>(this, READ),
-            std::make_shared<SqeState>(this, WRITE)}
-#endif
-    {}
-
-    /**
-     * @brief 复制赋值 IO 控制器
-     * @param other 被复制的控制器
-     * @return 当前对象引用
-     * @note awaitable 指针和序列状态会被浅拷贝；io_uring 状态会重新绑定到当前对象
-     */
-    IOController& operator=(const IOController& other) noexcept {
-        if (this != &other) {
-            m_handle = other.m_handle;
-            m_type = other.m_type;
-            m_awaitable[READ] = other.m_awaitable[READ];
-            m_awaitable[WRITE] = other.m_awaitable[WRITE];
-            m_sequence_owner[READ] = other.m_sequence_owner[READ];
-            m_sequence_owner[WRITE] = other.m_sequence_owner[WRITE];
-            m_sequence_interest_mask = other.m_sequence_interest_mask;
-            m_sequence_armed_mask = other.m_sequence_armed_mask;
-#ifdef USE_EPOLL
-            m_registered_events = other.m_registered_events;
-#endif
-#ifdef USE_IOURING
-            clearSqeState();
-            m_sqe_state[READ] = std::make_shared<SqeState>(this, READ);
-            m_sqe_state[WRITE] = std::make_shared<SqeState>(this, WRITE);
-#endif
-        }
-        return *this;
-    }
+    IOController(const IOController&) = delete;
+    IOController& operator=(const IOController&) = delete;
 
     /**
      * @brief 移动构造 IO 控制器

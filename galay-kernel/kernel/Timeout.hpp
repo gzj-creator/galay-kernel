@@ -25,13 +25,16 @@ public:
 
     void handleTimeout() override {
         if(!cancelled() && !done()) {
-            m_flag |= TIMEOUT;
+            m_flag.fetch_or(static_cast<int>(TimerFlag::kTimeout), std::memory_order_release);
             m_waker.wakeUp();
         }
         Timer::handleTimeout();
     }
 
-    bool timeouted() { return m_flag & TIMEOUT; }
+    bool timeouted() const {
+        return (m_flag.load(std::memory_order_acquire) &
+                static_cast<int>(TimerFlag::kTimeout)) != 0;
+    }
 
 private:
     Waker m_waker;

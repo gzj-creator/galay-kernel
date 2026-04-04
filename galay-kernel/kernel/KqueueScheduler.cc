@@ -1,4 +1,5 @@
 #include "KqueueScheduler.h"
+#include "IOSchedulerEventLoop.hpp"
 #include "common/Defn.hpp"
 #include "kernel/Awaitable.h"
 #include "kernel/IOController.hpp"
@@ -14,11 +15,10 @@
 namespace galay::kernel
 {
 
-KqueueScheduler::KqueueScheduler(int max_events, int batch_size, int check_interval_ms)
+KqueueScheduler::KqueueScheduler(int max_events, int batch_size)
     : m_running(false)
     , m_max_events(max_events)
     , m_batch_size(batch_size)
-    , m_check_interval_ms(check_interval_ms)
     , m_last_error_code(0)
     , m_sleeping(true)
     , m_wakeup_pending(false)
@@ -172,47 +172,27 @@ bool KqueueScheduler::scheduleImmediately(TaskRef task)
 
 void KqueueScheduler::processPendingTasks()
 {
-    (void)m_core.runReadyPass(
-        [this](TaskRef& next) { Scheduler::resume(next); },
-        [this](size_t drained) { m_wake_coordinator.onRemoteCollected(drained); });
+    detail::ioSchedulerProcessPendingTasks(
+        m_core,
+        m_wake_coordinator,
+        [this](TaskRef& next) { resume(next); });
 }
-
-
 
 void KqueueScheduler::eventLoop()
 {
-    // kevent 超时时间公式：timeout = tickDuration / 2
-    // 使用时间轮精度的一半作为超时，确保定时器最大误差不超过半个 tick
-    // 例如：tickDuration = 50ms 时，timeout = 25ms，最大误差 ≤ 25ms
-    uint64_t tick_duration_ns = m_timer_manager.during();
-    uint64_t timeout_ns = tick_duration_ns / 2;
-    const size_t batch_size = m_batch_size > 0 ? static_cast<size_t>(m_batch_size) : 1;
-    size_t local_followup_pass_limit = 4096 / batch_size;
-    if (local_followup_pass_limit == 0) {
-        local_followup_pass_limit = 1;
-    }
-    if (local_followup_pass_limit > 16) {
-        local_followup_pass_limit = 16;
-    }
-    struct timespec timeout;
-    timeout.tv_sec = timeout_ns / 1000000000ULL;
-    timeout.tv_nsec = timeout_ns % 1000000000ULL;
-
-    while (m_running.load(std::memory_order_relaxed)) {
-        // Process pending coroutines
-        (void)m_core.runLocalFollowupPasses(
-            local_followup_pass_limit,
-            [this](TaskRef& next) { Scheduler::resume(next); },
-            [this](size_t drained) { m_wake_coordinator.onRemoteCollected(drained); });
-        m_timer_manager.tick();
-        m_wake_coordinator.markSleeping();
-        if (m_core.hasPendingWork()) {
-            m_wake_coordinator.markAwake();
-            continue;
-        }
-        m_reactor.poll(timeout, m_wake_coordinator);
-        m_wake_coordinator.markAwake();
-    }
+    detail::runIOSchedulerEventLoop(
+        m_running,
+        m_core,
+        m_timer_manager,
+        m_wake_coordinator,
+        static_cast<size_t>(m_batch_size),
+        [this](TaskRef& next) { resume(next); },
+        [this]() {
+            struct timespec timeout;
+            detail::fillTimespecHalfTick(timeout, m_timer_manager.during());
+            m_reactor.poll(timeout, m_wake_coordinator);
+        },
+        [this]() { (void)m_reactor.flushPendingChanges(); });
 }
 
 int KqueueScheduler::addRecvFrom(IOController* controller)

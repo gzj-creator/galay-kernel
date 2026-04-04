@@ -15,7 +15,7 @@
 
 ## 能力概览
 
-- IO 调度：`EpollScheduler` / `IOUringScheduler` / `KqueueScheduler` / `IOCP`
+- IO 调度：`EpollScheduler` / `IOUringScheduler` / `KqueueScheduler`
 - 计算调度：`ComputeScheduler`
 - 运行时编排：`Runtime`、`RuntimeBuilder`、`RuntimeHandle`
 - 任务模型：`Task<T>`、`Task<void>::then(...)`、`JoinHandle<T>::join()/wait()`、`blockOn()`、`spawn()`、`spawnBlocking()`、`sleep(...)`
@@ -100,12 +100,12 @@
 - 编译器：支持 C++23
 - CMake：`>= 3.16`
 - 命名模块：`ENABLE_CPP23_MODULES=ON` 只在 `CMake >= 3.28`、生成器支持模块、编译器不是 AppleClang 时才会真正生效
-- 头文件依赖：编译器需要能找到 `<concurrentqueue/moodycamel/*.h>`；仓库当前不会自动下载该依赖
+- 头文件依赖：编译器需要能找到 `<concurrentqueue/moodycamel/*.h>`；CMake 会自动搜索常见系统前缀，也可显式传入 `-DGALAY_KERNEL_CONCURRENTQUEUE_INCLUDE_DIR=/path/to/include`
 - Linux：
   - `DISABLE_IOURING=ON` 时使用 epoll；异步文件 IO 依赖 `libaio`
   - `DISABLE_IOURING=OFF` 且系统存在 `liburing` 时使用 io_uring
 - macOS：当前自动选择 kqueue
-- Windows：当前自动选择 IOCP
+- Windows：`planned`，当前配置阶段会直接报错 `Windows/IOCP backend not yet implemented`
 
 ## 快速构建
 
@@ -115,6 +115,17 @@
 cmake -S . -B build -DBUILD_TESTING=ON -DBUILD_EXAMPLES=ON -DBUILD_BENCHMARKS=ON
 cmake --build build --parallel
 ```
+
+最小 Bazel 入口：
+
+```bash
+bazel query //galay-kernel:galay-kernel
+```
+
+说明：
+
+- Bazel target 位于 `//galay-kernel:galay-kernel`
+- 当前 Bazel 路径默认依赖系统可见的 `concurrentqueue` 头文件前缀，macOS 常见为 `/opt/homebrew/include` 或 `/usr/local/include`
 
 ## 安装与消费
 
@@ -144,6 +155,12 @@ cmake --install build --prefix /tmp/galay-kernel-install
 ```cmake
 find_package(galay-kernel CONFIG REQUIRED)
 target_link_libraries(your_app PRIVATE galay-kernel::galay-kernel)
+```
+
+如果安装消费环境下 `concurrentqueue` 不在标准系统前缀，需要在配置 consumer 时额外传入：
+
+```bash
+cmake -S . -B build-consumer -DGALAY_KERNEL_CONCURRENTQUEUE_INCLUDE_DIR=/path/to/include
 ```
 
 当前工作树未包含受版本控制的 `find_package` consumer fixture，也未额外导出 `GALAY_KERNEL_SUPPORTED_HEADERS` / `GALAY_KERNEL_INTERNAL_HEADERS` / `GALAY_KERNEL_PACKAGE_CONSUMER_FIXTURE_DIR` 这类安装包边界变量；direct-include 边界以当前文档列出的公开头与实际安装树内容为准。

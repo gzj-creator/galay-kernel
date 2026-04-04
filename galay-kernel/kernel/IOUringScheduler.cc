@@ -1,4 +1,5 @@
 #include "IOUringScheduler.h"
+#include "IOSchedulerEventLoop.hpp"
 
 #ifdef USE_IOURING
 
@@ -176,37 +177,27 @@ bool IOUringScheduler::scheduleImmediately(TaskRef task)
 
 void IOUringScheduler::processPendingTasks()
 {
-    (void)m_core.runReadyPass(
-        [this](TaskRef& next) { Scheduler::resume(next); },
-        [this](size_t drained) { m_wake_coordinator.onRemoteCollected(drained); });
+    detail::ioSchedulerProcessPendingTasks(
+        m_core,
+        m_wake_coordinator,
+        [this](TaskRef& next) { resume(next); });
 }
 
 void IOUringScheduler::eventLoop()
 {
-    const size_t batch_size = m_batch_size > 0 ? static_cast<size_t>(m_batch_size) : 1;
-    size_t local_followup_pass_limit = 4096 / batch_size;
-    if (local_followup_pass_limit == 0) {
-        local_followup_pass_limit = 1;
-    }
-    if (local_followup_pass_limit > 16) {
-        local_followup_pass_limit = 16;
-    }
-
-    while (m_running.load(std::memory_order_acquire)) {
-        (void)m_core.runLocalFollowupPasses(
-            local_followup_pass_limit,
-            [this](TaskRef& next) { Scheduler::resume(next); },
-            [this](size_t drained) { m_wake_coordinator.onRemoteCollected(drained); });
-        m_timer_manager.tick();
-        m_wake_coordinator.markSleeping();
-        if (m_core.hasPendingWork()) {
-            m_wake_coordinator.markAwake();
-            continue;
-        }
-
-        m_reactor.poll(GALAY_IOURING_WAIT_TIMEOUT_NS, m_wake_coordinator);
-        m_wake_coordinator.markAwake();
-    }
+    detail::runIOSchedulerEventLoop(
+        m_running,
+        m_core,
+        m_timer_manager,
+        m_wake_coordinator,
+        static_cast<size_t>(m_batch_size),
+        [this](TaskRef& next) { resume(next); },
+        [this]() {
+            const uint64_t tick_ns = m_timer_manager.during();
+            const uint64_t wait_ns = detail::halfTickPollWaitNanoseconds(tick_ns);
+            m_reactor.poll(wait_ns, m_wake_coordinator);
+        },
+        []() {});
 }
 
 }
