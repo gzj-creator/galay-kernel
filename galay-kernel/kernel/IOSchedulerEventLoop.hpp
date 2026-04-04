@@ -61,6 +61,10 @@ void runIOSchedulerEventLoop(std::atomic<bool>& running,
             wake_coordinator.markAwake();
             continue;
         }
+        if (core.trySteal()) {
+            wake_coordinator.markAwake();
+            continue;
+        }
         poll_fn();
         wake_coordinator.markAwake();
     }

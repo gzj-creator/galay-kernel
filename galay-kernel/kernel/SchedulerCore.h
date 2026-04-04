@@ -50,6 +50,10 @@ public:
         return m_worker.hasLocalWork() || m_worker.hasPendingInjected();
     }
 
+    bool trySteal() noexcept {
+        return m_worker.trySteal();
+    }
+
     template <typename OnRemoteCollectedFn>
     size_t collectRemote(OnRemoteCollectedFn&& on_remote_collected_fn) {
         if (!m_worker.hasLocalWork() ||
@@ -172,8 +176,10 @@ public:
         runReadyPass(std::forward<ResumeFn>(resume_fn));
 
         if (!hasPendingWork()) {
-            stage_observer_fn(SchedulerCoreStage::Poll);
-            poll_fn();
+            if (!trySteal()) {
+                stage_observer_fn(SchedulerCoreStage::Poll);
+                poll_fn();
+            }
         }
     }
 

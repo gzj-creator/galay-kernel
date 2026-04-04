@@ -36,6 +36,7 @@ class TaskRef;  ///< 轻量任务引用前置声明
 namespace detail
 {
 
+struct TaskRefStorageAccess;  ///< 供固定容量调度 ring 在 TaskRef 与裸状态指针间转移所有权
 Runtime* currentRuntime() noexcept;  ///< 读取当前线程绑定的 Runtime，上下文不存在时返回 nullptr
 Runtime* swapCurrentRuntime(Runtime* runtime) noexcept;  ///< 替换当前线程 Runtime 并返回旧值
 bool scheduleTask(const TaskRef& task) noexcept;  ///< 将任务按普通语义提交给其所属调度器
@@ -76,6 +77,7 @@ private:
     friend class Task;
     template <typename T>
     friend class TaskPromise;
+    friend struct detail::TaskRefStorageAccess;
 
     void retain() noexcept;  ///< 增加底层状态引用计数
     void release() noexcept;  ///< 减少底层状态引用计数，必要时释放状态
@@ -523,6 +525,21 @@ struct TaskAccess
     static TaskRef detachTask(Task<T>&& task) noexcept  ///< 从 Task 中拆出底层任务引用并转移所有权
     {
         return std::move(task.m_task);
+    }
+};
+
+struct TaskRefStorageAccess
+{
+    static TaskState* releaseState(TaskRef& task) noexcept
+    {
+        TaskState* state = task.m_state;
+        task.m_state = nullptr;
+        return state;
+    }
+
+    static TaskRef adoptState(TaskState* state) noexcept
+    {
+        return TaskRef(state, false);
     }
 };
 

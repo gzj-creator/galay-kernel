@@ -83,6 +83,23 @@ public:
     bool scheduleDeferred(TaskRef task) override;         ///< 以延后语义注入任务；当前仍使用同一注入队列
     bool scheduleImmediately(TaskRef task) override;      ///< 在调度器线程内立刻恢复任务；跨线程调用会失败
 
+    void configureStealDomain(std::span<IOScheduler* const> siblings,
+                              size_t self_index) override
+    {
+        IOScheduler::configureStealDomain(siblings, self_index);
+        m_worker.configureStealDomain(self_index, siblings);
+    }
+
+    IOSchedulerWorkerState* stealWorkerState() noexcept override
+    {
+        return &m_worker;
+    }
+
+    IOSchedulerStealStats stealStats() const noexcept override
+    {
+        return m_worker.snapshotStealStats();
+    }
+
     friend struct SchedulerTestAccess;
 
 private:

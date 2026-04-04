@@ -15,6 +15,7 @@
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <span>
 #include <vector>
 
 namespace galay::kernel
@@ -48,6 +49,14 @@ struct RuntimeConfig {
     size_t io_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;  ///< IO scheduler 数；AUTO 表示按 CPU 自动推导
     size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;  ///< compute scheduler 数；AUTO 表示按 CPU 自动推导
     RuntimeAffinityConfig affinity;  ///< Runtime 的绑核策略
+};
+
+/**
+ * @brief Runtime 级别的调度统计快照
+ * @details 当前只暴露 IO scheduler 的 work-stealing 计数。
+ */
+struct RuntimeStats {
+    std::vector<IOSchedulerStealStats> io_schedulers;  ///< 与 getIOScheduler(i) 对齐的 stealing 统计
 };
 
 class RuntimeHandle;
@@ -185,6 +194,7 @@ public:
      * @brief 获取一个轻量 `RuntimeHandle`，用于把当前 runtime 传递到其他层。
      */
     RuntimeHandle handle() noexcept;
+    RuntimeStats stats() const;  ///< 返回 Runtime 管理的 scheduler 统计；应在 stop() 后或外部同步下调用
 
     bool isRunning() const { return m_running.load(std::memory_order_acquire); }  ///< Runtime 当前是否已启动
     size_t getIOSchedulerCount() const { return m_io_schedulers.size(); }  ///< 返回当前受管 IO scheduler 数量
@@ -203,9 +213,12 @@ private:
     void bindTaskToRuntime(const TaskRef& task, Scheduler* scheduler);  ///< 给根任务绑定 Runtime 与目标调度器
     bool submitTask(const TaskRef& task);  ///< 把根任务提交到其所属调度器
     static size_t getCPUCount();  ///< 返回当前机器可用 CPU 数量
+    void configureIOSchedulerStealDomains();  ///< 为 Runtime 管理的 IO scheduler 下发 steal-domain 配置
 
     std::vector<std::unique_ptr<IOScheduler>> m_io_schedulers;  ///< Runtime 持有的 IO scheduler 集合
     std::vector<std::unique_ptr<ComputeScheduler>> m_compute_schedulers;  ///< Runtime 持有的 compute scheduler 集合
+
+    std::vector<IOScheduler*> m_io_scheduler_sibling_view;  ///< Runtime 管理的 IO scheduler pointer view
 
     std::atomic<uint32_t> m_io_index{0};  ///< IO scheduler 轮询游标
     std::atomic<uint32_t> m_compute_index{0};  ///< compute scheduler 轮询游标

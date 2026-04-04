@@ -28,8 +28,8 @@ static_assert(std::is_constructible_v<Waker, TaskRef>,
               "Waker must capture lightweight task refs directly");
 static_assert(std::is_same_v<decltype(IOSchedulerWorkerState{}.lifo_slot), std::optional<TaskRef>>,
               "IOSchedulerWorkerState::lifo_slot must store TaskRef");
-static_assert(std::is_same_v<decltype(IOSchedulerWorkerState{}.local_queue), std::deque<TaskRef>>,
-              "IOSchedulerWorkerState::local_queue must store TaskRef");
+static_assert(std::is_same_v<decltype(IOSchedulerWorkerState{}.local_ring), ChaseLevTaskRing>,
+              "IOSchedulerWorkerState::local_ring must store the fixed-capacity Chase-Lev ring");
 static_assert(std::is_same_v<decltype(IOSchedulerWorkerState{}.inject_queue),
                              moodycamel::ConcurrentQueue<TaskRef>>,
               "IOSchedulerWorkerState::inject_queue must store TaskRef");

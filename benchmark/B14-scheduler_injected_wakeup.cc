@@ -13,15 +13,20 @@
 #include <vector>
 
 #include "benchmark/BenchmarkSync.h"
+#include "galay-kernel/common/TimerManager.hpp"
+#include "galay-kernel/kernel/Runtime.h"
 #include "galay-kernel/kernel/Task.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
 #include "galay-kernel/kernel/KqueueScheduler.h"
+using IOSchedulerType = galay::kernel::KqueueScheduler;
 #elif defined(USE_EPOLL)
 #include "galay-kernel/kernel/EpollScheduler.h"
+using IOSchedulerType = galay::kernel::EpollScheduler;
 #elif defined(USE_IOURING)
 #include "galay-kernel/kernel/IOUringScheduler.h"
+using IOSchedulerType = galay::kernel::IOUringScheduler;
 #endif
 
 using namespace galay::kernel;
@@ -33,12 +38,34 @@ constexpr int kProducerCount = 4;
 constexpr int kTasksPerProducer = 50000;
 constexpr int kLatencySamples = 10000;
 constexpr int kLatencyWarmupSamples = 2000;
+constexpr int kSkewedTaskCount = 4000;
+constexpr auto kSkewedTaskWork = 200us;
 
 struct BenchState {
     std::atomic<int64_t> completed{0};
     std::atomic<int64_t> latency_sum_ns{0};
     galay::benchmark::CompletionLatch* completion_latch = nullptr;
 };
+
+bool waitUntil(auto&& predicate,
+               std::chrono::milliseconds timeout = 2000ms,
+               std::chrono::milliseconds step = 1ms) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (predicate()) {
+            return true;
+        }
+        std::this_thread::sleep_for(step);
+    }
+    return predicate();
+}
+
+void burnFor(std::chrono::microseconds duration) {
+    const auto deadline = std::chrono::steady_clock::now() + duration;
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+}
 
 Task<void> throughputTask(BenchState* state) {
     state->completed.fetch_add(1, std::memory_order_relaxed);
@@ -54,6 +81,40 @@ Task<void> latencyTask(BenchState* state,
     const auto latency_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(now - submitted_at).count();
     state->latency_sum_ns.fetch_add(latency_ns, std::memory_order_relaxed);
+    state->completed.fetch_add(1, std::memory_order_relaxed);
+    if (state->completion_latch) {
+        state->completion_latch->arrive();
+    }
+    co_return;
+}
+
+struct SkewBenchState {
+    std::atomic<int64_t> completed{0};
+    std::atomic<int64_t> ran_on_source{0};
+    std::atomic<int64_t> ran_on_sibling{0};
+    galay::benchmark::CompletionLatch* completion_latch = nullptr;
+    IOScheduler* source = nullptr;
+    IOScheduler* sibling = nullptr;
+};
+
+struct SkewBenchResult {
+    double elapsed_ms = 0.0;
+    double throughput = 0.0;
+    int64_t ran_on_source = 0;
+    int64_t ran_on_sibling = 0;
+    uint64_t steal_attempts = 0;
+    uint64_t steal_successes = 0;
+};
+
+Task<void> skewedRuntimeTask(SkewBenchState* state) {
+    const auto tid = std::this_thread::get_id();
+    if (state->source && tid == state->source->threadId()) {
+        state->ran_on_source.fetch_add(1, std::memory_order_relaxed);
+    } else if (state->sibling && tid == state->sibling->threadId()) {
+        state->ran_on_sibling.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    burnFor(kSkewedTaskWork);
     state->completed.fetch_add(1, std::memory_order_relaxed);
     if (state->completion_latch) {
         state->completion_latch->arrive();
@@ -142,6 +203,100 @@ void runLatencyBenchmark() {
     scheduler.stop();
 }
 
+template <typename SchedulerT>
+SkewBenchResult runSingleSchedulerSkewBaseline() {
+    SchedulerT scheduler;
+    SkewBenchState state;
+    galay::benchmark::CompletionLatch completion_latch(static_cast<std::size_t>(kSkewedTaskCount));
+    state.completion_latch = &completion_latch;
+
+    scheduler.replaceTimerManager(TimingWheelTimerManager(1'000'000ULL));
+    scheduler.start();
+    const bool ready = waitUntil([&]() {
+        return scheduler.threadId() != std::thread::id{};
+    });
+    if (!ready) {
+        throw std::runtime_error("single scheduler benchmark thread did not start");
+    }
+
+    state.source = &scheduler;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kSkewedTaskCount; ++i) {
+        scheduleTask(scheduler, skewedRuntimeTask(&state));
+    }
+    completion_latch.wait();
+    const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    scheduler.stop();
+
+    return {
+        .elapsed_ms = static_cast<double>(elapsed_ns) / 1'000'000.0,
+        .throughput = elapsed_ns > 0
+            ? (static_cast<double>(kSkewedTaskCount) * 1'000'000'000.0 / elapsed_ns)
+            : 0.0,
+        .ran_on_source = state.ran_on_source.load(std::memory_order_relaxed),
+        .ran_on_sibling = state.ran_on_sibling.load(std::memory_order_relaxed),
+        .steal_attempts = 0,
+        .steal_successes = 0,
+    };
+}
+
+SkewBenchResult runTwoSchedulerStealBenchmark() {
+    Runtime runtime;
+    auto source = std::make_unique<IOSchedulerType>();
+    auto sibling = std::make_unique<IOSchedulerType>();
+    source->replaceTimerManager(TimingWheelTimerManager(1'000'000ULL));
+    sibling->replaceTimerManager(TimingWheelTimerManager(1'000'000ULL));
+    auto* source_ptr = source.get();
+    auto* sibling_ptr = sibling.get();
+    runtime.addIOScheduler(std::move(source));
+    runtime.addIOScheduler(std::move(sibling));
+    runtime.start();
+
+    const bool ready = waitUntil([&]() {
+        return source_ptr->threadId() != std::thread::id{} &&
+               sibling_ptr->threadId() != std::thread::id{};
+    });
+    if (!ready) {
+        runtime.stop();
+        throw std::runtime_error("runtime skew benchmark scheduler threads did not start");
+    }
+
+    SkewBenchState state;
+    galay::benchmark::CompletionLatch completion_latch(static_cast<std::size_t>(kSkewedTaskCount));
+    state.completion_latch = &completion_latch;
+    state.source = source_ptr;
+    state.sibling = sibling_ptr;
+
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kSkewedTaskCount; ++i) {
+        scheduleTask(*source_ptr, skewedRuntimeTask(&state));
+    }
+    completion_latch.wait();
+    const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    runtime.stop();
+    const auto stats = runtime.stats();
+
+    uint64_t steal_attempts = 0;
+    uint64_t steal_successes = 0;
+    for (const auto& io : stats.io_schedulers) {
+        steal_attempts += io.steal_attempts;
+        steal_successes += io.steal_successes;
+    }
+
+    return {
+        .elapsed_ms = static_cast<double>(elapsed_ns) / 1'000'000.0,
+        .throughput = elapsed_ns > 0
+            ? (static_cast<double>(kSkewedTaskCount) * 1'000'000'000.0 / elapsed_ns)
+            : 0.0,
+        .ran_on_source = state.ran_on_source.load(std::memory_order_relaxed),
+        .ran_on_sibling = state.ran_on_sibling.load(std::memory_order_relaxed),
+        .steal_attempts = steal_attempts,
+        .steal_successes = steal_successes,
+    };
+}
+
 }  // namespace
 
 int main() {
@@ -165,5 +320,38 @@ int main() {
     runThroughputBenchmark<std::decay_t<decltype(scheduler)>>();
     std::this_thread::sleep_for(50ms);
     runLatencyBenchmark<std::decay_t<decltype(scheduler)>>();
+
+    const auto baseline = runSingleSchedulerSkewBaseline<std::decay_t<decltype(scheduler)>>();
+    const auto skewed = runTwoSchedulerStealBenchmark();
+    const double sibling_share = kSkewedTaskCount > 0
+        ? (100.0 * static_cast<double>(skewed.ran_on_sibling) /
+           static_cast<double>(kSkewedTaskCount))
+        : 0.0;
+    const double speedup = baseline.throughput > 0.0
+        ? (skewed.throughput / baseline.throughput)
+        : 0.0;
+    const double hit_rate = skewed.steal_attempts > 0
+        ? (100.0 * static_cast<double>(skewed.steal_successes) /
+           static_cast<double>(skewed.steal_attempts))
+        : 0.0;
+
+    LogInfo("[SkewedSingleScheduler] total={}, work={}us, time={}ms, throughput={:.0f} tasks/s",
+            kSkewedTaskCount,
+            kSkewedTaskWork.count(),
+            baseline.elapsed_ms,
+            baseline.throughput);
+    LogInfo("[SkewedTwoSchedulerSteal] total={}, work={}us, time={}ms, throughput={:.0f} tasks/s, source={}, sibling={}, sibling_share={:.1f}%",
+            kSkewedTaskCount,
+            kSkewedTaskWork.count(),
+            skewed.elapsed_ms,
+            skewed.throughput,
+            skewed.ran_on_source,
+            skewed.ran_on_sibling,
+            sibling_share);
+    LogInfo("[SkewedStealStats] attempts={}, successes={}, hit_rate={:.1f}%",
+            skewed.steal_attempts,
+            skewed.steal_successes,
+            hit_rate);
+    LogInfo("[SkewedStealSpeedup] speedup={:.2f}x", speedup);
     return 0;
 }

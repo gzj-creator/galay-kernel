@@ -8,10 +8,16 @@
 #include "Awaitable.h"
 #include "galay-kernel/common/TimerManager.hpp"
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <ctime>
-#include <deque>
 #include <optional>
+#include <random>
+#include <span>
+#include <utility>
+#include <vector>
 #include <concurrentqueue/moodycamel/concurrentqueue.h>
 
 namespace galay::kernel
@@ -62,6 +68,139 @@ inline void fillTimespecHalfTick(struct ::timespec& ts, uint64_t tick_duration_n
 }  // namespace detail
 
 /**
+ * @brief 固定容量的 Chase-Lev 本地就绪环
+ * @details 只服务于 IOSchedulerWorkState，本地线程 push_back/pop_back，窃取者 steal_front。
+ */
+class ChaseLevTaskRing {
+public:
+    static constexpr size_t kCapacity = 256;
+    static constexpr size_t kMask = kCapacity - 1;
+    static_assert((kCapacity & (kCapacity - 1)) == 0,
+                  "ChaseLevTaskRing capacity must be power of two");
+
+    ChaseLevTaskRing() {
+        for (auto& slot : m_slots) {
+            slot.store(nullptr, std::memory_order_relaxed);
+        }
+    }
+    ~ChaseLevTaskRing() {
+        clear();
+    }
+    ChaseLevTaskRing(const ChaseLevTaskRing&) = delete;
+    ChaseLevTaskRing& operator=(const ChaseLevTaskRing&) = delete;
+
+    bool push_back(TaskRef&& task) {
+        if (!task.isValid()) {
+            return false;
+        }
+        const uint64_t tail = m_tail.load(std::memory_order_relaxed);
+        const uint64_t head = m_head.load(std::memory_order_acquire);
+        if (tail - head >= kCapacity) {
+            return false;
+        }
+        TaskState* const state = detail::TaskRefStorageAccess::releaseState(task);
+        m_slots[tail & kMask].store(state, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_release);
+        m_tail.store(tail + 1, std::memory_order_release);
+        return true;
+    }
+
+    bool pop_back(TaskRef& out) {
+        uint64_t tail = m_tail.load(std::memory_order_relaxed);
+        if (tail == 0) {
+            return false;
+        }
+        tail -= 1;
+        m_tail.store(tail, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        uint64_t head = m_head.load(std::memory_order_relaxed);
+        if (head > tail) {
+            m_tail.store(head, std::memory_order_relaxed);
+            return false;
+        }
+        const size_t index = static_cast<size_t>(tail & kMask);
+        if (head == tail) {
+            if (!m_head.compare_exchange_strong(head, tail + 1,
+                                                std::memory_order_seq_cst,
+                                                std::memory_order_relaxed)) {
+                m_tail.store(head, std::memory_order_relaxed);
+                return false;
+            }
+            m_tail.store(tail + 1, std::memory_order_relaxed);
+            TaskState* const state = m_slots[index].exchange(nullptr, std::memory_order_relaxed);
+            out = detail::TaskRefStorageAccess::adoptState(state);
+            return true;
+        }
+        TaskState* const state = m_slots[index].exchange(nullptr, std::memory_order_relaxed);
+        out = detail::TaskRefStorageAccess::adoptState(state);
+        return true;
+    }
+
+    bool steal_front(TaskRef& out) {
+        uint64_t head = m_head.load(std::memory_order_acquire);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        uint64_t tail = m_tail.load(std::memory_order_acquire);
+        if (head >= tail) {
+            return false;
+        }
+        const size_t index = static_cast<size_t>(head & kMask);
+        if (!m_head.compare_exchange_strong(head, head + 1,
+                                            std::memory_order_seq_cst,
+                                            std::memory_order_relaxed)) {
+            return false;
+        }
+        TaskState* const state = m_slots[index].exchange(nullptr, std::memory_order_relaxed);
+        out = detail::TaskRefStorageAccess::adoptState(state);
+        return true;
+    }
+
+    size_t size() const noexcept {
+        const uint64_t head = m_head.load(std::memory_order_acquire);
+        const uint64_t tail = m_tail.load(std::memory_order_acquire);
+        return static_cast<size_t>(tail - head);
+    }
+
+    size_t remainingCapacity() const noexcept {
+        const size_t current = size();
+        return (current >= kCapacity) ? 0 : (kCapacity - current);
+    }
+
+    bool empty() const noexcept {
+        return size() == 0;
+    }
+
+    void clear() noexcept {
+        const uint64_t head = m_head.load(std::memory_order_relaxed);
+        const uint64_t tail = m_tail.load(std::memory_order_relaxed);
+        for (uint64_t index = head; index < tail; ++index) {
+            TaskState* const state =
+                m_slots[index & kMask].exchange(nullptr, std::memory_order_relaxed);
+            if (state != nullptr) {
+                [[maybe_unused]] TaskRef released =
+                    detail::TaskRefStorageAccess::adoptState(state);
+            }
+        }
+        m_head.store(tail, std::memory_order_relaxed);
+    }
+
+private:
+    std::array<std::atomic<TaskState*>, kCapacity> m_slots{};
+    std::atomic<uint64_t> m_head{0};
+    std::atomic<uint64_t> m_tail{0};
+};
+
+class IOScheduler;
+
+/**
+ * @brief IOScheduler work-stealing 计数快照
+ * @details 计数器由 owner 线程独占写；读取方应在 runtime 停止后或外部同步下采样。
+ */
+struct IOSchedulerStealStats {
+    uint64_t steal_attempts = 0;
+    uint64_t steal_successes = 0;
+};
+
+/**
  * @brief IO 调度器执行线程的本地状态
  * @details 保存工作窃取缓冲、本地队列以及 LIFO 调度策略状态。
  * 该结构仅应在所属调度器线程内访问；`inject_queue` 允许其他线程安全地注入任务。
@@ -101,12 +240,12 @@ struct IOSchedulerWorkerState {
         }
         if (lifo_enabled) {
             if (lifo_slot.has_value()) {
-                local_queue.push_back(std::move(*lifo_slot));
+                enqueueDeferred(std::move(*lifo_slot));
             }
             lifo_slot = std::move(task);
             return;
         }
-        local_queue.push_back(std::move(task));
+        enqueueDeferred(std::move(task));
     }
 
     /**
@@ -117,7 +256,7 @@ struct IOSchedulerWorkerState {
         if (!task.isValid()) {
             return;
         }
-        local_queue.push_back(std::move(task));
+        enqueueDeferredFifo(std::move(task));
     }
 
     /**
@@ -137,18 +276,22 @@ struct IOSchedulerWorkerState {
 
     /**
      * @brief 将跨线程注入队列中的任务搬运到本地队列
-     * @param max_batch 单次最多拉取的任务数；传 0 表示使用缓冲区上限
      * @return 实际拉取并转移到本地队列的任务数量
      */
-    size_t drainInjected(size_t max_batch = 0) {
+    size_t drainInjected() {
         if (inject_buffer.empty()) {
             return 0;
         }
-        const size_t limit =
-            (max_batch == 0) ? inject_buffer.size() : std::min(max_batch, inject_buffer.size());
-        const size_t count = inject_queue.try_dequeue_bulk(inject_buffer.data(), limit);
-        for (size_t i = 0; i < count; ++i) {
-            local_queue.push_back(std::move(inject_buffer[i]));
+        const size_t remaining = local_ring.remainingCapacity();
+        if (remaining == 0) {
+            return 0;
+        }
+        const size_t target = std::min(remaining, inject_buffer.size());
+        const size_t count = inject_queue.try_dequeue_bulk(inject_buffer.data(), target);
+        // inject_queue preserves producer order; reverse the batch so owner-side pop_back()
+        // still observes oldest-first FIFO semantics for deferred and overflowed work.
+        for (size_t i = count; i > 0; --i) {
+            local_ring.push_back(std::move(inject_buffer[i - 1]));
         }
         if (count > 0) {
             injected_outstanding.fetch_sub(count, std::memory_order_acq_rel);
@@ -178,7 +321,7 @@ struct IOSchedulerWorkerState {
      * @return true LIFO 槽位或 FIFO 队列中仍有待执行任务
      */
     bool hasLocalWork() const {
-        return lifo_slot.has_value() || !local_queue.empty();
+        return lifo_slot.has_value() || !local_ring.empty();
     }
 
     /**
@@ -187,7 +330,7 @@ struct IOSchedulerWorkerState {
      */
     void prepareForRun() {
         if (lifo_enabled && lifo_slot.has_value() && consecutive_lifo_polls >= lifo_poll_limit) {
-            local_queue.push_back(std::move(*lifo_slot));
+            enqueueDeferred(std::move(*lifo_slot));
             lifo_slot.reset();
             lifo_enabled = false;
             consecutive_lifo_polls = 0;
@@ -210,9 +353,7 @@ struct IOSchedulerWorkerState {
             return true;
         }
 
-        if (!local_queue.empty()) {
-            out = std::move(local_queue.front());
-            local_queue.pop_front();
+        if (local_ring.pop_back(out)) {
             lifo_enabled = true;
             consecutive_lifo_polls = 0;
             ++polls_since_inject;
@@ -222,16 +363,85 @@ struct IOSchedulerWorkerState {
         return false;
     }
 
+    /**
+     * @brief 供 stealing 路径调用的入口
+     */
+    bool stealFront(TaskRef& out) {
+        return local_ring.steal_front(out);
+    }
+
+    /**
+     * @brief 尝试从 sibling scheduler 偷任务（后续 task 需求）
+     * @return true 表示 stealing 成功，应立即回到 ready pass
+     */
+    bool trySteal();
+
+    IOSchedulerStealStats snapshotStealStats() const noexcept {
+        return IOSchedulerStealStats{
+            .steal_attempts = steal_attempts,
+            .steal_successes = steal_successes,
+        };
+    }
+
     std::optional<TaskRef> lifo_slot;  ///< 最近一次入队的任务，优先以内联 LIFO 方式调度
-    std::deque<TaskRef> local_queue;  ///< 调度器线程本地 FIFO 队列
+    ChaseLevTaskRing local_ring;        ///< 调度器线程本地固定容量 Chase-Lev ring
     moodycamel::ConcurrentQueue<TaskRef> inject_queue;  ///< 其他线程注入任务的无锁队列
     std::vector<TaskRef> inject_buffer;  ///< 从 inject_queue 批量转移任务时复用的临时缓冲
+    size_t self_index = 0;  ///< worker 在 steal-domain 中的位置
+    std::span<IOScheduler* const> siblings;  ///< steal-domain 的只读 sibling 视图
+
+    /**
+     * @brief 配置本地 worker 的 steal-domain 元数据
+     */
+    void configureStealDomain(size_t index, std::span<IOScheduler* const> view) noexcept
+    {
+        self_index = index;
+        siblings = view;
+    }
+
+    void setStealingEnabled(bool enabled) noexcept {
+        stealing_enabled = enabled;
+    }
+
+    std::mt19937 random_seed{std::random_device{}()};  ///< 用于 victim 选择的随机器
+
     std::atomic<uint64_t> injected_outstanding{0};  ///< 尚未搬运到本地队列的注入任务数
     uint32_t consecutive_lifo_polls = 0;  ///< 连续命中 lifo_slot 的次数
     uint32_t lifo_poll_limit = 8;  ///< 允许连续走 LIFO 的最大次数
     uint32_t polls_since_inject = 0;  ///< 距离上次检查 inject_queue 已轮询的任务数
     uint32_t inject_check_interval = 8;  ///< 检查 inject_queue 的轮询间隔
     bool lifo_enabled = true;  ///< 是否允许优先从 lifo_slot 取任务
+    bool stealing_enabled = true;  ///< 当前后端是否允许在 sibling 线程上恢复 stolen task
+    uint64_t steal_attempts = 0;  ///< trySteal() 进入真实 sibling 探测的次数
+    uint64_t steal_successes = 0;  ///< trySteal() 成功窃取至少一个任务的次数
+
+private:
+    void enqueueDeferred(TaskRef task) {
+        if (!task.isValid()) {
+            return;
+        }
+        if (local_ring.remainingCapacity() == 0) {
+            fallbackToInject(std::move(task));
+            return;
+        }
+        local_ring.push_back(std::move(task));
+    }
+
+    void enqueueDeferredFifo(TaskRef task) {
+        if (!task.isValid()) {
+            return;
+        }
+        injected_outstanding.fetch_add(1, std::memory_order_acq_rel);
+        inject_queue.enqueue(std::move(task));
+    }
+
+    void fallbackToInject(TaskRef task) {
+        if (!task.isValid()) {
+            return;
+        }
+        injected_outstanding.fetch_add(1, std::memory_order_acq_rel);
+        inject_queue.enqueue(std::move(task));
+    }
 };
 
 /**
@@ -477,9 +687,100 @@ public:
     bool addTimer(Timer::ptr timer) override {
         return m_timer_manager.push(timer);
     }
+
+    /**
+     * @brief 收到 Runtime 的 steal-domain 视图
+     */
+    virtual void configureStealDomain(std::span<IOScheduler* const> siblings,
+                                      size_t self_index)
+    {
+        m_steal_domain_siblings = siblings;
+        m_steal_domain_self_index = self_index;
+    }
+
+    /**
+     * @brief 暴露给 sibling stealing 的 worker state 入口
+     * @details 第一版仅用于同一 Runtime 内的 IOScheduler work-stealing。
+     */
+    virtual IOSchedulerWorkerState* stealWorkerState() noexcept
+    {
+        return nullptr;
+    }
+
+    /**
+     * @brief 返回 stealing 统计快照
+     * @details 结果只在 runtime 已停止或外部同步后有定义。
+     */
+    virtual IOSchedulerStealStats stealStats() const noexcept
+    {
+        return {};
+    }
+
 protected:
     TimingWheelTimerManager m_timer_manager;
+    std::span<IOScheduler* const> m_steal_domain_siblings{};
+    size_t m_steal_domain_self_index = 0;
 };
+
+inline bool IOSchedulerWorkerState::trySteal() {
+    if (!stealing_enabled || hasLocalWork() || hasPendingInjected() || siblings.size() <= 1) {
+        return false;
+    }
+
+    const size_t local_capacity = local_ring.remainingCapacity();
+    if (local_capacity == 0) {
+        return false;
+    }
+
+    ++steal_attempts;
+    std::uniform_int_distribution<size_t> start_dist(0, siblings.size() - 1);
+    const size_t start = start_dist(random_seed);
+
+    for (size_t probe = 0; probe < siblings.size(); ++probe) {
+        const size_t victim_index = (start + probe) % siblings.size();
+        if (victim_index == self_index) {
+            continue;
+        }
+
+        IOScheduler* const victim_scheduler = siblings[victim_index];
+        if (victim_scheduler == nullptr) {
+            continue;
+        }
+
+        IOSchedulerWorkerState* const victim = victim_scheduler->stealWorkerState();
+        if (victim == nullptr) {
+            continue;
+        }
+
+        const size_t victim_size = victim->local_ring.size();
+        if (victim_size == 0) {
+            continue;
+        }
+
+        const size_t steal_target =
+            std::min(local_capacity, std::max<size_t>(1, victim_size / 2));
+        size_t stolen = 0;
+        for (; stolen < steal_target; ++stolen) {
+            TaskRef task;
+            if (!victim->stealFront(task)) {
+                break;
+            }
+            if (!local_ring.push_back(std::move(task))) {
+                break;
+            }
+        }
+
+        if (stolen > 0) {
+            lifo_enabled = true;
+            consecutive_lifo_polls = 0;
+            polls_since_inject = 0;
+            ++steal_successes;
+            return true;
+        }
+    }
+
+    return false;
+}
 
 
 inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {

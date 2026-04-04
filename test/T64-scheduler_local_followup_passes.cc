@@ -20,7 +20,7 @@ Task<void> pendingTask() {
 
 bool verifyLocalFollowupPassesDrainLocalBacklog() {
     constexpr size_t kReadyBudget = 64;
-    constexpr size_t kTaskCount = 300;
+    constexpr size_t kTaskCount = 200;
 
     IOSchedulerWorkerState worker(kReadyBudget);
     SchedulerCore core(worker, kReadyBudget);

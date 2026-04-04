@@ -15,6 +15,9 @@ IOUringScheduler::IOUringScheduler(int queue_depth, int batch_size)
     , m_core(m_worker, static_cast<size_t>(batch_size))
     , m_reactor(queue_depth, m_last_error_code)
 {
+    // io_uring SQE acquisition/submission stays single-threaded per scheduler; a stolen
+    // coroutine can still submit through its owner reactor, so cross-thread stealing is unsafe.
+    m_worker.setStealingEnabled(false);
 }
 
 IOUringScheduler::~IOUringScheduler()

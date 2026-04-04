@@ -5,6 +5,7 @@
 
 #include "Runtime.h"
 #include "TimerScheduler.h"
+#include <span>
 #include <thread>
 
 #if defined(__APPLE__) || defined(__FreeBSD__)
@@ -63,6 +64,7 @@ void Runtime::start()
     }
 
     applyAffinityConfig();
+    configureIOSchedulerStealDomains();
 
     TimerScheduler::getInstance()->start();
     for (auto& scheduler : m_io_schedulers) {
@@ -92,6 +94,17 @@ void Runtime::stop()
 RuntimeHandle Runtime::handle() noexcept
 {
     return RuntimeHandle(this);
+}
+
+RuntimeStats Runtime::stats() const
+{
+    RuntimeStats snapshot;
+    snapshot.io_schedulers.reserve(m_io_schedulers.size());
+    for (const auto& scheduler : m_io_schedulers) {
+        snapshot.io_schedulers.push_back(
+            scheduler ? scheduler->stealStats() : IOSchedulerStealStats{});
+    }
+    return snapshot;
 }
 
 IOScheduler* Runtime::getIOScheduler(size_t index)
@@ -221,6 +234,26 @@ void Runtime::applyAffinityConfig()
     }
     for (size_t i = 0; i < m_compute_schedulers.size(); ++i) {
         m_compute_schedulers[i]->setAffinity(affinity.custom_compute_cpus[i]);
+    }
+}
+
+void Runtime::configureIOSchedulerStealDomains()
+{
+    const size_t io_count = m_io_schedulers.size();
+    if (io_count == 0) {
+        m_io_scheduler_sibling_view.clear();
+        return;
+    }
+
+    m_io_scheduler_sibling_view.clear();
+    m_io_scheduler_sibling_view.reserve(io_count);
+    for (auto& scheduler : m_io_schedulers) {
+        m_io_scheduler_sibling_view.push_back(scheduler.get());
+    }
+
+    const std::span<IOScheduler* const> siblings{m_io_scheduler_sibling_view.data(), m_io_scheduler_sibling_view.size()};
+    for (size_t index = 0; index < siblings.size(); ++index) {
+        siblings[index]->configureStealDomain(siblings, index);
     }
 }
 
