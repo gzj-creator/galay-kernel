@@ -193,6 +193,11 @@ IOUringReactor::IOUringReactor(int queue_depth, std::atomic<uint64_t>& last_erro
                                          kRecvBufferCount,
                                          kRecvBufferGroup,
                                          kRecvBufferSize));
+
+    if (io_uring_probe* probe = io_uring_get_probe_ring(&m_ring); probe != nullptr) {
+        m_send_zc_supported = io_uring_opcode_supported(probe, IORING_OP_SEND_ZC) != 0;
+        io_uring_free_probe(probe);
+    }
 }
 
 IOUringReactor::~IOUringReactor() {
@@ -215,6 +220,38 @@ void IOUringReactor::notify() {
 
 int IOUringReactor::wakeReadFdForTest() const {
     return m_event_fd;
+}
+
+bool IOUringReactor::shouldUseSendZc(size_t length) const noexcept {
+    return m_send_zc_supported && length >= kSendZcThreshold;
+}
+
+void IOUringReactor::prepareSendSqe(struct io_uring_sqe* sqe,
+                                    SqeRequestToken* token,
+                                    int fd,
+                                    const void* buffer,
+                                    size_t length,
+                                    int flags) {
+    if (token != nullptr) {
+        token->notify_expected = false;
+        token->notify_received = false;
+        token->result_completed = false;
+    }
+
+    if (shouldUseSendZc(length)) {
+        io_uring_prep_send_zc(sqe,
+                              fd,
+                              buffer,
+                              length,
+                              flags,
+                              IORING_SEND_ZC_REPORT_USAGE);
+        if (token != nullptr) {
+            token->notify_expected = true;
+        }
+        return;
+    }
+
+    io_uring_prep_send(sqe, fd, buffer, length, flags);
 }
 
 int IOUringReactor::addAccept(IOController* controller) {
@@ -342,11 +379,12 @@ int IOUringReactor::addSend(IOController* controller) {
         return -EAGAIN;
     }
 
-    io_uring_prep_send(sqe,
-                       controller->m_handle.fd,
-                       awaitable->m_buffer,
-                       awaitable->m_length,
-                       0);
+    prepareSendSqe(sqe,
+                   token,
+                   controller->m_handle.fd,
+                   awaitable->m_buffer,
+                   awaitable->m_length,
+                   0);
     io_uring_sqe_set_data(sqe, token);
     return 0;
 }
@@ -651,7 +689,7 @@ int IOUringReactor::submitSequenceSqe(IOController::Index slot,
     }
     case SEND: {
         auto* c = static_cast<SendIOContext*>(ctx);
-        io_uring_prep_send(sqe, controller->m_handle.fd, c->m_buffer, c->m_length, 0);
+        prepareSendSqe(sqe, token, controller->m_handle.fd, c->m_buffer, c->m_length, 0);
         break;
     }
     case ACCEPT: {
@@ -824,12 +862,23 @@ void IOUringReactor::processCompletion(struct io_uring_cqe* cqe) {
 
     auto* token = static_cast<SqeRequestToken*>(data);
     TokenRecycleGuard recycle_guard{token};
+    const bool notification = (cqe->flags & IORING_CQE_F_NOTIF) != 0;
     const bool more = (cqe->flags & IORING_CQE_F_MORE) != 0;
-    if (token->persistent) {
+    if (notification) {
+        token->notify_received = true;
+        if (!token->result_completed) {
+            recycle_guard.token = nullptr;
+        }
+    } else if (token->persistent) {
         if (more) {
             recycle_guard.token = nullptr;
         } else {
             token->persistent = false;
+        }
+    } else if (token->notify_expected) {
+        token->result_completed = true;
+        if (!token->notify_received) {
+            recycle_guard.token = nullptr;
         }
     }
     if (!token->state) {
@@ -841,6 +890,10 @@ void IOUringReactor::processCompletion(struct io_uring_cqe* cqe) {
 
     auto* controller = token->state->owner.load(std::memory_order_acquire);
     if (!controller) {
+        return;
+    }
+
+    if (notification) {
         return;
     }
 

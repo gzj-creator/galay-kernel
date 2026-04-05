@@ -12,8 +12,10 @@
 #include <chrono>
 #include <thread>
 #include <csignal>
+#include <vector>
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Task.h"
+#include "benchmark/BenchmarkSync.h"
 #include "test/StdoutLog.h"
 
 #ifdef USE_KQUEUE
@@ -188,46 +190,97 @@ int main(int argc, char* argv[]) {
     if (argc > 1) {
         port = static_cast<uint16_t>(std::atoi(argv[1]));
     }
+    int scheduler_count =
+        galay::benchmark::defaultBenchmarkSchedulerCount(std::thread::hardware_concurrency());
+    if (argc > 2) {
+        scheduler_count = std::max(1, std::atoi(argv[2]));
+    }
 
     LogInfo("Benchmark IOV Server (readv/writev) starting on port {}", port);
     LogInfo("meta: backend={}, build={}, role=server, io_mode=iov-2seg, scenario=tcp-echo, split={}+rest",
             benchmarkBackend(),
             benchmarkBuildMode(),
             kPrefixBytes);
+    LogInfo("scheduler_count={}", scheduler_count);
 
 #if defined(USE_KQUEUE)
+    using IOSchedulerType = KqueueScheduler;
     LogInfo("Using KqueueScheduler (macOS)");
-    KqueueScheduler scheduler;
 #elif defined(USE_IOURING)
+    using IOSchedulerType = IOUringScheduler;
     LogInfo("Using IOUringScheduler (Linux io_uring)");
-    IOUringScheduler scheduler;
 #elif defined(USE_EPOLL)
+    using IOSchedulerType = EpollScheduler;
     LogInfo("Using EpollScheduler (Linux epoll)");
-    EpollScheduler scheduler;
 #else
     LogWarn("No supported IO backend available");
     return 1;
 #endif
 
-    scheduler.start();
-
-    TcpSocket listener;
-
-    listener.option().handleReuseAddr();
-    listener.option().handleReusePort();
-    listener.option().handleNonBlock();
+    std::vector<std::unique_ptr<IOSchedulerType>> schedulers;
+    std::vector<TcpSocket> listeners;
+    schedulers.reserve(static_cast<size_t>(scheduler_count));
+    listeners.reserve(static_cast<size_t>(scheduler_count));
 
     Host bindHost(IPType::IPV4, "0.0.0.0", port);
-    auto bindResult = listener.bind(bindHost);
-    if (!bindResult) {
-        LogError("Failed to bind: {}", bindResult.error().message());
-        return 1;
-    }
+    for (int i = 0; i < scheduler_count; ++i) {
+        auto scheduler = std::make_unique<IOSchedulerType>();
+        scheduler->start();
+        schedulers.push_back(std::move(scheduler));
 
-    auto listenResult = listener.listen(1024);
-    if (!listenResult) {
-        LogError("Failed to listen: {}", listenResult.error().message());
-        return 1;
+        TcpSocket listener;
+        auto opt = listener.option().handleReuseAddr();
+        if (!opt) {
+            LogError("Failed to set SO_REUSEADDR: {}", opt.error().message());
+            for (auto& running : schedulers) {
+                running->stop();
+            }
+            return 1;
+        }
+        opt = listener.option().handleReusePort();
+        if (!opt) {
+            LogError("Failed to set SO_REUSEPORT: {}", opt.error().message());
+            for (auto& running : schedulers) {
+                running->stop();
+            }
+            return 1;
+        }
+        opt = listener.option().handleNonBlock();
+        if (!opt) {
+            LogError("Failed to set non-block: {}", opt.error().message());
+            for (auto& running : schedulers) {
+                running->stop();
+            }
+            return 1;
+        }
+        opt = listener.option().handleTcpDeferAccept();
+        if (!opt) {
+            LogError("Failed to set TCP_DEFER_ACCEPT: {}", opt.error().message());
+            for (auto& running : schedulers) {
+                running->stop();
+            }
+            return 1;
+        }
+
+        auto bindResult = listener.bind(bindHost);
+        if (!bindResult) {
+            LogError("Failed to bind listener {}: {}", i, bindResult.error().message());
+            for (auto& running : schedulers) {
+                running->stop();
+            }
+            return 1;
+        }
+
+        auto listenResult = listener.listen(1024);
+        if (!listenResult) {
+            LogError("Failed to listen on listener {}: {}", i, listenResult.error().message());
+            for (auto& running : schedulers) {
+                running->stop();
+            }
+            return 1;
+        }
+
+        listeners.push_back(std::move(listener));
     }
 
     LogInfo("Server listening on 0.0.0.0:{}", port);
@@ -237,13 +290,17 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 
     std::thread stats(statsThread);
-    scheduleTask(scheduler, acceptLoop(&scheduler, &listener));
+    for (size_t i = 0; i < listeners.size(); ++i) {
+        scheduleTask(*schedulers[i], acceptLoop(schedulers[i].get(), &listeners[i]));
+    }
 
     while (g_running.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    scheduler.stop();
+    for (auto& scheduler : schedulers) {
+        scheduler->stop();
+    }
     stats.join();
 
     LogInfo("Server stopped. Total connections: {}, Total requests: {}",

@@ -9,10 +9,12 @@
 #include <atomic>
 #include <condition_variable>
 #include <coroutine>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -32,6 +34,7 @@ template <typename T>
 class JoinHandle;  ///< 同步等待任务结果的句柄前置声明
 struct TaskState;  ///< 任务共享状态前置声明
 class TaskRef;  ///< 轻量任务引用前置声明
+struct TaskWaiter;  ///< 任务等待器前置声明
 
 namespace detail
 {
@@ -46,9 +49,17 @@ bool requestTaskResume(const TaskRef& task) noexcept;  ///< 请求恢复已暂�
 std::thread::id schedulerThreadId(Scheduler* scheduler) noexcept;  ///< 查询调度器线程 ID；scheduler 为空时返回默认值
 void completeTaskState(const TaskRef& task) noexcept;  ///< 标记任务完成并触发 continuation 清理
 void attachTaskContinuation(const TaskRef& task, TaskRef next) noexcept;  ///< 为任务追加下一段 continuation
+void waitTaskCompletion(const TaskRef& task);  ///< 阻塞等待任务完成
+void storeTaskException(const TaskRef& task, std::exception_ptr exception) noexcept;  ///< 写入任务异常
 struct TaskAccess;  ///< 供内核实现访问 Task 私有状态的辅助入口
 template <typename T>
 class TaskAwaiter;  ///< `co_await Task<T>` 使用的 awaiter
+template <typename T>
+void initializeTaskResult(const TaskRef& task) noexcept;  ///< 初始化任务结果存储
+template <typename T, typename U>
+void storeTaskResult(const TaskRef& task, U&& value);  ///< 写入任务结果
+template <typename T>
+decltype(auto) takeTaskResult(const TaskRef& task);  ///< 消费任务结果
 
 } // namespace detail
 
@@ -91,18 +102,45 @@ private:
  */
 struct alignas(64) TaskState
 {
+    static constexpr size_t kInlineResultBytes = 32;
+    enum class ResultStorageKind : uint8_t { Empty, Inline, Heap };
+
     template <typename Promise>
     explicit TaskState(std::coroutine_handle<Promise> handle) noexcept
         : m_handle(handle) {}
+
+    ~TaskState();
+
+    static void* operator new(std::size_t size);
+    static void* operator new(std::size_t size, std::align_val_t alignment);
+    static void operator delete(void* ptr) noexcept;
+    static void operator delete(void* ptr, std::size_t size) noexcept;
+    static void operator delete(void* ptr, std::align_val_t alignment) noexcept;
+    static void operator delete(void* ptr, std::size_t size, std::align_val_t alignment) noexcept;
+
+    void* resultStorage() noexcept { return static_cast<void*>(m_result_storage); }
+    const void* resultStorage() const noexcept { return static_cast<const void*>(m_result_storage); }
 
     std::coroutine_handle<> m_handle = nullptr;  ///< 底层协程句柄
     Scheduler* m_scheduler = nullptr;  ///< 任务所属调度器
     Runtime* m_runtime = nullptr;  ///< 任务继承到的 Runtime 上下文
     std::optional<TaskRef> m_then;  ///< `then()` 追加的 continuation 任务
     std::optional<TaskRef> m_next;  ///< 当前 `co_await` 恢复后要继续唤醒的父任务
+    void (*m_destroy_result)(TaskState&) noexcept = nullptr;  ///< 销毁尚未消费的结果对象
+    std::exception_ptr m_exception;  ///< 任务异常
+    std::atomic<TaskWaiter*> m_waiter{nullptr};  ///< 惰性分配的等待器，仅 join/wait 路径需要
     std::atomic<uint32_t> m_refs{1};  ///< TaskRef 引用计数
     std::atomic<bool> m_done{false};  ///< 任务是否已经执行完成
     std::atomic<bool> m_queued{false};  ///< 任务是否已在调度队列中
+    std::atomic<bool> m_result_consumed{false};  ///< 任务结果是否已被 join/await 消费
+    ResultStorageKind m_result_kind = ResultStorageKind::Empty;  ///< 当前结果的存储形态
+    alignas(std::max_align_t) std::byte m_result_storage[kInlineResultBytes]{};  ///< 小对象内联结果存储
+};
+
+struct TaskWaiter
+{
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
 };
 
 namespace detail
@@ -164,6 +202,115 @@ public:
 private:
     Runtime* m_previous;
 };
+
+} // namespace detail
+
+namespace detail
+{
+
+template <typename T>
+struct TaskResultStorageTraits
+{
+    static_assert(!std::is_reference_v<T>, "Task<T> does not support reference results");
+
+    static constexpr bool kInline =
+        sizeof(T) <= TaskState::kInlineResultBytes &&
+        alignof(T) <= alignof(std::max_align_t);
+
+    static void destroy(TaskState& state) noexcept
+    {
+        if (state.m_result_kind == TaskState::ResultStorageKind::Inline) {
+            std::destroy_at(reinterpret_cast<T*>(state.resultStorage()));
+        } else if (state.m_result_kind == TaskState::ResultStorageKind::Heap) {
+            delete *reinterpret_cast<T**>(state.resultStorage());
+            *reinterpret_cast<T**>(state.resultStorage()) = nullptr;
+        }
+        state.m_result_kind = TaskState::ResultStorageKind::Empty;
+    }
+
+    template <typename U>
+    static void store(TaskState& state, U&& value)
+    {
+        if constexpr (kInline) {
+            std::construct_at(reinterpret_cast<T*>(state.resultStorage()), std::forward<U>(value));
+            state.m_result_kind = TaskState::ResultStorageKind::Inline;
+        } else {
+            *reinterpret_cast<T**>(state.resultStorage()) = new T(std::forward<U>(value));
+            state.m_result_kind = TaskState::ResultStorageKind::Heap;
+        }
+    }
+
+    static T take(TaskState& state)
+    {
+        if (state.m_result_kind == TaskState::ResultStorageKind::Inline) {
+            T value = std::move(*reinterpret_cast<T*>(state.resultStorage()));
+            destroy(state);
+            return value;
+        }
+
+        auto* ptr = *reinterpret_cast<T**>(state.resultStorage());
+        *reinterpret_cast<T**>(state.resultStorage()) = nullptr;
+        state.m_result_kind = TaskState::ResultStorageKind::Empty;
+        std::unique_ptr<T> holder(ptr);
+        return std::move(*holder);
+    }
+};
+
+template <typename T>
+void initializeTaskResult(const TaskRef& task) noexcept
+{
+    if (auto* state = task.state()) {
+        state->m_destroy_result = &TaskResultStorageTraits<T>::destroy;
+    }
+}
+
+template <>
+inline void initializeTaskResult<void>(const TaskRef& task) noexcept
+{
+    if (auto* state = task.state()) {
+        state->m_destroy_result = nullptr;
+    }
+}
+
+template <typename T, typename U>
+void storeTaskResult(const TaskRef& task, U&& value)
+{
+    auto* state = task.state();
+    if (state == nullptr) {
+        throw std::runtime_error("invalid task state");
+    }
+    TaskResultStorageTraits<T>::store(*state, std::forward<U>(value));
+}
+
+inline void storeTaskException(const TaskRef& task, std::exception_ptr exception) noexcept
+{
+    if (auto* state = task.state()) {
+        state->m_exception = std::move(exception);
+    }
+}
+
+template <typename T>
+decltype(auto) takeTaskResult(const TaskRef& task)
+{
+    auto* state = task.state();
+    if (state == nullptr) {
+        throw std::runtime_error("invalid task state");
+    }
+
+    waitTaskCompletion(task);
+    if (state->m_exception) {
+        std::rethrow_exception(state->m_exception);
+    }
+    if (state->m_result_consumed.exchange(true, std::memory_order_acq_rel)) {
+        throw std::runtime_error("task result already consumed");
+    }
+
+    if constexpr (std::is_void_v<T>) {
+        return;
+    } else {
+        return TaskResultStorageTraits<T>::take(*state);
+    }
+}
 
 } // namespace detail
 
@@ -316,7 +463,7 @@ public:
     Task(const Task&) = delete;
     Task& operator=(const Task&) = delete;
 
-    bool isValid() const { return m_task.isValid() && static_cast<bool>(m_completion); }  ///< 是否持有可用任务
+    bool isValid() const { return m_task.isValid(); }  ///< 是否持有可用任务
     bool done() const
     {
         auto* state = m_task.state();
@@ -334,24 +481,17 @@ private:
     friend class TaskPromise;
     friend struct detail::TaskAccess;
 
-    explicit Task(TaskRef task, std::shared_ptr<TaskCompletionState<T>> completion) noexcept
+    explicit Task(TaskRef task) noexcept
         : m_task(std::move(task))
-        , m_completion(std::move(completion))
     {
     }
 
     T takeResult()  ///< 取走任务结果；重复消费会抛出异常
     {
-        return m_completion->take();
-    }
-
-    const std::shared_ptr<TaskCompletionState<T>>& completionState() const noexcept  ///< 返回共享完成态
-    {
-        return m_completion;
+        return detail::takeTaskResult<T>(m_task);
     }
 
     TaskRef m_task;
-    std::shared_ptr<TaskCompletionState<T>> m_completion;
 };
 
 /**
@@ -371,7 +511,7 @@ public:
     Task(const Task&) = delete;
     Task& operator=(const Task&) = delete;
 
-    bool isValid() const { return m_task.isValid() && static_cast<bool>(m_completion); }  ///< 是否持有可用任务
+    bool isValid() const { return m_task.isValid(); }  ///< 是否持有可用任务
     bool done() const
     {
         auto* state = m_task.state();
@@ -390,24 +530,17 @@ private:
     friend class TaskPromise<void>;
     friend struct detail::TaskAccess;
 
-    explicit Task(TaskRef task, std::shared_ptr<TaskCompletionState<void>> completion) noexcept
+    explicit Task(TaskRef task) noexcept
         : m_task(std::move(task))
-        , m_completion(std::move(completion))
     {
     }
 
     void takeResult()  ///< 消费完成状态；若任务抛错则重新抛出异常
     {
-        m_completion->take();
-    }
-
-    const std::shared_ptr<TaskCompletionState<void>>& completionState() const noexcept  ///< 返回共享完成态
-    {
-        return m_completion;
+        detail::takeTaskResult<void>(m_task);
     }
 
     TaskRef m_task;
-    std::shared_ptr<TaskCompletionState<void>> m_completion;
 };
 
 /**
@@ -420,8 +553,12 @@ class JoinHandle
 {
 public:
     JoinHandle() noexcept = default;  ///< 构造空句柄
+    explicit JoinHandle(TaskRef task) noexcept
+        : m_task(std::move(task))
+    {
+    }
     explicit JoinHandle(std::shared_ptr<TaskCompletionState<T>> completion) noexcept
-        : m_completion(std::move(completion))
+        : m_blocking_completion(std::move(completion))
     {
     }
 
@@ -431,26 +568,34 @@ public:
     JoinHandle(const JoinHandle&) = delete;
     JoinHandle& operator=(const JoinHandle&) = delete;
 
-    bool isValid() const noexcept { return static_cast<bool>(m_completion); }  ///< 是否绑定到有效任务完成态
+    bool isValid() const noexcept { return m_task.isValid() || static_cast<bool>(m_blocking_completion); }  ///< 是否绑定到有效任务完成态
 
     void wait() const  ///< 阻塞等待任务结束，不消费结果
     {
-        if (!m_completion) {
+        if (m_task.isValid()) {
+            detail::waitTaskCompletion(m_task);
+            return;
+        }
+        if (!m_blocking_completion) {
             throw std::runtime_error("invalid join handle");
         }
-        m_completion->wait();
+        m_blocking_completion->wait();
     }
 
     T join()  ///< 阻塞等待并消费结果；若任务抛错则重新抛出异常
     {
-        if (!m_completion) {
+        if (m_task.isValid()) {
+            return detail::takeTaskResult<T>(m_task);
+        }
+        if (!m_blocking_completion) {
             throw std::runtime_error("invalid join handle");
         }
-        return m_completion->take();
+        return m_blocking_completion->take();
     }
 
 private:
-    std::shared_ptr<TaskCompletionState<T>> m_completion;
+    TaskRef m_task;
+    std::shared_ptr<TaskCompletionState<T>> m_blocking_completion;
 };
 
 /**
@@ -461,8 +606,12 @@ class JoinHandle<void>
 {
 public:
     JoinHandle() noexcept = default;  ///< 构造空句柄
+    explicit JoinHandle(TaskRef task) noexcept
+        : m_task(std::move(task))
+    {
+    }
     explicit JoinHandle(std::shared_ptr<TaskCompletionState<void>> completion) noexcept
-        : m_completion(std::move(completion))
+        : m_blocking_completion(std::move(completion))
     {
     }
 
@@ -472,26 +621,35 @@ public:
     JoinHandle(const JoinHandle&) = delete;
     JoinHandle& operator=(const JoinHandle&) = delete;
 
-    bool isValid() const noexcept { return static_cast<bool>(m_completion); }  ///< 是否绑定到有效任务完成态
+    bool isValid() const noexcept { return m_task.isValid() || static_cast<bool>(m_blocking_completion); }  ///< 是否绑定到有效任务完成态
 
     void wait() const  ///< 阻塞等待任务结束，不消费完成状态
     {
-        if (!m_completion) {
+        if (m_task.isValid()) {
+            detail::waitTaskCompletion(m_task);
+            return;
+        }
+        if (!m_blocking_completion) {
             throw std::runtime_error("invalid join handle");
         }
-        m_completion->wait();
+        m_blocking_completion->wait();
     }
 
     void join()  ///< 阻塞等待并消费完成状态；若任务抛错则重新抛出异常
     {
-        if (!m_completion) {
+        if (m_task.isValid()) {
+            detail::takeTaskResult<void>(m_task);
+            return;
+        }
+        if (!m_blocking_completion) {
             throw std::runtime_error("invalid join handle");
         }
-        m_completion->take();
+        m_blocking_completion->take();
     }
 
 private:
-    std::shared_ptr<TaskCompletionState<void>> m_completion;
+    TaskRef m_task;
+    std::shared_ptr<TaskCompletionState<void>> m_blocking_completion;
 };
 
 namespace detail
@@ -507,12 +665,6 @@ struct TaskAccess
     static const TaskRef& taskRef(const Task<T>& task) noexcept  ///< 返回任务引用视图，不转移所有权
     {
         return task.m_task;
-    }
-
-    template <typename T>
-    static auto completionState(const Task<T>& task) noexcept -> const std::shared_ptr<TaskCompletionState<T>>&  ///< 返回任务共享完成态
-    {
-        return task.m_completion;
     }
 
     template <typename T>
@@ -659,8 +811,9 @@ public:
     {
         auto handle = std::coroutine_handle<TaskPromise<T>>::from_promise(*this);
         m_task = TaskRef(new TaskState(handle), false);
+        detail::initializeTaskResult<T>(m_task);
         detail::inheritTaskRuntime(m_task, detail::currentRuntime());
-        return Task<T>(m_task, m_completion);
+        return Task<T>(m_task);
     }
 
     std::suspend_always initial_suspend() noexcept { return {}; }  ///< 初始总是挂起，交由调度器决定首次恢复时机
@@ -677,14 +830,14 @@ public:
 
     void unhandled_exception() noexcept  ///< 捕获协程异常并写入完成态
     {
-        m_completion->setException(std::current_exception());
+        detail::storeTaskException(m_task, std::current_exception());
         detail::completeTaskState(m_task);
     }
 
     template <typename U>
     void return_value(U&& value) noexcept(std::is_nothrow_constructible_v<T, U&&>)  ///< 写入协程返回值并标记完成
     {
-        m_completion->setValue(std::forward<U>(value));
+        detail::storeTaskResult<T>(m_task, std::forward<U>(value));
         detail::completeTaskState(m_task);
     }
 
@@ -692,7 +845,6 @@ public:
 
 private:
     TaskRef m_task;
-    std::shared_ptr<TaskCompletionState<T>> m_completion = std::make_shared<TaskCompletionState<T>>();
 };
 
 /**
@@ -710,8 +862,9 @@ public:
     {
         auto handle = std::coroutine_handle<TaskPromise<void>>::from_promise(*this);
         m_task = TaskRef(new TaskState(handle), false);
+        detail::initializeTaskResult<void>(m_task);
         detail::inheritTaskRuntime(m_task, detail::currentRuntime());
-        return Task<void>(m_task, m_completion);
+        return Task<void>(m_task);
     }
 
     std::suspend_always initial_suspend() noexcept { return {}; }  ///< 初始总是挂起，交由调度器决定首次恢复时机
@@ -728,13 +881,12 @@ public:
 
     void unhandled_exception() noexcept  ///< 捕获协程异常并写入完成态
     {
-        m_completion->setException(std::current_exception());
+        detail::storeTaskException(m_task, std::current_exception());
         detail::completeTaskState(m_task);
     }
 
     void return_void() noexcept  ///< 标记 `void` 协程成功完成
     {
-        m_completion->setValue();
         detail::completeTaskState(m_task);
     }
 
@@ -742,7 +894,6 @@ public:
 
 private:
     TaskRef m_task;
-    std::shared_ptr<TaskCompletionState<void>> m_completion = std::make_shared<TaskCompletionState<void>>();
 };
 
 } // namespace galay::kernel

@@ -57,6 +57,13 @@ public:
 private:
     int submitMultishotAccept(IOController* controller);  ///< 为 listener 提交持久 multishot accept SQE
     int submitMultishotRecv(IOController* controller);  ///< 为 socket 提交持久 multishot recv SQE
+    bool shouldUseSendZc(size_t length) const noexcept;  ///< 当前 send 请求是否应走 send_zc 路径
+    void prepareSendSqe(struct io_uring_sqe* sqe,
+                        SqeRequestToken* token,
+                        int fd,
+                        const void* buffer,
+                        size_t length,
+                        int flags);  ///< 按能力/长度门控填充 send 或 send_zc SQE
     int submitSequenceSqe(IOController::Index slot,
                           IOEventType type,
                           IOContextBase* ctx,
@@ -74,12 +81,14 @@ private:
     static constexpr uint16_t kRecvBufferGroup = 0;  ///< provided buffer ring 使用的固定 buffer group id
     static constexpr uint16_t kRecvBufferCount = 256;  ///< provided buffer ring 中预留的 buffer 数量
     static constexpr size_t kRecvBufferSize = 8192;  ///< 单个 provided buffer 的容量
+    static constexpr size_t kSendZcThreshold = 4096;  ///< 大于等于该阈值的 send 请求优先尝试 send_zc
 
     struct io_uring m_ring {};  ///< io_uring ring 实例
     int m_queue_depth = 0;  ///< ring 队列深度
     int m_event_fd = -1;  ///< 跨线程唤醒用 eventfd
     uint64_t m_eventfd_buf = 0;  ///< eventfd 读缓冲
     bool m_wake_read_armed = false;  ///< eventfd 读请求是否已挂到 ring
+    bool m_send_zc_supported = false;  ///< 当前内核/liburing 是否支持 IORING_OP_SEND_ZC
     std::shared_ptr<void> m_recv_buffer_pool;  ///< recv provided buffer ring 的共享所有权
     std::atomic<uint64_t>& m_last_error_code;  ///< 最近一次后端错误编码输出槽位
 };

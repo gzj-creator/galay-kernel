@@ -147,13 +147,12 @@ public:
             throw std::runtime_error("runtime has no scheduler available for spawn");
         }
 
-        auto completion = detail::TaskAccess::completionState(task);
         const TaskRef& taskRef = detail::TaskAccess::taskRef(task);
         bindTaskToRuntime(taskRef, scheduler);
         if (!submitTask(taskRef)) {
             throw std::runtime_error("failed to submit task to runtime");
         }
-        return JoinHandle<T>(std::move(completion));
+        return JoinHandle<T>(detail::TaskAccess::detachTask(std::move(task)));
     }
 
     /**

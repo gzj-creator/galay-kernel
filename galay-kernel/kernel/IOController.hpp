@@ -61,10 +61,13 @@ struct SqeState {
 struct SqeTokenArena;
 
 struct SqeRequestToken {
-    std::shared_ptr<SqeState> state;  ///< SQE 共享状态
+    SqeState* state = nullptr;  ///< 借用的 SQE 状态；真实生命周期由 token arena 保活
     std::shared_ptr<SqeTokenArena> arena;  ///< 持有令牌池生命周期，保证晚到 CQE 仍可安全回收
     uint64_t generation = 0;  ///< 本次提交时观测到的 generation
     bool persistent = false;  ///< 是否绑定到会产生多次 CQE 的持久请求
+    bool notify_expected = false;  ///< 当前请求是否还在等待 zero-copy notification CQE
+    bool notify_received = false;  ///< 是否已经收到 zero-copy notification CQE
+    bool result_completed = false;  ///< 业务完成 CQE 是否已经处理完毕
     SqeRequestToken* next_free = nullptr;  ///< 空闲链表指针
 
     void recycle() noexcept;  ///< 将令牌归还到所属池
@@ -79,7 +82,8 @@ struct SqeTokenArena {
      * @brief 构造令牌池
      * @details 初始化首个令牌块，保证常规热路径可直接获取 token。
      */
-    SqeTokenArena() {
+    SqeTokenArena(IOController* owner, uint8_t slot)
+        : m_state(owner, slot) {
         grow();
     }
 
@@ -92,9 +96,9 @@ struct SqeTokenArena {
      * @param self 当前池的共享所有权，用于让 in-flight token 保活池对象
      * @return 成功返回稳定地址 token；扩容失败或状态缺失时返回 nullptr
      */
-    SqeRequestToken* acquire(const std::shared_ptr<SqeState>& state,
+    SqeRequestToken* acquire(SqeState* state,
                              const std::shared_ptr<SqeTokenArena>& self) {
-        if (!state) {
+        if (state == nullptr) {
             return nullptr;
         }
         if (m_free == nullptr) {
@@ -120,13 +124,19 @@ struct SqeTokenArena {
         if (token == nullptr) {
             return;
         }
-        token->state.reset();
+        token->state = nullptr;
         token->arena.reset();
         token->generation = 0;
         token->persistent = false;
+        token->notify_expected = false;
+        token->notify_received = false;
+        token->result_completed = false;
         token->next_free = m_free;
         m_free = token;
     }
+
+    SqeState* state() noexcept { return &m_state; }
+    const SqeState* state() const noexcept { return &m_state; }
 
 private:
     struct Block {
@@ -150,6 +160,7 @@ private:
         return true;
     }
 
+    SqeState m_state;  ///< 由 arena 保活的稳定 SQE 状态对象
     std::unique_ptr<Block> m_blocks;  ///< 所有已分配 token 块
     SqeRequestToken* m_free = nullptr;  ///< 空闲 token 单链表头
 };
@@ -212,14 +223,19 @@ struct IOController {
     IOController(GHandle handle)
         : m_handle(handle)
 #ifdef USE_IOURING
-        , m_sqe_state{
-            std::make_shared<SqeState>(this, READ),
-            std::make_shared<SqeState>(this, WRITE)}
         , m_sqe_token_pool{
-            std::make_shared<SqeTokenArena>(),
-            std::make_shared<SqeTokenArena>()}
+            std::make_shared<SqeTokenArena>(this, READ),
+            std::make_shared<SqeTokenArena>(this, WRITE)}
+        , m_sqe_state{
+            nullptr,
+            nullptr}
 #endif
-    {}
+    {
+#ifdef USE_IOURING
+        m_sqe_state[READ] = m_sqe_token_pool[READ]->state();
+        m_sqe_state[WRITE] = m_sqe_token_pool[WRITE]->state();
+#endif
+    }
 
     /**
      * @brief 析构 IO 控制器
@@ -250,10 +266,10 @@ struct IOController {
         , m_registered_events(other.m_registered_events)
 #endif
 #ifdef USE_IOURING
-        , m_sqe_state{std::move(other.m_sqe_state[READ]), std::move(other.m_sqe_state[WRITE])}
         , m_sqe_token_pool{
             std::move(other.m_sqe_token_pool[READ]),
             std::move(other.m_sqe_token_pool[WRITE])}
+        , m_sqe_state{nullptr, nullptr}
         , m_ready_accepts(std::move(other.m_ready_accepts))
         , m_ready_recvs(std::move(other.m_ready_recvs))
         , m_accept_multishot_token(other.m_accept_multishot_token)
@@ -265,6 +281,8 @@ struct IOController {
 #endif
     {
 #ifdef USE_IOURING
+        m_sqe_state[READ] = m_sqe_token_pool[READ] ? m_sqe_token_pool[READ]->state() : nullptr;
+        m_sqe_state[WRITE] = m_sqe_token_pool[WRITE] ? m_sqe_token_pool[WRITE]->state() : nullptr;
         rebindSqeState();
 #endif
         other.resetMovedFrom();
@@ -291,10 +309,10 @@ struct IOController {
 #endif
 #ifdef USE_IOURING
             clearSqeState();
-            m_sqe_state[READ] = std::move(other.m_sqe_state[READ]);
-            m_sqe_state[WRITE] = std::move(other.m_sqe_state[WRITE]);
             m_sqe_token_pool[READ] = std::move(other.m_sqe_token_pool[READ]);
             m_sqe_token_pool[WRITE] = std::move(other.m_sqe_token_pool[WRITE]);
+            m_sqe_state[READ] = m_sqe_token_pool[READ] ? m_sqe_token_pool[READ]->state() : nullptr;
+            m_sqe_state[WRITE] = m_sqe_token_pool[WRITE] ? m_sqe_token_pool[WRITE]->state() : nullptr;
             m_ready_accepts = std::move(other.m_ready_accepts);
             m_ready_recvs = std::move(other.m_ready_recvs);
             m_accept_multishot_token = other.m_accept_multishot_token;
@@ -328,10 +346,10 @@ struct IOController {
 #endif
 #ifdef USE_IOURING
         clearSqeState();
-        m_sqe_state[READ] = std::make_shared<SqeState>(this, READ);
-        m_sqe_state[WRITE] = std::make_shared<SqeState>(this, WRITE);
-        m_sqe_token_pool[READ] = std::make_shared<SqeTokenArena>();
-        m_sqe_token_pool[WRITE] = std::make_shared<SqeTokenArena>();
+        m_sqe_token_pool[READ] = std::make_shared<SqeTokenArena>(this, READ);
+        m_sqe_token_pool[WRITE] = std::make_shared<SqeTokenArena>(this, WRITE);
+        m_sqe_state[READ] = m_sqe_token_pool[READ]->state();
+        m_sqe_state[WRITE] = m_sqe_token_pool[WRITE]->state();
         m_ready_accepts.clear();
         m_ready_recvs.clear();
         m_accept_multishot_token = nullptr;
@@ -350,9 +368,9 @@ struct IOController {
      * @return 成功时返回池内稳定地址请求令牌；池缺失、状态缺失或扩容失败时返回 nullptr
      */
     SqeRequestToken* makeSqeRequest(Index slot) const {
-        const auto& state = m_sqe_state[slot];
+        auto* state = m_sqe_state[slot];
         const auto& arena = m_sqe_token_pool[slot];
-        if (!state || !arena) {
+        if (state == nullptr || !arena) {
             return nullptr;
         }
         return arena->acquire(state, arena);
@@ -364,7 +382,7 @@ struct IOController {
      * @note 在替换 awaitable 或重绑 owner 时调用，用于让旧 CQE 自动失效
      */
     void advanceSqeGeneration(Index slot) noexcept {
-        if (auto& state = m_sqe_state[slot]; state) {
+        if (auto* state = m_sqe_state[slot]; state != nullptr) {
             state->generation.fetch_add(1, std::memory_order_acq_rel);
             state->owner.store(this, std::memory_order_release);
         }
@@ -507,8 +525,8 @@ struct IOController {
     uint32_t m_registered_events = 0;          ///< epoll 已注册的事件掩码缓存
 #endif
 #ifdef USE_IOURING
-    std::shared_ptr<SqeState> m_sqe_state[SIZE];  ///< io_uring READ/WRITE 槽位共享状态
     std::shared_ptr<SqeTokenArena> m_sqe_token_pool[SIZE];  ///< io_uring READ/WRITE 槽位令牌池
+    SqeState* m_sqe_state[SIZE] = {nullptr, nullptr};  ///< 借用 token arena 内部的稳定 SQE 状态
     std::deque<GHandle> m_ready_accepts;  ///< listener 缓存的 accepted fd，供下一次 accept() 直接消费
     std::deque<ReadyRecvChunk> m_ready_recvs;  ///< socket 缓存的 ready recv 片段，供下一次 recv() 直接消费
     SqeRequestToken* m_accept_multishot_token = nullptr;  ///< 当前 listener 持有的 multishot accept token
@@ -539,8 +557,8 @@ private:
         m_recv_multishot_armed = false;
         m_accept_result_assigned = false;
         m_recv_result_assigned = false;
-        for (auto& state : m_sqe_state) {
-            if (!state) {
+        for (auto* state : m_sqe_state) {
+            if (state == nullptr) {
                 continue;
             }
             state->owner.store(nullptr, std::memory_order_release);
@@ -549,8 +567,8 @@ private:
     }
 
     void rebindSqeState() noexcept {
-        for (auto& state : m_sqe_state) {
-            if (!state) {
+        for (auto* state : m_sqe_state) {
+            if (state == nullptr) {
                 continue;
             }
             state->owner.store(this, std::memory_order_release);
