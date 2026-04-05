@@ -489,20 +489,20 @@ builder iovec 公开面：
 
 真实参考：
 
-- 线性 builder：`test/T63-custom_sequence_awaitable.cc`
-- 显式步骤编排：`test/T30-custom_awaitable.cc`
-- 半包不提前唤醒：`test/T76-sequence_parser_need_more.cc`
-- 粘包单次恢复尽量吃完：`test/T77-sequence_parser_coalesced_frames.cc`
-- 状态机读写切换：`test/T86-state_machine_read_write_loop.cc`
-- 状态机入口与 builder 桥接：`test/T87-awaitable_builder_state_machine_bridge.cc`
-- 状态机错误动作：`test/T88-state_machine_fail_action.cc`
-- 零长度读写动作：`test/T89-state_machine_zero_length_actions.cc`
-- builder connect 桥接：`test/T90-awaitable_builder_connect_bridge.cc`
-- 自定义状态机 connect：`test/T91-state_machine_connect_action.cc`
-- builder queue 误用拒绝：`test/T92-awaitable_builder_queue_rejected.cc`
-- builder iovec surface：`test/T93-awaitable_builder_iovec_surface.cc`
-- builder iovec 往返：`test/T94-awaitable_builder_iovec_roundtrip.cc`
-- builder iovec parse 桥接：`test/T95-awaitable_builder_iovec_parse_bridge.cc`
+- 线性 builder：`test/T56-custom_sequence_awaitable.cc`
+- 显式步骤编排：`test/T25-custom_awaitable.cc`
+- 半包不提前唤醒：`test/T59-sequence_parser_need_more.cc`
+- 粘包单次恢复尽量吃完：`test/T60-sequence_parser_coalesced_frames.cc`
+- 状态机读写切换：`test/T69-state_machine_read_write_loop.cc`
+- 状态机入口与 builder 桥接：`test/T70-awaitable_builder_state_machine_bridge.cc`
+- 状态机错误动作：`test/T71-state_machine_fail_action.cc`
+- 零长度读写动作：`test/T72-state_machine_zero_length_actions.cc`
+- builder connect 桥接：`test/T73-awaitable_builder_connect_bridge.cc`
+- 自定义状态机 connect：`test/T74-state_machine_connect_action.cc`
+- builder queue 误用拒绝：`test/T75-awaitable_builder_queue_rejected.cc`
+- builder iovec surface：`test/T76-awaitable_builder_iovec_surface.cc`
+- builder iovec 往返：`test/T77-awaitable_builder_iovec_roundtrip.cc`
+- builder iovec parse 桥接：`test/T78-awaitable_builder_iovec_parse_bridge.cc`
 
 任务辅助：
 
@@ -770,10 +770,10 @@ builder iovec 公开面：
 
 - 当前工作树未包含受版本控制的 package consumer fixture
 - 公开 API 面当前主要通过 `test/` 与 `examples/` 交叉验证
-- 调度 / 运行时：`test/T11-compute_scheduler.cc`、`test/T12-mixed_scheduler.cc`
+- 调度 / 运行时：`test/T10-compute_scheduler.cc`、`test/T11-mixed_scheduler.cc`
 - task / sleep：`test/T1-task_chain.cc`
-- 并发：`test/T13-async_mutex.cc`、`test/T14-mpsc_channel.cc`、`test/T17-unsafe_channel.cc`
-- 定时器：`test/T15-timing_wheel.cc`、`test/T18-timer_scheduler.cc`
+- 并发：`test/T12-async_mutex.cc`、`test/T13-mpsc_channel.cc`、`test/T15-unsafe_channel.cc`
+- 定时器：`test/T14-timing_wheel.cc`、`test/T16-timer_scheduler.cc`
 - 真实示例总览：`docs/04-示例代码.md`
 
 ## 专题问题优先落点

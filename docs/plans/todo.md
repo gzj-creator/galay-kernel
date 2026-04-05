@@ -44,11 +44,11 @@
 
 ## 已完成项验证锚点
 
-- `1`：`test/T123-io_uring_multishot_accept_source_case.cc`、`test/T124-io_uring_multishot_accept_runtime.cc`
-- `4`：`test/T122-epoll_lazy_registration_source_case.cc`
-- `5`：`test/T44-scheduler_wakeup_coalescing.cc`、`test/T47-scheduler_queue_edge_wakeup.cc`、`test/T121-runtime_fastpath_source_case.cc`
-- `6`：`test/T121-runtime_fastpath_source_case.cc`
-- `11`：`test/T125-tcp_defer_accept_source_case.cc`
-- `12`：`test/T121-runtime_fastpath_source_case.cc`
-- `2`：`test/T126-io_uring_multishot_recv_source_case.cc`、`test/T127-io_uring_multishot_recv_runtime.cc`
-- `3`：`test/T126-io_uring_multishot_recv_source_case.cc`、`test/T127-io_uring_multishot_recv_runtime.cc`
+- `1`：`test/T107-io_uring_multishot_accept_source_case.cc`、`test/T108-io_uring_multishot_accept_runtime.cc`
+- `4`：`test/T106-epoll_lazy_registration_source_case.cc`
+- `5`：`test/T39-scheduler_wakeup_coalescing.cc`、`test/T42-scheduler_queue_edge_wakeup.cc`、`test/T105-runtime_fastpath_source_case.cc`
+- `6`：`test/T105-runtime_fastpath_source_case.cc`
+- `11`：`test/T109-tcp_defer_accept_source_case.cc`
+- `12`：`test/T105-runtime_fastpath_source_case.cc`
+- `2`：`test/T110-io_uring_multishot_recv_source_case.cc`、`test/T111-io_uring_multishot_recv_runtime.cc`
+- `3`：`test/T110-io_uring_multishot_recv_source_case.cc`、`test/T111-io_uring_multishot_recv_runtime.cc`

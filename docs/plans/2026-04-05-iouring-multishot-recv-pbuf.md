@@ -13,7 +13,7 @@
 ### Task 1: 写源码锁定测试
 
 **Files:**
-- Create: `test/T126-io_uring_multishot_recv_source_case.cc`
+- Create: `test/T110-io_uring_multishot_recv_source_case.cc`
 
 **Step 1: Write the failing test**
 
@@ -26,14 +26,14 @@
 
 **Step 2: Run test to verify it fails**
 
-Run: `cmake --build build-codex-kqueue --target T126-io_uring_multishot_recv_source_case --parallel 2 && ctest --test-dir build-codex-kqueue -R T126-io_uring_multishot_recv_source_case --output-on-failure`
+Run: `cmake --build build-codex-kqueue --target T110-io_uring_multishot_recv_source_case --parallel 2 && ctest --test-dir build-codex-kqueue -R T110-io_uring_multishot_recv_source_case --output-on-failure`
 
 Expected: FAIL，因为源码锚点尚不存在。
 
 ### Task 2: 写最小运行时回归测试
 
 **Files:**
-- Create: `test/T127-io_uring_multishot_recv_runtime.cc`
+- Create: `test/T111-io_uring_multishot_recv_runtime.cc`
 
 **Step 1: Write the failing test**
 
@@ -47,7 +47,7 @@ Expected: FAIL，因为源码锚点尚不存在。
 
 **Step 2: Run test to verify it fails**
 
-Run on Linux: `cmake --build <iouring-build> --target T127-io_uring_multishot_recv_runtime --parallel 2 && ctest --test-dir <iouring-build> -R T127-io_uring_multishot_recv_runtime --output-on-failure`
+Run on Linux: `cmake --build <iouring-build> --target T111-io_uring_multishot_recv_runtime --parallel 2 && ctest --test-dir <iouring-build> -R T111-io_uring_multishot_recv_runtime --output-on-failure`
 
 Expected: FAIL，因为当前 `recv` 仍是单次 SQE 路径。
 
@@ -89,8 +89,8 @@ Expected: FAIL，因为当前 `recv` 仍是单次 SQE 路径。
 ### Task 4: 绿灯验证并做受限 benchmark
 
 **Files:**
-- Test: `test/T126-io_uring_multishot_recv_source_case.cc`
-- Test: `test/T127-io_uring_multishot_recv_runtime.cc`
+- Test: `test/T110-io_uring_multishot_recv_source_case.cc`
+- Test: `test/T111-io_uring_multishot_recv_runtime.cc`
 
 **Step 1: Run narrow tests**
 

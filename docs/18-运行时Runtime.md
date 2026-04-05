@@ -30,7 +30,7 @@
 
 - 源码：`galay-kernel/kernel/Runtime.h`、`galay-kernel/kernel/Runtime.cc`
 - 关联类型：`galay-kernel/kernel/Task.h`、`galay-kernel/kernel/ComputeScheduler.h`、`galay-kernel/kernel/IOScheduler.hpp`
-- 测试：`test/T11-compute_scheduler.cc`、`test/T12-mixed_scheduler.cc`、`test/T27-runtime_stress.cc`、`test/T42-runtime_strict_scheduler_counts.cc`、`test/T52-runtime_block_on_result.cc`、`test/T54-runtime_spawn_join_handle.cc`、`test/T55-runtime_handle_current.cc`、`test/T56-runtime_spawn_blocking.cc`
+- 测试：`test/T10-compute_scheduler.cc`、`test/T11-mixed_scheduler.cc`、`test/T22-runtime_stress.cc`、`test/T37-runtime_strict_scheduler_counts.cc`、`test/T46-runtime_block_on_result.cc`、`test/T48-runtime_spawn_join_handle.cc`、`test/T49-runtime_handle_current.cc`、`test/T50-runtime_spawn_blocking.cc`
 - 示例：`examples/include/E2-tcp_echo_server.cc`、`examples/include/E3-tcp_client.cc`、`examples/include/E4-task_basic.cc`
 
 ## RAG 关键词
