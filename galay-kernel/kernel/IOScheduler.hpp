@@ -787,15 +787,19 @@ inline bool IOController::fillAwaitable(IOEventType type, void* awaitable) {
     m_type |= type;
     switch (type) {
     case IOEventType::RECV:
+        m_awaitable[READ] = awaitable;
+        break;
     case IOEventType::READV:
     case IOEventType::FILEREAD:
     case IOEventType::RECVFROM:
-    case IOEventType::ACCEPT:
     case IOEventType::FILEWATCH:
         m_awaitable[READ] = awaitable;
 #ifdef USE_IOURING
         advanceSqeGeneration(READ);
 #endif
+        break;
+    case IOEventType::ACCEPT:
+        m_awaitable[READ] = awaitable;
         break;
     case IOEventType::SEQUENCE:
 #ifdef USE_IOURING
@@ -824,15 +828,19 @@ inline void IOController::removeAwaitable(IOEventType type) {
     m_type &= ~type;
     switch (type) {
     case IOEventType::RECV:
+        m_awaitable[READ] = nullptr;
+        break;
     case IOEventType::READV:
     case IOEventType::FILEREAD:
     case IOEventType::RECVFROM:
-    case IOEventType::ACCEPT:
     case IOEventType::FILEWATCH:
         m_awaitable[READ] = nullptr;
 #ifdef USE_IOURING
         advanceSqeGeneration(READ);
 #endif
+        break;
+    case IOEventType::ACCEPT:
+        m_awaitable[READ] = nullptr;
         break;
     case IOEventType::SEQUENCE:
 #ifdef USE_IOURING

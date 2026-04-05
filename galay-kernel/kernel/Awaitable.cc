@@ -62,6 +62,9 @@ std::expected<GHandle, IOError> AcceptAwaitable::await_resume() {
 }
 
 std::expected<size_t, IOError> RecvAwaitable::await_resume() {
+#ifdef USE_IOURING
+    m_controller->m_recv_result_assigned = false;
+#endif
     return detail::resumeIOAwaitable<RECV>(*this);
 }
 

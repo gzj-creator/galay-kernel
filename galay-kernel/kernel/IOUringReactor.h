@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 
 namespace galay::kernel {
 
@@ -55,6 +56,7 @@ public:
 
 private:
     int submitMultishotAccept(IOController* controller);  ///< 为 listener 提交持久 multishot accept SQE
+    int submitMultishotRecv(IOController* controller);  ///< 为 socket 提交持久 multishot recv SQE
     int submitSequenceSqe(IOController::Index slot,
                           IOEventType type,
                           IOContextBase* ctx,
@@ -63,14 +65,22 @@ private:
     void processAcceptCompletion(IOController* controller,
                                  AcceptAwaitable* awaitable,
                                  struct io_uring_cqe* cqe);  ///< 处理 multishot accept CQE 并交付/缓存 accepted fd
+    void processRecvCompletion(IOController* controller,
+                               RecvAwaitable* awaitable,
+                               struct io_uring_cqe* cqe);  ///< 处理 multishot recv CQE 并交付/缓存 ready recv 数据
     void processCompletion(struct io_uring_cqe* cqe);  ///< 消费单个 CQE 并唤醒对应 awaitable
     void ensureWakeReadArmed();  ///< 确保 eventfd 的唤醒读请求已提交到 ring
+
+    static constexpr uint16_t kRecvBufferGroup = 0;  ///< provided buffer ring 使用的固定 buffer group id
+    static constexpr uint16_t kRecvBufferCount = 256;  ///< provided buffer ring 中预留的 buffer 数量
+    static constexpr size_t kRecvBufferSize = 8192;  ///< 单个 provided buffer 的容量
 
     struct io_uring m_ring {};  ///< io_uring ring 实例
     int m_queue_depth = 0;  ///< ring 队列深度
     int m_event_fd = -1;  ///< 跨线程唤醒用 eventfd
     uint64_t m_eventfd_buf = 0;  ///< eventfd 读缓冲
     bool m_wake_read_armed = false;  ///< eventfd 读请求是否已挂到 ring
+    std::shared_ptr<void> m_recv_buffer_pool;  ///< recv provided buffer ring 的共享所有权
     std::atomic<uint64_t>& m_last_error_code;  ///< 最近一次后端错误编码输出槽位
 };
 

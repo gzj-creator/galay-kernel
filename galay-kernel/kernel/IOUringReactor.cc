@@ -13,6 +13,7 @@
 #include <expected>
 #include <memory>
 #include <stdexcept>
+#include <vector>
 
 namespace galay::kernel {
 
@@ -74,6 +75,92 @@ struct TokenRecycleGuard {
     }
 };
 
+struct RecvBufferPool {
+    RecvBufferPool(struct io_uring* target_ring,
+                   uint16_t entries,
+                   uint16_t bgid,
+                   size_t buf_size)
+        : ring(target_ring)
+        , ring_entries(entries)
+        , buffer_group(bgid)
+        , buffer_size(buf_size)
+        , mask(io_uring_buf_ring_mask(entries)) {
+        int ret = 0;
+        buf_ring = io_uring_setup_buf_ring(ring, ring_entries, buffer_group, 0, &ret);
+        if (buf_ring == nullptr || ret < 0) {
+            throw std::runtime_error("Failed to set up io_uring recv buffer ring");
+        }
+
+        io_uring_buf_ring_init(buf_ring);
+        buffers.reserve(ring_entries);
+        for (uint16_t bid = 0; bid < ring_entries; ++bid) {
+            auto storage = std::make_unique<char[]>(buffer_size);
+            io_uring_buf_ring_add(buf_ring,
+                                  storage.get(),
+                                  static_cast<unsigned>(buffer_size),
+                                  bid,
+                                  mask,
+                                  bid);
+            buffers.push_back(std::move(storage));
+        }
+        io_uring_buf_ring_advance(buf_ring, ring_entries);
+    }
+
+    ~RecvBufferPool() = default;
+
+    char* data(uint16_t bid) const noexcept {
+        if (bid >= buffers.size()) {
+            return nullptr;
+        }
+        return buffers[bid].get();
+    }
+
+    void recycle(uint16_t bid) noexcept {
+        if (!active || buf_ring == nullptr || bid >= buffers.size()) {
+            return;
+        }
+        io_uring_buf_ring_add(buf_ring,
+                              buffers[bid].get(),
+                              static_cast<unsigned>(buffer_size),
+                              bid,
+                              mask,
+                              0);
+        io_uring_buf_ring_advance(buf_ring, 1);
+    }
+
+    void shutdown() noexcept {
+        active = false;
+        if (buf_ring != nullptr) {
+            (void)io_uring_free_buf_ring(ring, buf_ring, ring_entries, buffer_group);
+            buf_ring = nullptr;
+        }
+    }
+
+    struct io_uring* ring = nullptr;
+    struct io_uring_buf_ring* buf_ring = nullptr;
+    uint16_t ring_entries = 0;
+    uint16_t buffer_group = 0;
+    size_t buffer_size = 0;
+    int mask = 0;
+    bool active = true;
+    std::vector<std::unique_ptr<char[]>> buffers;
+};
+
+inline void recycleRecvBuffer(const std::shared_ptr<void>& owner, uint16_t bid) noexcept {
+    if (!owner) {
+        return;
+    }
+    static_cast<RecvBufferPool*>(owner.get())->recycle(bid);
+}
+
+inline auto recvBufferPool(const std::shared_ptr<void>& owner) -> RecvBufferPool* {
+    return static_cast<RecvBufferPool*>(owner.get());
+}
+
+inline auto cqeBufferId(const struct io_uring_cqe* cqe) -> uint16_t {
+    return static_cast<uint16_t>(cqe->flags >> IORING_CQE_BUFFER_SHIFT);
+}
+
 }  // namespace
 
 IOUringReactor::IOUringReactor(int queue_depth, std::atomic<uint64_t>& last_error_code)
@@ -100,9 +187,18 @@ IOUringReactor::IOUringReactor(int queue_depth, std::atomic<uint64_t>& last_erro
             }
         }
     }
+
+    m_recv_buffer_pool = std::static_pointer_cast<void>(
+        std::make_shared<RecvBufferPool>(&m_ring,
+                                         kRecvBufferCount,
+                                         kRecvBufferGroup,
+                                         kRecvBufferSize));
 }
 
 IOUringReactor::~IOUringReactor() {
+    if (m_recv_buffer_pool) {
+        recvBufferPool(m_recv_buffer_pool)->shutdown();
+    }
     io_uring_queue_exit(&m_ring);
     if (m_event_fd != -1) {
         close(m_event_fd);
@@ -138,6 +234,9 @@ int IOUringReactor::submitMultishotAccept(IOController* controller) {
         return -EINVAL;
     }
 
+    // 每次重新挂载 multishot 请求都切换一次 request epoch，
+    // 让旧 request 的晚到 CQE 无法误命中新 token。
+    controller->advanceSqeGeneration(IOController::READ);
     auto* token = controller->makeSqeRequest(IOController::READ);
     if (token == nullptr) {
         return -ENOMEM;
@@ -186,6 +285,28 @@ int IOUringReactor::addConnect(IOController* controller) {
 int IOUringReactor::addRecv(IOController* controller) {
     auto* awaitable = controller->getAwaitable<RecvAwaitable>();
     if (awaitable == nullptr) return -1;
+    if (controller->tryConsumeReadyRecv(awaitable->m_buffer,
+                                        awaitable->m_length,
+                                        awaitable->m_result)) {
+        return kImmediateReady;
+    }
+    if (controller->m_recv_multishot_armed) {
+        return 0;
+    }
+    return submitMultishotRecv(controller);
+}
+
+int IOUringReactor::submitMultishotRecv(IOController* controller) {
+    if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
+        return -EINVAL;
+    }
+    if (!m_recv_buffer_pool) {
+        return -EINVAL;
+    }
+
+    // awaitable 切换不应使持久 recv token 失效，但每次真正重挂
+    // multishot recv SQE 时必须推进 request epoch 以隔离旧 CQE。
+    controller->advanceSqeGeneration(IOController::READ);
     auto* token = controller->makeSqeRequest(IOController::READ);
     if (token == nullptr) {
         return -ENOMEM;
@@ -197,12 +318,13 @@ int IOUringReactor::addRecv(IOController* controller) {
         return -EAGAIN;
     }
 
-    io_uring_prep_recv(sqe,
-                       controller->m_handle.fd,
-                       awaitable->m_buffer,
-                       awaitable->m_length,
-                       0);
+    io_uring_prep_recv_multishot(sqe, controller->m_handle.fd, nullptr, 0, 0);
+    sqe->flags |= IOSQE_BUFFER_SELECT;
+    sqe->buf_group = kRecvBufferGroup;
     io_uring_sqe_set_data(sqe, token);
+    token->persistent = true;
+    controller->m_recv_multishot_token = token;
+    controller->m_recv_multishot_armed = true;
     return 0;
 }
 
@@ -725,8 +847,12 @@ void IOUringReactor::processCompletion(struct io_uring_cqe* cqe) {
     const auto slot = static_cast<IOController::Index>(token->state->slot);
     auto* base = static_cast<AwaitableBase*>(controller->m_awaitable[slot]);
     if (!base) {
-        if (slot == IOController::READ && controller->m_accept_multishot_armed) {
-            processAcceptCompletion(controller, nullptr, cqe);
+        if (slot == IOController::READ) {
+            if (controller->m_recv_multishot_armed) {
+                processRecvCompletion(controller, nullptr, cqe);
+            } else if (controller->m_accept_multishot_armed) {
+                processAcceptCompletion(controller, nullptr, cqe);
+            }
         }
         return;
     }
@@ -753,16 +879,7 @@ void IOUringReactor::processCompletion(struct io_uring_cqe* cqe) {
     }
     case RECV: {
         auto* awaitable = static_cast<RecvAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addRecv(controller);
-            if (ret < 0) {
-                awaitable->m_result =
-                    std::unexpected(IOError(kRecvFailed, negativeRetOrErrno(ret)));
-                awaitable->m_waker.wakeUp();
-            }
-        }
+        processRecvCompletion(controller, awaitable, cqe);
         break;
     }
     case SEND: {
@@ -969,6 +1086,66 @@ void IOUringReactor::processAcceptCompletion(IOController* controller,
 
     detail::storeBackendError(
         m_last_error_code, kAcceptFailed, negativeRetOrErrno(ret));
+}
+
+void IOUringReactor::processRecvCompletion(IOController* controller,
+                                           RecvAwaitable* awaitable,
+                                           struct io_uring_cqe* cqe) {
+    if (controller == nullptr) {
+        return;
+    }
+
+    const bool more = (cqe->flags & IORING_CQE_F_MORE) != 0;
+
+    if (cqe->res > 0) {
+        if ((cqe->flags & IORING_CQE_F_BUFFER) == 0) {
+            ReadyRecvChunk chunk;
+            chunk.kind = ReadyRecvChunk::Kind::Error;
+            chunk.result = std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(EINVAL)));
+            controller->enqueueReadyRecv(std::move(chunk));
+        } else {
+            const uint16_t bid = cqeBufferId(cqe);
+            auto* pool = recvBufferPool(m_recv_buffer_pool);
+            ReadyRecvChunk chunk;
+            chunk.owner = m_recv_buffer_pool;
+            chunk.data = pool != nullptr ? pool->data(bid) : nullptr;
+            chunk.bid = bid;
+            chunk.length = static_cast<size_t>(cqe->res);
+            chunk.kind = ReadyRecvChunk::Kind::Buffer;
+            chunk.recycle = recycleRecvBuffer;
+            if (chunk.data == nullptr) {
+                chunk.release();
+                chunk.kind = ReadyRecvChunk::Kind::Error;
+                chunk.result = std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(EINVAL)));
+            }
+            controller->enqueueReadyRecv(std::move(chunk));
+        }
+    } else if (cqe->res == 0) {
+        ReadyRecvChunk chunk;
+        chunk.kind = ReadyRecvChunk::Kind::Eof;
+        chunk.result = static_cast<size_t>(0);
+        controller->enqueueReadyRecv(std::move(chunk));
+    } else if (-cqe->res != EAGAIN && -cqe->res != EWOULDBLOCK && -cqe->res != EINTR) {
+        ReadyRecvChunk chunk;
+        chunk.kind = ReadyRecvChunk::Kind::Error;
+        chunk.result = std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-cqe->res)));
+        controller->enqueueReadyRecv(std::move(chunk));
+    }
+
+    if (awaitable != nullptr && !controller->m_recv_result_assigned &&
+        controller->tryConsumeReadyRecv(awaitable->m_buffer,
+                                        awaitable->m_length,
+                                        awaitable->m_result)) {
+        controller->m_recv_result_assigned = true;
+        awaitable->m_waker.wakeUp();
+    }
+
+    if (more) {
+        return;
+    }
+
+    controller->m_recv_multishot_token = nullptr;
+    controller->m_recv_multishot_armed = false;
 }
 
 }  // namespace galay::kernel

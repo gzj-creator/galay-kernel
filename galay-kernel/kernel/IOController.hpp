@@ -6,8 +6,10 @@
 #include "galay-kernel/common/Host.hpp"
 
 #ifdef USE_IOURING
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <expected>
 #include <memory>
@@ -153,10 +155,44 @@ private:
 };
 
 inline void SqeRequestToken::recycle() noexcept {
-    if (arena) {
-        arena->recycle(this);
+    auto keep_alive = arena;
+    if (keep_alive) {
+        keep_alive->recycle(this);
     }
 }
+
+/**
+ * @brief recv ready queue 的单个内部 buffer 片段
+ * @details 保存由 io_uring provided buffer ring 填充完成但尚未交付给用户 buffer 的数据片段。
+ */
+struct ReadyRecvChunk {
+    enum class Kind : uint8_t {
+        Buffer,  ///< 正常数据片段
+        Eof,     ///< 对端关闭，下一次 recv 应返回 0
+        Error    ///< 错误结果，下一次 recv 应返回对应错误
+    };
+
+    std::shared_ptr<void> owner;  ///< 持有底层 buffer pool 生命周期
+    char* data = nullptr;  ///< buffer 起始地址
+    uint16_t bid = 0;  ///< provided buffer id
+    size_t offset = 0;  ///< 当前尚未消费数据的起始偏移
+    size_t length = 0;  ///< 当前尚未消费数据长度
+    Kind kind = Kind::Buffer;  ///< 片段类型
+    std::expected<size_t, IOError> result = 0;  ///< EOF / Error 情况下交付给 awaitable 的结果
+    void (*recycle)(const std::shared_ptr<void>&, uint16_t) noexcept = nullptr;  ///< 归还 buffer 到 ring 的回调
+
+    void release() noexcept {
+        if (recycle != nullptr && owner) {
+            recycle(owner, bid);
+        }
+        owner.reset();
+        data = nullptr;
+        bid = 0;
+        offset = 0;
+        length = 0;
+        recycle = nullptr;
+    }
+};
 #endif
 
 struct IOController {
@@ -219,9 +255,13 @@ struct IOController {
             std::move(other.m_sqe_token_pool[READ]),
             std::move(other.m_sqe_token_pool[WRITE])}
         , m_ready_accepts(std::move(other.m_ready_accepts))
+        , m_ready_recvs(std::move(other.m_ready_recvs))
         , m_accept_multishot_token(other.m_accept_multishot_token)
+        , m_recv_multishot_token(other.m_recv_multishot_token)
         , m_accept_multishot_armed(other.m_accept_multishot_armed)
+        , m_recv_multishot_armed(other.m_recv_multishot_armed)
         , m_accept_result_assigned(other.m_accept_result_assigned)
+        , m_recv_result_assigned(other.m_recv_result_assigned)
 #endif
     {
 #ifdef USE_IOURING
@@ -256,9 +296,13 @@ struct IOController {
             m_sqe_token_pool[READ] = std::move(other.m_sqe_token_pool[READ]);
             m_sqe_token_pool[WRITE] = std::move(other.m_sqe_token_pool[WRITE]);
             m_ready_accepts = std::move(other.m_ready_accepts);
+            m_ready_recvs = std::move(other.m_ready_recvs);
             m_accept_multishot_token = other.m_accept_multishot_token;
+            m_recv_multishot_token = other.m_recv_multishot_token;
             m_accept_multishot_armed = other.m_accept_multishot_armed;
+            m_recv_multishot_armed = other.m_recv_multishot_armed;
             m_accept_result_assigned = other.m_accept_result_assigned;
+            m_recv_result_assigned = other.m_recv_result_assigned;
             rebindSqeState();
 #endif
             other.resetMovedFrom();
@@ -289,9 +333,13 @@ struct IOController {
         m_sqe_token_pool[READ] = std::make_shared<SqeTokenArena>();
         m_sqe_token_pool[WRITE] = std::make_shared<SqeTokenArena>();
         m_ready_accepts.clear();
+        m_ready_recvs.clear();
         m_accept_multishot_token = nullptr;
+        m_recv_multishot_token = nullptr;
         m_accept_multishot_armed = false;
+        m_recv_multishot_armed = false;
         m_accept_result_assigned = false;
+        m_recv_result_assigned = false;
 #endif
     }
 
@@ -378,6 +426,61 @@ struct IOController {
             }
         }
     }
+
+    /**
+     * @brief 将 recv CQE 对应的内部 buffer 片段缓存到 controller 侧队列
+     * @param chunk 已完成但尚未交付给用户的内部 recv 片段
+     */
+    void enqueueReadyRecv(ReadyRecvChunk&& chunk) {
+        m_ready_recvs.push_back(std::move(chunk));
+    }
+
+    /**
+     * @brief 尝试把 ready recv queue 中的一个结果交付到用户 buffer
+     * @param buffer 用户传入的 recv buffer
+     * @param capacity 用户 buffer 最大容量
+     * @param result 输出 recv 结果
+     * @return true 表示已消费一个 ready recv 结果；false 表示队列为空
+     */
+    bool tryConsumeReadyRecv(char* buffer,
+                             size_t capacity,
+                             std::expected<size_t, IOError>& result) {
+        if (m_ready_recvs.empty()) {
+            return false;
+        }
+
+        auto& chunk = m_ready_recvs.front();
+        if (chunk.kind == ReadyRecvChunk::Kind::Error ||
+            chunk.kind == ReadyRecvChunk::Kind::Eof) {
+            result = chunk.result;
+            chunk.release();
+            m_ready_recvs.pop_front();
+            return true;
+        }
+
+        const size_t bytes = std::min(chunk.length, capacity);
+        if (bytes > 0) {
+            std::memcpy(buffer, chunk.data + chunk.offset, bytes);
+        }
+        chunk.offset += bytes;
+        chunk.length -= bytes;
+        result = bytes;
+        if (chunk.length == 0) {
+            chunk.release();
+            m_ready_recvs.pop_front();
+        }
+        return true;
+    }
+
+    /**
+     * @brief 清理 controller 内缓存但尚未交付的 recv 片段
+     */
+    void clearReadyRecvs() noexcept {
+        while (!m_ready_recvs.empty()) {
+            m_ready_recvs.front().release();
+            m_ready_recvs.pop_front();
+        }
+    }
 #endif
 
     /**
@@ -407,9 +510,13 @@ struct IOController {
     std::shared_ptr<SqeState> m_sqe_state[SIZE];  ///< io_uring READ/WRITE 槽位共享状态
     std::shared_ptr<SqeTokenArena> m_sqe_token_pool[SIZE];  ///< io_uring READ/WRITE 槽位令牌池
     std::deque<GHandle> m_ready_accepts;  ///< listener 缓存的 accepted fd，供下一次 accept() 直接消费
+    std::deque<ReadyRecvChunk> m_ready_recvs;  ///< socket 缓存的 ready recv 片段，供下一次 recv() 直接消费
     SqeRequestToken* m_accept_multishot_token = nullptr;  ///< 当前 listener 持有的 multishot accept token
+    SqeRequestToken* m_recv_multishot_token = nullptr;  ///< 当前 socket 持有的 multishot recv token
     bool m_accept_multishot_armed = false;  ///< listener 当前是否已挂上 multishot accept SQE
+    bool m_recv_multishot_armed = false;  ///< socket 当前是否已挂上 multishot recv SQE
     bool m_accept_result_assigned = false;  ///< 当前 suspended accept awaitable 是否已写入一个结果
+    bool m_recv_result_assigned = false;  ///< 当前 suspended recv awaitable 是否已写入一个结果
 #endif
 
     /**
@@ -425,9 +532,13 @@ struct IOController {
 private:
     void clearSqeState() noexcept {
         clearAcceptedHandles();
+        clearReadyRecvs();
         m_accept_multishot_token = nullptr;
+        m_recv_multishot_token = nullptr;
         m_accept_multishot_armed = false;
+        m_recv_multishot_armed = false;
         m_accept_result_assigned = false;
+        m_recv_result_assigned = false;
         for (auto& state : m_sqe_state) {
             if (!state) {
                 continue;
