@@ -54,11 +54,15 @@ public:
     void poll(uint64_t timeout_ns, WakeCoordinator& wake_coordinator);  ///< 等待完成事件并通过 wake coordinator 分发唤醒
 
 private:
+    int submitMultishotAccept(IOController* controller);  ///< 为 listener 提交持久 multishot accept SQE
     int submitSequenceSqe(IOController::Index slot,
                           IOEventType type,
                           IOContextBase* ctx,
                           IOController* controller,
                           SequenceAwaitableBase* owner);  ///< 为 sequence awaitable 提交指定槽位的 SQE
+    void processAcceptCompletion(IOController* controller,
+                                 AcceptAwaitable* awaitable,
+                                 struct io_uring_cqe* cqe);  ///< 处理 multishot accept CQE 并交付/缓存 accepted fd
     void processCompletion(struct io_uring_cqe* cqe);  ///< 消费单个 CQE 并唤醒对应 awaitable
     void ensureWakeReadArmed();  ///< 确保 eventfd 的唤醒读请求已提交到 ring
 

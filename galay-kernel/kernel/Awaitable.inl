@@ -9,49 +9,56 @@ namespace galay::kernel {
 
 #ifdef USE_IOURING
 
-inline bool AcceptIOContext::handleComplete(struct io_uring_cqe* cqe, GHandle handle) {
+inline bool AcceptIOContext::handleComplete(struct io_uring_cqe* cqe,
+                                            [[maybe_unused]] GHandle handle) {
     auto result = io::handleAccept(cqe);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool RecvIOContext::handleComplete(struct io_uring_cqe* cqe, GHandle handle) {
+inline bool RecvIOContext::handleComplete(struct io_uring_cqe* cqe,
+                                          [[maybe_unused]] GHandle handle) {
     auto result = io::handleRecv(cqe, m_buffer);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool SendIOContext::handleComplete(struct io_uring_cqe* cqe, GHandle handle) {
+inline bool SendIOContext::handleComplete(struct io_uring_cqe* cqe,
+                                          [[maybe_unused]] GHandle handle) {
     auto result = io::handleSend(cqe);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool ReadvIOContext::handleComplete(struct io_uring_cqe* cqe, GHandle handle) {
+inline bool ReadvIOContext::handleComplete(struct io_uring_cqe* cqe,
+                                           [[maybe_unused]] GHandle handle) {
     auto result = io::handleReadv(cqe);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool WritevIOContext::handleComplete(struct io_uring_cqe* cqe, GHandle handle) {
+inline bool WritevIOContext::handleComplete(struct io_uring_cqe* cqe,
+                                            [[maybe_unused]] GHandle handle) {
     auto result = io::handleWritev(cqe);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool ConnectIOContext::handleComplete(struct io_uring_cqe* cqe, GHandle handle) {
+inline bool ConnectIOContext::handleComplete(struct io_uring_cqe* cqe,
+                                             [[maybe_unused]] GHandle handle) {
     auto result = io::handleConnect(cqe);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool RecvFromIOContext::handleComplete(struct io_uring_cqe* cqe, GHandle handle) {
+inline bool RecvFromIOContext::handleComplete(struct io_uring_cqe* cqe,
+                                              [[maybe_unused]] GHandle handle) {
     auto [result, from] = io::handleRecvFrom(cqe, m_buffer, m_addr);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
@@ -59,28 +66,32 @@ inline bool RecvFromIOContext::handleComplete(struct io_uring_cqe* cqe, GHandle 
     return true;
 }
 
-inline bool SendToIOContext::handleComplete(struct io_uring_cqe* cqe, GHandle handle) {
+inline bool SendToIOContext::handleComplete(struct io_uring_cqe* cqe,
+                                            [[maybe_unused]] GHandle handle) {
     auto result = io::handleSendTo(cqe);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool FileReadIOContext::handleComplete(struct io_uring_cqe* cqe, GHandle handle) {
+inline bool FileReadIOContext::handleComplete(struct io_uring_cqe* cqe,
+                                              [[maybe_unused]] GHandle handle) {
     auto result = io::handleFileRead(cqe, m_buffer);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool FileWriteIOContext::handleComplete(struct io_uring_cqe* cqe, GHandle handle) {
+inline bool FileWriteIOContext::handleComplete(struct io_uring_cqe* cqe,
+                                               [[maybe_unused]] GHandle handle) {
     auto result = io::handleFileWrite(cqe);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);
     return true;
 }
 
-inline bool FileWatchIOContext::handleComplete(struct io_uring_cqe* cqe, GHandle handle) {
+inline bool FileWatchIOContext::handleComplete(struct io_uring_cqe* cqe,
+                                               [[maybe_unused]] GHandle handle) {
     auto result = io::handleFileWatch(cqe, m_buffer);
     if(!result && IOError::contains(result.error().code(), kNotReady)) return false;
     m_result = std::move(result);

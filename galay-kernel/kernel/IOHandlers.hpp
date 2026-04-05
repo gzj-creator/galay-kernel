@@ -25,7 +25,14 @@ inline std::pair<std::expected<GHandle, IOError>, Host> handleAccept(GHandle lis
     sockaddr_storage addr{};
     socklen_t addr_len = sizeof(addr);
     GHandle handle {
+#if defined(__linux__)
+        .fd = accept4(listen_handle.fd,
+                      reinterpret_cast<sockaddr*>(&addr),
+                      &addr_len,
+                      SOCK_NONBLOCK | SOCK_CLOEXEC),
+#else
         .fd = accept(listen_handle.fd, reinterpret_cast<sockaddr*>(&addr), &addr_len),
+#endif
     };
     if( handle.fd < 0 ) {
         if( static_cast<uint32_t>(errno) == EAGAIN || static_cast<uint32_t>(errno) == EWOULDBLOCK || static_cast<uint32_t>(errno) == EINTR ) {
@@ -225,7 +232,8 @@ inline std::expected<GHandle, IOError> handleAccept(struct io_uring_cqe* cqe)
     return std::unexpected(IOError(kAcceptFailed, static_cast<uint32_t>(-res)));
 }
 
-inline std::expected<size_t, IOError> handleRecv(struct io_uring_cqe* cqe, char* buffer)
+inline std::expected<size_t, IOError> handleRecv(struct io_uring_cqe* cqe,
+                                                [[maybe_unused]] char* buffer)
 {
     int res = cqe->res;
     if (res >= 0) {
@@ -287,7 +295,10 @@ inline std::expected<void, IOError> handleConnect(struct io_uring_cqe* cqe)
     return std::unexpected(IOError(kConnectFailed, static_cast<uint32_t>(-res)));
 }
 
-inline std::pair<std::expected<size_t, IOError>, Host> handleRecvFrom(struct io_uring_cqe* cqe, char* buffer, const sockaddr_storage& addr)
+inline std::pair<std::expected<size_t, IOError>, Host> handleRecvFrom(
+    struct io_uring_cqe* cqe,
+    [[maybe_unused]] char* buffer,
+    const sockaddr_storage& addr)
 {
     int res = cqe->res;
     if (res >= 0) {
@@ -312,7 +323,8 @@ inline std::expected<size_t, IOError> handleSendTo(struct io_uring_cqe* cqe)
     return std::unexpected(IOError(kSendFailed, static_cast<uint32_t>(-res)));
 }
 
-inline std::expected<size_t, IOError> handleFileRead(struct io_uring_cqe* cqe, char* buffer)
+inline std::expected<size_t, IOError> handleFileRead(struct io_uring_cqe* cqe,
+                                                     [[maybe_unused]] char* buffer)
 {
     int res = cqe->res;
     if (res >= 0) {

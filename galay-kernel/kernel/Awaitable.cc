@@ -55,6 +55,9 @@ int registerIOSchedulerClose(Scheduler* scheduler,
 } // namespace detail
 
 std::expected<GHandle, IOError> AcceptAwaitable::await_resume() {
+#ifdef USE_IOURING
+    m_controller->m_accept_result_assigned = false;
+#endif
     return detail::resumeIOAwaitable<ACCEPT>(*this);
 }
 

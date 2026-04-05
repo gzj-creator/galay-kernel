@@ -44,6 +44,14 @@ inline auto negativeRetOrErrno(int ret) -> uint32_t {
         : static_cast<uint32_t>(errno);
 }
 
+inline auto systemCodeFromError(const IOError& error) -> uint32_t {
+    return static_cast<uint32_t>(error.code() >> 32);
+}
+
+inline auto ioErrorCodeFromError(const IOError& error) -> IOErrorCode {
+    return static_cast<IOErrorCode>(error.code() & 0xffffffffu);
+}
+
 inline bool resolveSequenceSlot(IOEventType type, IOController::Index& slot) {
     if (detail::sequenceEventUsesSlot(type, IOController::READ)) {
         slot = IOController::READ;
@@ -55,6 +63,16 @@ inline bool resolveSequenceSlot(IOEventType type, IOController::Index& slot) {
     }
     return false;
 }
+
+struct TokenRecycleGuard {
+    SqeRequestToken* token = nullptr;
+
+    ~TokenRecycleGuard() {
+        if (token != nullptr) {
+            token->recycle();
+        }
+    }
+};
 
 }  // namespace
 
@@ -106,6 +124,20 @@ int IOUringReactor::wakeReadFdForTest() const {
 int IOUringReactor::addAccept(IOController* controller) {
     auto* awaitable = controller->getAwaitable<AcceptAwaitable>();
     if (awaitable == nullptr) return -1;
+    if (controller->tryConsumeAcceptedHandle(awaitable->m_host, awaitable->m_result)) {
+        return kImmediateReady;
+    }
+    if (controller->m_accept_multishot_armed) {
+        return 0;
+    }
+    return submitMultishotAccept(controller);
+}
+
+int IOUringReactor::submitMultishotAccept(IOController* controller) {
+    if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
+        return -EINVAL;
+    }
+
     auto* token = controller->makeSqeRequest(IOController::READ);
     if (token == nullptr) {
         return -ENOMEM;
@@ -113,16 +145,19 @@ int IOUringReactor::addAccept(IOController* controller) {
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        delete token;
+        token->recycle();
         return -EAGAIN;
     }
 
-    io_uring_prep_accept(sqe,
-                         controller->m_handle.fd,
-                         awaitable->m_host->sockAddr(),
-                         awaitable->m_host->addrLen(),
-                         0);
+    io_uring_prep_multishot_accept(sqe,
+                                   controller->m_handle.fd,
+                                   nullptr,
+                                   nullptr,
+                                   SOCK_NONBLOCK | SOCK_CLOEXEC);
     io_uring_sqe_set_data(sqe, token);
+    token->persistent = true;
+    controller->m_accept_multishot_token = token;
+    controller->m_accept_multishot_armed = true;
     return 0;
 }
 
@@ -136,7 +171,7 @@ int IOUringReactor::addConnect(IOController* controller) {
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        delete token;
+        token->recycle();
         return -EAGAIN;
     }
 
@@ -158,7 +193,7 @@ int IOUringReactor::addRecv(IOController* controller) {
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        delete token;
+        token->recycle();
         return -EAGAIN;
     }
 
@@ -181,7 +216,7 @@ int IOUringReactor::addSend(IOController* controller) {
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        delete token;
+        token->recycle();
         return -EAGAIN;
     }
 
@@ -204,7 +239,7 @@ int IOUringReactor::addReadv(IOController* controller) {
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        delete token;
+        token->recycle();
         return -EAGAIN;
     }
 
@@ -232,7 +267,7 @@ int IOUringReactor::addWritev(IOController* controller) {
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        delete token;
+        token->recycle();
         return -EAGAIN;
     }
 
@@ -260,7 +295,7 @@ int IOUringReactor::addSendFile(IOController* controller) {
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        delete token;
+        token->recycle();
         return -EAGAIN;
     }
 
@@ -308,7 +343,7 @@ int IOUringReactor::addFileRead(IOController* controller) {
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        delete token;
+        token->recycle();
         return -EAGAIN;
     }
 
@@ -331,7 +366,7 @@ int IOUringReactor::addFileWrite(IOController* controller) {
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        delete token;
+        token->recycle();
         return -EAGAIN;
     }
 
@@ -354,7 +389,7 @@ int IOUringReactor::addRecvFrom(IOController* controller) {
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        delete token;
+        token->recycle();
         return -EAGAIN;
     }
 
@@ -383,7 +418,7 @@ int IOUringReactor::addSendTo(IOController* controller) {
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        delete token;
+        token->recycle();
         return -EAGAIN;
     }
 
@@ -410,7 +445,7 @@ int IOUringReactor::addFileWatch(IOController* controller) {
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        delete token;
+        token->recycle();
         return -EAGAIN;
     }
 
@@ -482,7 +517,7 @@ int IOUringReactor::submitSequenceSqe(IOController::Index slot,
 
     auto* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
-        delete token;
+        token->recycle();
         return -EAGAIN;
     }
 
@@ -503,7 +538,7 @@ int IOUringReactor::submitSequenceSqe(IOController::Index slot,
                              controller->m_handle.fd,
                              c->m_host->sockAddr(),
                              c->m_host->addrLen(),
-                             0);
+                             SOCK_NONBLOCK | SOCK_CLOEXEC);
         break;
     }
     case CONNECT: {
@@ -576,7 +611,7 @@ int IOUringReactor::submitSequenceSqe(IOController::Index slot,
         break;
     }
     default:
-        delete token;
+        token->recycle();
         return -EINVAL;
     }
 
@@ -665,7 +700,16 @@ void IOUringReactor::processCompletion(struct io_uring_cqe* cqe) {
         return;
     }
 
-    std::unique_ptr<SqeRequestToken> token(static_cast<SqeRequestToken*>(data));
+    auto* token = static_cast<SqeRequestToken*>(data);
+    TokenRecycleGuard recycle_guard{token};
+    const bool more = (cqe->flags & IORING_CQE_F_MORE) != 0;
+    if (token->persistent) {
+        if (more) {
+            recycle_guard.token = nullptr;
+        } else {
+            token->persistent = false;
+        }
+    }
     if (!token->state) {
         return;
     }
@@ -681,22 +725,16 @@ void IOUringReactor::processCompletion(struct io_uring_cqe* cqe) {
     const auto slot = static_cast<IOController::Index>(token->state->slot);
     auto* base = static_cast<AwaitableBase*>(controller->m_awaitable[slot]);
     if (!base) {
+        if (slot == IOController::READ && controller->m_accept_multishot_armed) {
+            processAcceptCompletion(controller, nullptr, cqe);
+        }
         return;
     }
 
     switch (base->m_sqe_type) {
     case ACCEPT: {
         auto* awaitable = static_cast<AcceptAwaitable*>(base);
-        if (awaitable->handleComplete(cqe, controller->m_handle)) {
-            awaitable->m_waker.wakeUp();
-        } else {
-            const int ret = addAccept(controller);
-            if (ret < 0) {
-                awaitable->m_result =
-                    std::unexpected(IOError(kAcceptFailed, negativeRetOrErrno(ret)));
-                awaitable->m_waker.wakeUp();
-            }
-        }
+        processAcceptCompletion(controller, awaitable, cqe);
         break;
     }
     case CONNECT: {
@@ -874,6 +912,63 @@ void IOUringReactor::processCompletion(struct io_uring_cqe* cqe) {
     default:
         break;
     }
+}
+
+void IOUringReactor::processAcceptCompletion(IOController* controller,
+                                             AcceptAwaitable* awaitable,
+                                             struct io_uring_cqe* cqe) {
+    if (controller == nullptr) {
+        return;
+    }
+
+    const bool more = (cqe->flags & IORING_CQE_F_MORE) != 0;
+    auto result = io::handleAccept(cqe);
+
+    if (result) {
+        controller->enqueueAcceptedHandle(*result);
+        if (awaitable != nullptr && !controller->m_accept_result_assigned &&
+            controller->tryConsumeAcceptedHandle(awaitable->m_host, awaitable->m_result)) {
+            controller->m_accept_result_assigned = true;
+            awaitable->m_waker.wakeUp();
+        }
+    } else if (!IOError::contains(result.error().code(), kNotReady)) {
+        if (awaitable != nullptr && !controller->m_accept_result_assigned) {
+            awaitable->m_result = std::unexpected(result.error());
+            controller->m_accept_result_assigned = true;
+            awaitable->m_waker.wakeUp();
+        } else {
+            detail::storeBackendError(
+                m_last_error_code,
+                ioErrorCodeFromError(result.error()),
+                systemCodeFromError(result.error()));
+        }
+    }
+
+    if (more) {
+        return;
+    }
+
+    controller->m_accept_multishot_token = nullptr;
+    controller->m_accept_multishot_armed = false;
+    if (controller->m_handle == GHandle::invalid()) {
+        return;
+    }
+
+    const int ret = submitMultishotAccept(controller);
+    if (ret >= 0) {
+        return;
+    }
+
+    if (awaitable != nullptr && !controller->m_accept_result_assigned) {
+        awaitable->m_result =
+            std::unexpected(IOError(kAcceptFailed, negativeRetOrErrno(ret)));
+        controller->m_accept_result_assigned = true;
+        awaitable->m_waker.wakeUp();
+        return;
+    }
+
+    detail::storeBackendError(
+        m_last_error_code, kAcceptFailed, negativeRetOrErrno(ret));
 }
 
 }  // namespace galay::kernel
