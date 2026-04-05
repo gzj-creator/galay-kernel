@@ -27,6 +27,12 @@
 - 文件监控：`galay::async::FileWatcher`
 - 向量 IO / 零拷贝：`readv` / `writev` / `sendfile`
 
+## v3.4.3 更新
+
+- `Task` 协程路径完成态已并入 `TaskState`，并引入线程本地对象池，减少高频创建协程时的额外堆分配。
+- `io_uring` 补齐 `send_zc` 能力门控与通知处理，plain TCP benchmark 服务端支持 `SO_REUSEPORT` 多 acceptor。
+- 源码分发版本元数据已对齐到 `3.4.3`，便于 CMake / Bazel 消费方按 tag 获取一致版本。
+
 ## v3.4.2 更新
 
 - `AwaitableBuilder` 新增 `ready(...)` 语义，允许在 builder 链路中直接注入已就绪结果，减少手写状态切换与样板代码。
