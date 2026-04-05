@@ -27,6 +27,12 @@
 - 文件监控：`galay::async::FileWatcher`
 - 向量 IO / 零拷贝：`readv` / `writev` / `sendfile`
 
+## v3.4.4 更新
+
+- 补齐 `HandleOption::handleTcpDeferAccept()`，并把 `B13-Sendfile` benchmark 服务端也对齐到 `TCP_DEFER_ACCEPT` 配置路径。
+- `epoll` reactor 新增本地 pending change 批量 flush，减少热路径下频繁 `epoll_ctl` 抖动；`kqueue` 唤醒路径改为 `EVFILT_USER`，去掉额外 pipe。
+- 源码分发版本元数据已对齐到 `3.4.4`，便于 CMake / Bazel 消费方按 tag 获取一致版本。
+
 ## v3.4.3 更新
 
 - `Task` 协程路径完成态已并入 `TaskState`，并引入线程本地对象池，减少高频创建协程时的额外堆分配。
