@@ -107,4 +107,25 @@ std::expected<void, IOError> HandleOption::handleTcpNoDelay()
     return {};
 }
 
+std::expected<void, IOError> HandleOption::handleTcpDeferAccept(int seconds)
+{
+    if (m_handle.fd < 0) {
+        return std::unexpected(IOError(kParamInvalid, 0));
+    }
+    if (seconds <= 0) {
+        return std::unexpected(IOError(kParamInvalid, 0));
+    }
+
+#if defined(__linux__)
+    int opt = seconds;
+    if (::setsockopt(m_handle.fd, IPPROTO_TCP, TCP_DEFER_ACCEPT, &opt, sizeof(opt)) != 0) {
+        return std::unexpected(IOError(kBindFailed, errno));
+    }
+#else
+    (void)seconds;
+#endif
+
+    return {};
+}
+
 }

@@ -144,6 +144,23 @@ public:
      */
     std::expected<void, IOError> handleTcpNoDelay();  ///< 设置 TCP_NODELAY 选项
 
+    /**
+     * @brief 设置 TCP_DEFER_ACCEPT 选项
+     *
+     * @param seconds 内核在 accept 唤醒前等待首个数据包的最长秒数
+     * @return std::expected<void, IOError> 成功返回 void，失败返回 IOError
+     *
+     * @details
+     * - Linux 上会通过 `setsockopt(IPPROTO_TCP, TCP_DEFER_ACCEPT, ...)` 延迟 accept 唤醒，
+     *   只有连接上首个数据包到达时才把 listener 视为 ready。
+     * - 非 Linux 平台当前静默返回成功，不改变原有行为。
+     *
+     * @note
+     * - 仅建议监听 socket 在 `listen()` 前调用
+     * - `seconds` 需为正整数；过大可能增加纯建连场景的首包等待
+     */
+    std::expected<void, IOError> handleTcpDeferAccept(int seconds = 1);  ///< 设置 TCP_DEFER_ACCEPT 选项
+
 private:
     GHandle m_handle;  ///< 要配置的socket句柄
 };

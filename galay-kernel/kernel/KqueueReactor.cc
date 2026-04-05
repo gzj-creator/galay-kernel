@@ -5,9 +5,7 @@
 #include "kernel/Awaitable.h"
 
 #include <cerrno>
-#include <fcntl.h>
 #include <stdexcept>
-#include <unistd.h>
 
 namespace galay::kernel {
 
@@ -27,34 +25,11 @@ KqueueReactor::KqueueReactor(int max_events, std::atomic<uint64_t>& last_error_c
         throw std::runtime_error("Failed to create kqueue");
     }
 
-    if (pipe(m_notify_pipe) == -1) {
-        galay_close(m_kqueue_fd);
-        throw std::runtime_error("Failed to create notification pipe");
-    }
-
-    int flags = fcntl(m_notify_pipe[0], F_GETFL, 0);
-    if (flags < 0 || fcntl(m_notify_pipe[0], F_SETFL, flags | O_NONBLOCK) < 0) {
-        galay_close(m_notify_pipe[0]);
-        galay_close(m_notify_pipe[1]);
-        galay_close(m_kqueue_fd);
-        throw std::runtime_error("Failed to set notification pipe read end non-blocking");
-    }
-
-    flags = fcntl(m_notify_pipe[1], F_GETFL, 0);
-    if (flags < 0 || fcntl(m_notify_pipe[1], F_SETFL, flags | O_NONBLOCK) < 0) {
-        galay_close(m_notify_pipe[0]);
-        galay_close(m_notify_pipe[1]);
-        galay_close(m_kqueue_fd);
-        throw std::runtime_error("Failed to set notification pipe write end non-blocking");
-    }
-
     struct kevent ev;
-    EV_SET(&ev, m_notify_pipe[0], EVFILT_READ, EV_ADD, 0, 0, nullptr);
+    EV_SET(&ev, WAKE_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, nullptr);
     if (kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr) < 0) {
-        galay_close(m_notify_pipe[0]);
-        galay_close(m_notify_pipe[1]);
         galay_close(m_kqueue_fd);
-        throw std::runtime_error("Failed to register notification pipe to kqueue");
+        throw std::runtime_error("Failed to register EVFILT_USER wake event");
     }
 
     m_events.resize(m_max_events);
@@ -64,24 +39,19 @@ KqueueReactor::~KqueueReactor() {
     if (m_kqueue_fd != -1) {
         galay_close(m_kqueue_fd);
     }
-    if (m_notify_pipe[0] != -1) {
-        galay_close(m_notify_pipe[0]);
-    }
-    if (m_notify_pipe[1] != -1) {
-        galay_close(m_notify_pipe[1]);
-    }
 }
 
 void KqueueReactor::notify() {
-    char buf = 1;
-    if (write(m_notify_pipe[1], &buf, 1) < 0) {
+    struct kevent ev;
+    EV_SET(&ev, WAKE_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, nullptr);
+    if (kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr) < 0) {
         detail::storeBackendError(
             m_last_error_code, kNotReady, static_cast<uint32_t>(errno));
     }
 }
 
 int KqueueReactor::wakeReadFdForTest() const {
-    return m_notify_pipe[0];
+    return m_kqueue_fd;
 }
 
 int KqueueReactor::addAccept(IOController* controller) {
@@ -300,9 +270,7 @@ void KqueueReactor::poll(const struct timespec& timeout, WakeCoordinator& wake_c
 
     for (int i = 0; i < nev; ++i) {
         struct kevent& ev = m_events[i];
-        if (ev.ident == static_cast<uintptr_t>(m_notify_pipe[0])) {
-            char buf[256];
-            while (read(m_notify_pipe[0], buf, sizeof(buf)) > 0) {}
+        if (ev.filter == EVFILT_USER && ev.ident == WAKE_IDENT) {
             wake_coordinator.cancelPendingWake();
             continue;
         }

@@ -7,6 +7,7 @@
 
 #ifdef USE_KQUEUE
 
+#include <cstdint>
 #include <sys/event.h>
 
 #include <atomic>
@@ -22,13 +23,13 @@ class KqueueReactor : public BackendReactor
 {
 public:
     KqueueReactor(int max_events, std::atomic<uint64_t>& last_error_code);  ///< 构造 kqueue reactor，并绑定错误输出槽位
-    ~KqueueReactor() override;  ///< 释放 kqueue 和唤醒管道资源
+    ~KqueueReactor() override;  ///< 释放 kqueue 与内部事件缓冲资源
 
     KqueueReactor(const KqueueReactor&) = delete;
     KqueueReactor& operator=(const KqueueReactor&) = delete;
 
     void notify() override;  ///< 从其他线程唤醒阻塞中的 kevent
-    int wakeReadFdForTest() const override;  ///< 返回测试可见的唤醒读端句柄
+    int wakeReadFdForTest() const override;  ///< 返回测试可见的 kqueue 句柄，用于观察唤醒事件
 
     int addAccept(IOController* controller);  ///< 注册 accept 等待；1=立即完成，0=已登记，<0=错误
     int addConnect(IOController* controller);  ///< 注册 connect 等待；1=立即完成，0=已登记，<0=错误
@@ -61,9 +62,9 @@ private:
     int applySequenceInterest(IOController* controller, uint8_t desired_mask);  ///< 把 sequence 感兴趣的读写位应用到 kqueue
 
     static constexpr size_t BATCH_THRESHOLD = 32;  ///< 预留给批量注册场景的提交阈值
+    static constexpr uintptr_t WAKE_IDENT = 1;  ///< 固定 EVFILT_USER 唤醒标识
 
     int m_kqueue_fd = -1;  ///< kqueue 描述符
-    int m_notify_pipe[2] = {-1, -1};  ///< 跨线程唤醒管道
     int m_max_events = 0;  ///< 单次 poll 处理的最大事件数
     std::vector<struct kevent> m_events;  ///< kevent 复用缓冲区
     std::vector<struct kevent> m_pending_changes;  ///< 待批量提交的 kevent 变更缓冲

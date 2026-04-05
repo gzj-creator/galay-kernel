@@ -197,7 +197,7 @@ void EpollScheduler::eventLoop()
             const int timeout_ms = detail::halfTickPollTimeoutMilliseconds(tick_ns);
             m_reactor.poll(timeout_ms, m_wake_coordinator);
         },
-        []() {});
+        [this]() { (void)m_reactor.flushPendingChanges(); });
 }
 
 }

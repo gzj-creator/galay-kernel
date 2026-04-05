@@ -143,6 +143,7 @@ Task<void> benchmarkServer(bool use_sendfile, size_t file_size) {
     TcpSocket listener;
     listener.option().handleReuseAddr();
     listener.option().handleNonBlock();
+    listener.option().handleTcpDeferAccept();
 
     Host bindHost(IPType::IPV4, "127.0.0.1", TEST_PORT);
     listener.bind(bindHost);

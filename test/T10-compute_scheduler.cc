@@ -123,7 +123,7 @@ void runTests() {
 
     // 测试2：多个任务并发执行
     {
-        LogInfo("[Test 2] Concurrent task execution ({} tasks)...", TEST10_COUNT);
+        LogInfo("[Test 2] Concurrent task execution ({} tasks)...", TEST2_COUNT);
         g_total++;
 
         ComputeScheduler scheduler1, scheduler2, scheduler3, scheduler4;
@@ -149,16 +149,16 @@ void runTests() {
         scheduler4.stop();
 
         if (g_test2_counter == TEST2_COUNT) {
-            LogInfo("[Test 2] PASSED: All {} tasks completed", TEST10_COUNT);
+            LogInfo("[Test 2] PASSED: All {} tasks completed", TEST2_COUNT);
             g_passed++;
         } else {
-            LogError("[Test 2] FAILED: Only {}/{} tasks completed", g_test2_counter.load(), TEST10_COUNT);
+            LogError("[Test 2] FAILED: Only {}/{} tasks completed", g_test2_counter.load(), TEST2_COUNT);
         }
     }
 
     // 测试3：计算密集型任务
     {
-        LogInfo("[Test 3] Compute-intensive tasks ({} tasks)...", TEST10_COUNT);
+        LogInfo("[Test 3] Compute-intensive tasks ({} tasks)...", TEST3_COUNT);
         g_total++;
 
         ComputeScheduler scheduler1, scheduler2, scheduler3, scheduler4;
@@ -192,10 +192,10 @@ void runTests() {
         scheduler4.stop();
 
         if (g_test3_counter == TEST3_COUNT) {
-            LogInfo("[Test 3] PASSED: All {} compute tasks completed in {}ms", TEST10_COUNT, ms);
+            LogInfo("[Test 3] PASSED: All {} compute tasks completed in {}ms", TEST3_COUNT, ms);
             g_passed++;
         } else {
-            LogError("[Test 3] FAILED: Only {}/{} tasks completed", g_test3_counter.load(), TEST10_COUNT);
+            LogError("[Test 3] FAILED: Only {}/{} tasks completed", g_test3_counter.load(), TEST3_COUNT);
         }
     }
 

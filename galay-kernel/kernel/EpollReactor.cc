@@ -93,6 +93,28 @@ int EpollReactor::wakeReadFdForTest() const {
     return m_event_fd;
 }
 
+size_t EpollReactor::findPendingChangeIndex(IOController* controller) const {
+    for (size_t index = 0; index < m_pending_changes.size(); ++index) {
+        if (m_pending_changes[index].controller == controller) {
+            return index;
+        }
+    }
+    return m_pending_changes.size();
+}
+
+void EpollReactor::erasePendingChange(size_t index) {
+    if (index < m_pending_changes.size()) {
+        m_pending_changes.erase(m_pending_changes.begin() + index);
+    }
+}
+
+void EpollReactor::discardPendingChange(IOController* controller) {
+    const size_t index = findPendingChangeIndex(controller);
+    if (index != m_pending_changes.size()) {
+        erasePendingChange(index);
+    }
+}
+
 uint32_t EpollReactor::buildEvents(IOController* controller) const {
     if (controller == nullptr) {
         return EPOLLET;
@@ -113,38 +135,101 @@ int EpollReactor::applyEvents(IOController* controller, uint32_t events) {
         return -1;
     }
 
-    if (events == controller->m_registered_events) {
-        return 0;
-    }
-
-    const int fd = controller->m_handle.fd;
-    if (events == EPOLLET) {
-        const int ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
-        if (ret == 0 || errno == ENOENT) {
-            controller->m_registered_events = 0;
+    const size_t index = findPendingChangeIndex(controller);
+    if (index != m_pending_changes.size()) {
+        if (events == controller->m_registered_events) {
+            erasePendingChange(index);
             return 0;
         }
-        return ret;
-    }
-
-    struct epoll_event ev;
-    ev.events = events;
-    ev.data.ptr = controller;
-
-    int ret = 0;
-    if (controller->m_registered_events == 0) {
-        ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, fd, &ev);
-    } else {
-        ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, fd, &ev);
-        if (ret == -1 && errno == ENOENT) {
-            ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, fd, &ev);
+        if (m_pending_changes[index].events == events) {
+            return 0;
         }
+        m_pending_changes[index].events = events;
+    } else {
+        if (events == controller->m_registered_events) {
+            return 0;
+        }
+        m_pending_changes.push_back(PendingChange{
+            .controller = controller,
+            .events = events,
+        });
     }
 
-    if (ret == 0) {
-        controller->m_registered_events = events;
+    if (m_pending_changes.size() >= BATCH_THRESHOLD) {
+        return flushPendingChanges();
     }
-    return ret;
+    return 0;
+}
+
+int EpollReactor::flushPendingChanges() {
+    size_t index = 0;
+    while (index < m_pending_changes.size()) {
+        PendingChange change = m_pending_changes[index];
+        auto* controller = change.controller;
+        if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
+            erasePendingChange(index);
+            continue;
+        }
+
+        const uint32_t events = change.events;
+        if (events == controller->m_registered_events) {
+            erasePendingChange(index);
+            continue;
+        }
+
+        const int fd = controller->m_handle.fd;
+        if (events == EPOLLET) {
+            if (controller->m_registered_events == 0) {
+                erasePendingChange(index);
+                continue;
+            }
+
+            int ret = -1;
+            do {
+                ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+            } while (ret == -1 && errno == EINTR);
+
+            if (ret == 0 || errno == ENOENT) {
+                controller->m_registered_events = 0;
+                erasePendingChange(index);
+                continue;
+            }
+            detail::storeBackendError(
+                m_last_error_code, kNotReady, static_cast<uint32_t>(errno));
+            return -1;
+        }
+
+        struct epoll_event ev;
+        ev.events = events;
+        ev.data.ptr = controller;
+
+        int ret = -1;
+        if (controller->m_registered_events == 0) {
+            do {
+                ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, fd, &ev);
+            } while (ret == -1 && errno == EINTR);
+        } else {
+            do {
+                ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_MOD, fd, &ev);
+            } while (ret == -1 && errno == EINTR);
+            if (ret == -1 && errno == ENOENT) {
+                do {
+                    ret = epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, fd, &ev);
+                } while (ret == -1 && errno == EINTR);
+            }
+        }
+
+        if (ret == 0) {
+            controller->m_registered_events = events;
+            erasePendingChange(index);
+            continue;
+        }
+
+        detail::storeBackendError(
+            m_last_error_code, kNotReady, static_cast<uint32_t>(errno));
+        return -1;
+    }
+    return 0;
 }
 
 int EpollReactor::addAccept(IOController* controller) {
@@ -216,7 +301,7 @@ int EpollReactor::addClose(IOController* controller) {
     }
 
     const int fd = controller->m_handle.fd;
-    (void)applyEvents(controller, EPOLLET);
+    discardPendingChange(controller);
 
     controller->m_type = IOEventType::INVALID;
     controller->m_awaitable[IOController::READ] = nullptr;
@@ -298,6 +383,10 @@ void EpollReactor::syncEvents(IOController* controller) {
 }
 
 void EpollReactor::poll(int timeout_ms, WakeCoordinator& wake_coordinator) {
+    if (flushPendingChanges() < 0) {
+        return;
+    }
+
     const int nev = epoll_wait(m_epoll_fd, m_events.data(), m_max_events, timeout_ms);
     if (nev < 0) {
         if (errno == EINTR) {

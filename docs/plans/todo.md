@@ -17,22 +17,22 @@
 
 - [x] 6. 消除每次 IO 操作都 `new` 一个 `SqeRequestToken`
   - `IOController` 同一时间每个方向（READ/WRITE）只有一个活跃操作，使用稳定地址 token 池复用，消除热路径堆分配。
-- [ ] 7. 协程创建三次堆分配合并
+- [x] 7. 协程创建三次堆分配合并
   - 目前包含 `coroutine frame + TaskState + shared_ptr`。可合并 `TaskState` 和 `TaskCompletionState`；对不需要 `JoinHandle::join()` 的协程，避免 `mutex + condition_variable` 常驻成本。
-- [ ] 8. TaskState 对象池
+- [x] 8. TaskState 对象池
   - `TaskState` 是 `alignas(64)` 的固定大小结构，适合做 per-thread slab allocator。高频创建销毁协程时可明显降低分配成本。
-- [ ] 9. IOController 中 `shared_ptr` 精简
+- [x] 9. IOController 中 `shared_ptr` 精简
   - `SqeState` 的生命周期当前完全受 `IOController` 管控，可评估替换为 `unique_ptr` 或直接内嵌，减少原子引用计数。
 
 ## 网络层
 
-- [ ] 10. SO_REUSEPORT 多 acceptor
+- [x] 10. SO_REUSEPORT 多 acceptor
   - 当前只有一个 scheduler 跑 accept，其它 scheduler 等注入。用 `SO_REUSEPORT` 让每个 IO 线程都 `bind+listen` 同一端口，由内核做连接分发。
 - [x] 11. TCP_DEFER_ACCEPT
   - 设置后内核只在收到第一个数据包时才唤醒 accept，减少空连接上下文切换。
 - [x] 12. accept4 替代 accept + fcntl
   - 直接在 accept 时申请 `SOCK_NONBLOCK | SOCK_CLOEXEC`，省掉额外 `fcntl` 调用。
-- [ ] 13. io_uring zero-copy send（`IORING_OP_SEND_ZC`）
+- [x] 13. io_uring zero-copy send（`IORING_OP_SEND_ZC`）
   - 对大包发送场景避免内核侧 buffer copy。需要 kernel 6.0+。
 
 ## 优先级排序
@@ -48,7 +48,12 @@
 - `4`：`test/T106-epoll_lazy_registration_source_case.cc`
 - `5`：`test/T39-scheduler_wakeup_coalescing.cc`、`test/T42-scheduler_queue_edge_wakeup.cc`、`test/T105-runtime_fastpath_source_case.cc`
 - `6`：`test/T105-runtime_fastpath_source_case.cc`
+- `7`：`test/T48-runtime_spawn_join_handle.cc`、`test/T50-runtime_spawn_blocking.cc`、`test/T52-runtime_task_api_surface.cc`、`test/T115-runtime_task_storage_source_case.cc`
+- `8`：`test/T22-runtime_stress.cc`、`test/T100-chase_lev_ring_steal_pop_stress.cc`、`test/T115-runtime_task_storage_source_case.cc`
+- `9`：`test/T95-io_controller_move_only_surface.cc`、`test/T116-io_controller_sqe_state_source_case.cc`、`test/T108-io_uring_multishot_accept_runtime.cc`、`test/T111-io_uring_multishot_recv_runtime.cc`
+- `10`：`test/T112-runtime_reuseport_source_case.cc`、`benchmark/B2-tcp_server.cc`、`benchmark/B11-tcp_iov_server.cc`
 - `11`：`test/T109-tcp_defer_accept_source_case.cc`
 - `12`：`test/T105-runtime_fastpath_source_case.cc`
 - `2`：`test/T110-io_uring_multishot_recv_source_case.cc`、`test/T111-io_uring_multishot_recv_runtime.cc`
 - `3`：`test/T110-io_uring_multishot_recv_source_case.cc`、`test/T111-io_uring_multishot_recv_runtime.cc`
+- `13`：`test/T113-io_uring_send_zc_source_case.cc`、`test/T114-io_uring_send_zc_runtime.cc`

@@ -45,20 +45,32 @@ public:
     int addSendFile(IOController* controller);  ///< 注册 sendfile 等待；1=立即完成，0=已登记，<0=错误
     int addSequence(IOController* controller);  ///< 注册组合式序列等待；1=立即完成，0=已登记，<0=错误
     int remove(IOController* controller);  ///< 删除控制器相关的所有 epoll 注册事件
+    int flushPendingChanges();  ///< 把本地 pending 注册/反注册请求批量提交到内核
 
     void poll(int timeout_ms, WakeCoordinator& wake_coordinator);  ///< 轮询事件并通过 wake coordinator 分发唤醒
 
 private:
+    struct PendingChange {
+        IOController* controller = nullptr;  ///< 对应控制器
+        uint32_t events = EPOLLET;  ///< 目标事件掩码；仅 EPOLLET 表示删除注册
+    };
+
     uint32_t buildEvents(IOController* controller) const;  ///< 根据控制器状态计算目标 epoll 事件掩码
-    int applyEvents(IOController* controller, uint32_t events);  ///< 把计算出的 epoll 事件掩码应用到内核
+    int applyEvents(IOController* controller, uint32_t events);  ///< 把计算出的 epoll 事件掩码写入本地 pending 队列
     int processSequence(IOEventType type, IOController* controller);  ///< 处理 sequence awaitable 的注册/同步逻辑
     void processEvent(struct epoll_event& ev);  ///< 消费单个 epoll 事件并唤醒对应 awaitable
     void syncEvents(IOController* controller);  ///< 同步控制器当前关注事件到 epoll
+    size_t findPendingChangeIndex(IOController* controller) const;  ///< 查找控制器对应的 pending change
+    void erasePendingChange(size_t index);  ///< 删除指定下标的 pending change
+    void discardPendingChange(IOController* controller);  ///< 丢弃控制器对应的 pending change
+
+    static constexpr size_t BATCH_THRESHOLD = 32;  ///< 累积到一定数量时主动 flush，避免队列无限增长
 
     int m_epoll_fd = -1;  ///< epoll 实例 fd
     int m_event_fd = -1;  ///< 跨线程唤醒用 eventfd
     int m_max_events = 0;  ///< 单次 poll 处理的最大事件数
     std::vector<struct epoll_event> m_events;  ///< epoll_wait 复用缓冲区
+    std::vector<PendingChange> m_pending_changes;  ///< 待批量提交的 epoll 事件变更
     std::atomic<uint64_t>& m_last_error_code;  ///< 最近一次后端错误编码输出槽位
 };
 
