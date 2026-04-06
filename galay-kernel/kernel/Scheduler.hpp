@@ -179,6 +179,7 @@ inline void Scheduler::resume(TaskRef& task) {
         return;
     }
     state->m_queued.store(false, std::memory_order_relaxed);
+    state->m_resume_owner_only.store(false, std::memory_order_relaxed);
     if (state->m_runtime == nullptr) {
         state->m_handle.resume();
         return;

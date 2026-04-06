@@ -132,6 +132,7 @@ struct alignas(64) TaskState
     std::atomic<uint32_t> m_refs{1};  ///< TaskRef 引用计数
     std::atomic<bool> m_done{false};  ///< 任务是否已经执行完成
     std::atomic<bool> m_queued{false};  ///< 任务是否已在调度队列中
+    std::atomic<bool> m_resume_owner_only{false};  ///< 本次由 waker/timeout 恢复的任务必须回到 owner scheduler 线程执行
     std::atomic<bool> m_result_consumed{false};  ///< 任务结果是否已被 join/await 消费
     ResultStorageKind m_result_kind = ResultStorageKind::Empty;  ///< 当前结果的存储形态
     alignas(std::max_align_t) std::byte m_result_storage[kInlineResultBytes]{};  ///< 小对象内联结果存储

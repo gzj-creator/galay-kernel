@@ -166,7 +166,14 @@ bool requestTaskResume(const TaskRef& task) noexcept
     if (state->m_queued.exchange(true, std::memory_order_acq_rel)) {
         return false;
     }
-    return state->m_scheduler->schedule(task);
+    state->m_resume_owner_only.store(true, std::memory_order_release);
+    if (state->m_scheduler->schedule(task)) {
+        return true;
+    }
+
+    state->m_resume_owner_only.store(false, std::memory_order_release);
+    state->m_queued.store(false, std::memory_order_release);
+    return false;
 }
 
 std::thread::id schedulerThreadId(Scheduler* scheduler) noexcept
