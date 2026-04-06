@@ -17,6 +17,41 @@ inline bool sequenceMaskUsesSlot(uint8_t mask, IOController::Index slot) {
 
 }  // namespace
 
+KqueueReactor::RegistrationToken* KqueueReactor::ensureRegistrationToken(IOController* controller) {
+    if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
+        return nullptr;
+    }
+
+    const int fd = controller->m_handle.fd;
+    auto it = m_registration_tokens.find(fd);
+    if (it == m_registration_tokens.end()) {
+        auto token = std::make_unique<RegistrationToken>();
+        token->controller = controller;
+        auto* raw = token.get();
+        m_registration_tokens.emplace(fd, std::move(token));
+        return raw;
+    }
+
+    it->second->controller = controller;
+    return it->second.get();
+}
+
+void KqueueReactor::retireRegistrationToken(IOController* controller) {
+    if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
+        return;
+    }
+
+    const int fd = controller->m_handle.fd;
+    auto it = m_registration_tokens.find(fd);
+    if (it == m_registration_tokens.end()) {
+        return;
+    }
+
+    it->second->controller = nullptr;
+    m_retired_tokens.push_back(std::move(it->second));
+    m_registration_tokens.erase(it);
+}
+
 KqueueReactor::KqueueReactor(int max_events, std::atomic<uint64_t>& last_error_code)
     : m_kqueue_fd(kqueue())
     , m_max_events(max_events)
@@ -60,8 +95,10 @@ int KqueueReactor::addAccept(IOController* controller) {
     if (awaitable->handleComplete(controller->m_handle)) {
         return 1;
     }
+    auto* token = ensureRegistrationToken(controller);
+    if (token == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, token);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -71,8 +108,10 @@ int KqueueReactor::addConnect(IOController* controller) {
     if (awaitable->handleComplete(controller->m_handle)) {
         return 1;
     }
+    auto* token = ensureRegistrationToken(controller);
+    if (token == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, token);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -82,8 +121,10 @@ int KqueueReactor::addRecv(IOController* controller) {
     if (awaitable->handleComplete(controller->m_handle)) {
         return 1;
     }
+    auto* token = ensureRegistrationToken(controller);
+    if (token == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, token);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -93,8 +134,10 @@ int KqueueReactor::addSend(IOController* controller) {
     if (awaitable->handleComplete(controller->m_handle)) {
         return 1;
     }
+    auto* token = ensureRegistrationToken(controller);
+    if (token == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, token);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -104,8 +147,10 @@ int KqueueReactor::addReadv(IOController* controller) {
     if (awaitable->handleComplete(controller->m_handle)) {
         return 1;
     }
+    auto* token = ensureRegistrationToken(controller);
+    if (token == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, token);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -115,8 +160,10 @@ int KqueueReactor::addWritev(IOController* controller) {
     if (awaitable->handleComplete(controller->m_handle)) {
         return 1;
     }
+    auto* token = ensureRegistrationToken(controller);
+    if (token == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, token);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -126,6 +173,7 @@ int KqueueReactor::addClose(IOController* controller) {
     }
 
     const int fd = controller->m_handle.fd;
+    retireRegistrationToken(controller);
     struct kevent evs[2];
     EV_SET(&evs[0], fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
     EV_SET(&evs[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
@@ -149,8 +197,10 @@ int KqueueReactor::addFileRead(IOController* controller) {
     if (awaitable->handleComplete(controller->m_handle)) {
         return 1;
     }
+    auto* token = ensureRegistrationToken(controller);
+    if (token == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, token);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -160,8 +210,10 @@ int KqueueReactor::addFileWrite(IOController* controller) {
     if (awaitable->handleComplete(controller->m_handle)) {
         return 1;
     }
+    auto* token = ensureRegistrationToken(controller);
+    if (token == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, token);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -171,8 +223,10 @@ int KqueueReactor::addRecvFrom(IOController* controller) {
     if (awaitable->handleComplete(controller->m_handle)) {
         return 1;
     }
+    auto* token = ensureRegistrationToken(controller);
+    if (token == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, token);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -182,14 +236,18 @@ int KqueueReactor::addSendTo(IOController* controller) {
     if (awaitable->handleComplete(controller->m_handle)) {
         return 1;
     }
+    auto* token = ensureRegistrationToken(controller);
+    if (token == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, token);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
 int KqueueReactor::addFileWatch(IOController* controller) {
     auto* awaitable = controller->getAwaitable<FileWatchAwaitable>();
     if (awaitable == nullptr) return -1;
+    auto* token = ensureRegistrationToken(controller);
+    if (token == nullptr) return -1;
 
     unsigned int fflags = 0;
     const uint32_t events = static_cast<uint32_t>(awaitable->m_events);
@@ -200,7 +258,7 @@ int KqueueReactor::addFileWatch(IOController* controller) {
     if (events & static_cast<uint32_t>(FileWatchEvent::Modify)) fflags |= NOTE_EXTEND;
 
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, fflags, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, fflags, 0, token);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -210,8 +268,10 @@ int KqueueReactor::addSendFile(IOController* controller) {
     if (awaitable->handleComplete(controller->m_handle)) {
         return 1;
     }
+    auto* token = ensureRegistrationToken(controller);
+    if (token == nullptr) return -1;
     struct kevent ev;
-    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, controller);
+    EV_SET(&ev, controller->m_handle.fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, token);
     return kevent(m_kqueue_fd, &ev, 1, nullptr, 0, nullptr);
 }
 
@@ -226,6 +286,7 @@ int KqueueReactor::remove(IOController* controller) {
     if (controller == nullptr || controller->m_handle == GHandle::invalid()) {
         return 0;
     }
+    retireRegistrationToken(controller);
     struct kevent evs[2];
     EV_SET(&evs[0], controller->m_handle.fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
     EV_SET(&evs[1], controller->m_handle.fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
@@ -289,8 +350,11 @@ void KqueueReactor::poll(const struct timespec& timeout, WakeCoordinator& wake_c
 }
 
 void KqueueReactor::processEvent(struct kevent& ev) {
-    auto* controller = static_cast<IOController*>(ev.udata);
-    if (!controller || controller->m_type == IOEventType::INVALID) {
+    auto* token = static_cast<RegistrationToken*>(ev.udata);
+    auto* controller = token ? token->controller : nullptr;
+    if (!controller || controller->m_type == IOEventType::INVALID ||
+        controller->m_handle == GHandle::invalid() ||
+        static_cast<uintptr_t>(controller->m_handle.fd) != ev.ident) {
         return;
     }
 
@@ -413,7 +477,8 @@ int KqueueReactor::applySequenceInterest(IOController* controller, uint8_t desir
             (slot == IOController::WRITE && (flags & EV_ADD) != 0) ? NOTE_LOWAT : 0;
         const intptr_t data =
             (slot == IOController::WRITE && (flags & EV_ADD) != 0) ? 1 : 0;
-        EV_SET(&evs[ev_count++], fd, filter, flags, fflags, data, controller);
+        auto* token = ensureRegistrationToken(controller);
+        EV_SET(&evs[ev_count++], fd, filter, flags, fflags, data, token);
     };
 
     if (sequenceMaskUsesSlot(to_delete, IOController::READ)) {

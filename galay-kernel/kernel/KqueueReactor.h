@@ -11,6 +11,8 @@
 #include <sys/event.h>
 
 #include <atomic>
+#include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace galay::kernel {
@@ -57,9 +59,15 @@ public:
     int flushPendingChanges();
 
 private:
+    struct RegistrationToken {
+        IOController* controller = nullptr;
+    };
+
     void processEvent(struct kevent& ev);  ///< 消费单个 kevent 事件并唤醒对应 awaitable
     int syncSequenceRegistration(IOController* controller);  ///< 同步 sequence awaitable 的注册状态
     int applySequenceInterest(IOController* controller, uint8_t desired_mask);  ///< 把 sequence 感兴趣的读写位应用到 kqueue
+    RegistrationToken* ensureRegistrationToken(IOController* controller);  ///< 为 fd 获取稳定 registration token
+    void retireRegistrationToken(IOController* controller);  ///< 退役 fd 对应 token，保留地址以过滤晚到事件
 
     static constexpr size_t BATCH_THRESHOLD = 32;  ///< 预留给批量注册场景的提交阈值
     static constexpr uintptr_t WAKE_IDENT = 1;  ///< 固定 EVFILT_USER 唤醒标识
@@ -68,6 +76,8 @@ private:
     int m_max_events = 0;  ///< 单次 poll 处理的最大事件数
     std::vector<struct kevent> m_events;  ///< kevent 复用缓冲区
     std::vector<struct kevent> m_pending_changes;  ///< 待批量提交的 kevent 变更缓冲
+    std::unordered_map<int, std::unique_ptr<RegistrationToken>> m_registration_tokens;  ///< fd 到稳定 token 的映射
+    std::vector<std::unique_ptr<RegistrationToken>> m_retired_tokens;  ///< 已退役但保留地址的 token
     std::atomic<uint64_t>& m_last_error_code;  ///< 最近一次后端错误编码输出槽位
 };
 
