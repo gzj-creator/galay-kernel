@@ -6,6 +6,7 @@
 
 #include <sys/eventfd.h>
 #include <sys/poll.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -159,6 +160,32 @@ inline auto recvBufferPool(const std::shared_ptr<void>& owner) -> RecvBufferPool
 
 inline auto cqeBufferId(const struct io_uring_cqe* cqe) -> uint16_t {
     return static_cast<uint16_t>(cqe->flags >> IORING_CQE_BUFFER_SHIFT);
+}
+
+inline bool tryImmediateReadv(int fd, ReadvIOContext* ctx, int& res) {
+    if (ctx == nullptr || ctx->m_iovecs.empty()) {
+        res = 0;
+        return true;
+    }
+
+    ssize_t n = 0;
+    if (ctx->m_iovecs.size() == 1) {
+        const auto& iov = ctx->m_iovecs[0];
+        n = ::recv(fd, iov.iov_base, iov.iov_len, MSG_DONTWAIT);
+    } else {
+        msghdr msg = ctx->m_msg;
+        n = ::recvmsg(fd, &msg, MSG_DONTWAIT);
+    }
+
+    if (n >= 0) {
+        res = static_cast<int>(n);
+        return true;
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+        return false;
+    }
+    res = -errno;
+    return true;
 }
 
 }  // namespace
@@ -647,17 +674,22 @@ int IOUringReactor::addSequence(IOController* controller) {
         if (controller->m_awaitable[slot] != nullptr) {
             return -EBUSY;
         }
-        return submitSequenceSqe(slot, type, task->context, controller, owner);
+        const int ret = submitSequenceSqe(slot, type, task->context, controller, owner);
+        if (ret == kImmediateReady) {
+            owner->m_waker.wakeUp();
+            return 0;
+        }
+        return ret;
     };
 
     auto* read_owner = controller->m_sequence_owner[IOController::READ];
-    if (const int ret = submit_owner(read_owner); ret < 0) {
+    if (const int ret = submit_owner(read_owner); ret != 0) {
         return ret;
     }
 
     auto* write_owner = controller->m_sequence_owner[IOController::WRITE];
     if (write_owner != read_owner) {
-        if (const int ret = submit_owner(write_owner); ret < 0) {
+        if (const int ret = submit_owner(write_owner); ret != 0) {
             return ret;
         }
     }
@@ -670,6 +702,22 @@ int IOUringReactor::submitSequenceSqe(IOController::Index slot,
                                       IOContextBase* ctx,
                                       IOController* controller,
                                       SequenceAwaitableBase* owner) {
+    if (type == READV) {
+        // Sequence READV is readiness-driven here; completion is produced by a
+        // nonblocking socket read so staged sequence progress cannot miss ready bytes.
+        auto* readv_ctx = static_cast<ReadvIOContext*>(ctx);
+        int immediate_res = 0;
+        if (tryImmediateReadv(controller->m_handle.fd, readv_ctx, immediate_res)) {
+            io_uring_cqe ready_cqe{};
+            ready_cqe.res = immediate_res;
+            const auto progress = owner->onActiveEvent(&ready_cqe, controller->m_handle);
+            if (progress == SequenceProgress::kCompleted) {
+                return kImmediateReady;
+            }
+            return addSequence(controller);
+        }
+    }
+
     auto* token = controller->makeSqeRequest(slot);
     if (token == nullptr) {
         return -ENOMEM;
@@ -710,21 +758,21 @@ int IOUringReactor::submitSequenceSqe(IOController::Index slot,
         break;
     }
     case READV: {
-        auto* c = static_cast<ReadvIOContext*>(ctx);
-        io_uring_prep_readv(sqe,
-                            controller->m_handle.fd,
-                            c->m_iovecs.data(),
-                            static_cast<unsigned>(c->m_iovecs.size()),
-                            0);
+        io_uring_prep_poll_add(sqe, controller->m_handle.fd, POLLIN);
         break;
     }
     case WRITEV: {
         auto* c = static_cast<WritevIOContext*>(ctx);
-        io_uring_prep_writev(sqe,
-                             controller->m_handle.fd,
-                             c->m_iovecs.data(),
-                             static_cast<unsigned>(c->m_iovecs.size()),
-                             0);
+        if (c->m_iovecs.size() == 1) {
+            const auto& iov = c->m_iovecs[0];
+            io_uring_prep_send(sqe,
+                               controller->m_handle.fd,
+                               iov.iov_base,
+                               static_cast<unsigned>(iov.iov_len),
+                               0);
+        } else {
+            io_uring_prep_sendmsg(sqe, controller->m_handle.fd, &c->m_msg, 0);
+        }
         break;
     }
     case FILEREAD: {
@@ -1063,10 +1111,31 @@ void IOUringReactor::processCompletion(struct io_uring_cqe* cqe) {
     }
     case SEQUENCE: {
         auto* sequence = static_cast<SequenceAwaitableBase*>(base);
+        const auto event_type = sequence->activeEventType();
         controller->m_awaitable[slot] = nullptr;
         controller->advanceSqeGeneration(slot);
 
-        const auto progress = sequence->onActiveEvent(cqe, controller->m_handle);
+        SequenceProgress progress = SequenceProgress::kNeedWait;
+        if (slot == IOController::READ && event_type == READV) {
+            io_uring_cqe ready_cqe = *cqe;
+            bool deliver = cqe->res < 0;
+            if (cqe->res >= 0) {
+                auto* task = sequence->front();
+                auto* readv_ctx = task != nullptr
+                    ? static_cast<ReadvIOContext*>(task->context)
+                    : nullptr;
+                int immediate_res = 0;
+                if (tryImmediateReadv(controller->m_handle.fd, readv_ctx, immediate_res)) {
+                    ready_cqe.res = immediate_res;
+                    deliver = true;
+                }
+            }
+            if (deliver) {
+                progress = sequence->onActiveEvent(&ready_cqe, controller->m_handle);
+            }
+        } else {
+            progress = sequence->onActiveEvent(cqe, controller->m_handle);
+        }
         if (progress == SequenceProgress::kCompleted) {
             sequence->m_waker.wakeUp();
         } else {
@@ -1149,6 +1218,9 @@ void IOUringReactor::processRecvCompletion(IOController* controller,
     }
 
     const bool more = (cqe->flags & IORING_CQE_F_MORE) != 0;
+    const bool buffer_exhausted = (-cqe->res == ENOBUFS);
+    const bool transient =
+        (-cqe->res == EAGAIN || -cqe->res == EWOULDBLOCK || -cqe->res == EINTR);
 
     if (cqe->res > 0) {
         if ((cqe->flags & IORING_CQE_F_BUFFER) == 0) {
@@ -1178,19 +1250,29 @@ void IOUringReactor::processRecvCompletion(IOController* controller,
         chunk.kind = ReadyRecvChunk::Kind::Eof;
         chunk.result = static_cast<size_t>(0);
         controller->enqueueReadyRecv(std::move(chunk));
-    } else if (-cqe->res != EAGAIN && -cqe->res != EWOULDBLOCK && -cqe->res != EINTR) {
+    } else if (!transient && !buffer_exhausted) {
         ReadyRecvChunk chunk;
         chunk.kind = ReadyRecvChunk::Kind::Error;
         chunk.result = std::unexpected(IOError(kRecvFailed, static_cast<uint32_t>(-cqe->res)));
         controller->enqueueReadyRecv(std::move(chunk));
     }
 
-    if (awaitable != nullptr && !controller->m_recv_result_assigned &&
-        controller->tryConsumeReadyRecv(awaitable->m_buffer,
-                                        awaitable->m_length,
-                                        awaitable->m_result)) {
-        controller->m_recv_result_assigned = true;
-        awaitable->m_waker.wakeUp();
+    if (awaitable != nullptr && !controller->m_recv_result_assigned) {
+        bool should_deliver = false;
+        if (buffer_exhausted) {
+            should_deliver = controller->tryConsumeReadyRecv(awaitable->m_buffer,
+                                                             awaitable->m_length,
+                                                             awaitable->m_result);
+        } else if (awaitable->handleComplete(cqe, controller->m_handle)) {
+            should_deliver = controller->tryConsumeReadyRecv(awaitable->m_buffer,
+                                                             awaitable->m_length,
+                                                             awaitable->m_result);
+        }
+
+        if (should_deliver) {
+            controller->m_recv_result_assigned = true;
+            awaitable->m_waker.wakeUp();
+        }
     }
 
     if (more) {

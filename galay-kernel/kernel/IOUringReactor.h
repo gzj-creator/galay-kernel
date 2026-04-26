@@ -49,7 +49,7 @@ public:
     int addSendTo(IOController* controller);  ///< 注册 sendto 请求；1=立即完成，0=已提交，<0=错误
     int addFileWatch(IOController* controller);  ///< 注册文件监控请求；1=立即完成，0=已提交，<0=错误
     int addSendFile(IOController* controller);  ///< 注册 sendfile 请求；1=立即完成，0=已提交，<0=错误
-    int addSequence(IOController* controller);  ///< 注册组合式序列请求；1=立即完成，0=已提交，<0=错误
+    int addSequence(IOController* controller);  ///< 注册组合式序列请求；0=已提交或已唤醒立即完成 owner，<0=错误
     int remove(IOController* controller);  ///< 使控制器关联的未完成请求失效或移除
 
     void poll(uint64_t timeout_ns, WakeCoordinator& wake_coordinator);  ///< 等待完成事件并通过 wake coordinator 分发唤醒

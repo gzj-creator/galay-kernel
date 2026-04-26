@@ -284,6 +284,9 @@ struct IOController {
         m_sqe_state[READ] = m_sqe_token_pool[READ] ? m_sqe_token_pool[READ]->state() : nullptr;
         m_sqe_state[WRITE] = m_sqe_token_pool[WRITE] ? m_sqe_token_pool[WRITE]->state() : nullptr;
         rebindSqeState();
+        // The moved-from controller must not invalidate states now owned by this controller.
+        other.m_sqe_state[READ] = nullptr;
+        other.m_sqe_state[WRITE] = nullptr;
 #endif
         other.resetMovedFrom();
     }
@@ -322,6 +325,9 @@ struct IOController {
             m_accept_result_assigned = other.m_accept_result_assigned;
             m_recv_result_assigned = other.m_recv_result_assigned;
             rebindSqeState();
+            // The moved-from controller must not invalidate states now owned by this controller.
+            other.m_sqe_state[READ] = nullptr;
+            other.m_sqe_state[WRITE] = nullptr;
 #endif
             other.resetMovedFrom();
         }
@@ -467,26 +473,41 @@ struct IOController {
             return false;
         }
 
-        auto& chunk = m_ready_recvs.front();
-        if (chunk.kind == ReadyRecvChunk::Kind::Error ||
-            chunk.kind == ReadyRecvChunk::Kind::Eof) {
-            result = chunk.result;
-            chunk.release();
-            m_ready_recvs.pop_front();
-            return true;
+        size_t total_bytes = 0;
+        while (!m_ready_recvs.empty()) {
+            auto& chunk = m_ready_recvs.front();
+            if (chunk.kind == ReadyRecvChunk::Kind::Error ||
+                chunk.kind == ReadyRecvChunk::Kind::Eof) {
+                if (total_bytes == 0) {
+                    result = chunk.result;
+                    chunk.release();
+                    m_ready_recvs.pop_front();
+                } else {
+                    result = total_bytes;
+                }
+                return true;
+            }
+
+            const size_t remaining = capacity > total_bytes ? capacity - total_bytes : 0;
+            const size_t bytes = std::min(chunk.length, remaining);
+            if (bytes > 0) {
+                std::memcpy(buffer + total_bytes, chunk.data + chunk.offset, bytes);
+            }
+            chunk.offset += bytes;
+            chunk.length -= bytes;
+            total_bytes += bytes;
+
+            if (chunk.length == 0) {
+                chunk.release();
+                m_ready_recvs.pop_front();
+            }
+
+            if (total_bytes >= capacity || chunk.length != 0) {
+                break;
+            }
         }
 
-        const size_t bytes = std::min(chunk.length, capacity);
-        if (bytes > 0) {
-            std::memcpy(buffer, chunk.data + chunk.offset, bytes);
-        }
-        chunk.offset += bytes;
-        chunk.length -= bytes;
-        result = bytes;
-        if (chunk.length == 0) {
-            chunk.release();
-            m_ready_recvs.pop_front();
-        }
+        result = total_bytes;
         return true;
     }
 
