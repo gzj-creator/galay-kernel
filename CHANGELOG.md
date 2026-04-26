@@ -8,6 +8,13 @@
 
 ## [Unreleased]
 
+## [v3.4.6] - 2026-04-26
+
+### Fixed
+- 修复 `io_uring` sequence socket 进度推进问题：`READV` 改为基于 `POLLIN` + 非阻塞读取驱动，避免已就绪字节在 staged sequence 中丢失，保证 owner 在立即完成路径下及时唤醒。
+- 修复 `IOController` move 后转移状态被 moved-from controller 误失效的问题，并补强 ready recv 聚合消费与 `ENOBUFS`/瞬时错误处理，避免接收结果丢失或提前报错。
+- 修正多组调度器/通道测试中的统计常量输出，避免压力回归日志计数误报。
+
 ### Docs
 - 新增 `AGENTS.md` 仓库目录结构与构建约束模板，统一目录职责、对外接口注释、测试/基准、版本对齐与命名风格要求。
 
