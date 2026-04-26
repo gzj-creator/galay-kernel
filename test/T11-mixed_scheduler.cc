@@ -337,7 +337,7 @@ void runTests() {
 
     // 测试2: 多个 IO 任务并发提交计算任务
     {
-        LogInfo("[Test 2] Multiple IO tasks submit compute tasks ({} tasks)...", TEST11_COUNT);
+        LogInfo("[Test 2] Multiple IO tasks submit compute tasks ({} tasks)...", TEST2_COUNT);
         g_total++;
 
         IOSchedulerType ioScheduler;
@@ -362,7 +362,7 @@ void runTests() {
         ioScheduler.stop();
 
         if (g_test2_completed.load() == TEST2_COUNT) {
-            LogInfo("[Test 2] PASSED: All {} tasks completed", TEST11_COUNT);
+            LogInfo("[Test 2] PASSED: All {} tasks completed", TEST2_COUNT);
             g_passed++;
         } else {
             LogError("[Test 2] FAILED: Only {}/{} tasks completed",
@@ -467,7 +467,7 @@ void runTests() {
 
     // 测试6: 高并发压力测试
     {
-        LogInfo("[Test 6] High concurrency stress test ({} tasks)...", TEST11_COUNT);
+        LogInfo("[Test 6] High concurrency stress test ({} tasks)...", TEST6_COUNT);
         g_total++;
 
         IOSchedulerType ioScheduler;
@@ -492,7 +492,7 @@ void runTests() {
         ioScheduler.stop();
 
         if (g_test6_completed.load() == TEST6_COUNT) {
-            LogInfo("[Test 6] PASSED: All {} high-concurrency tasks completed", TEST11_COUNT);
+            LogInfo("[Test 6] PASSED: All {} high-concurrency tasks completed", TEST6_COUNT);
             g_passed++;
         } else {
             LogError("[Test 6] FAILED: Only {}/{} tasks completed",

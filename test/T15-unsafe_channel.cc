@@ -566,7 +566,7 @@ void runTests() {
 
     // 测试2：多次 send/recv
     {
-        LogInfo("\n--- Test 2: Multiple send/recv ({} messages) ---", TEST15_COUNT);
+        LogInfo("\n--- Test 2: Multiple send/recv ({} messages) ---", TEST2_COUNT);
         g_total++;
 
         IOSchedulerType scheduler;
@@ -823,7 +823,7 @@ void runTests() {
 
     // 测试10：recvBatched - 达到 limit 时唤醒
     {
-        LogInfo("\n--- Test 10: recvBatched - wake on limit ({} items) ---", TEST15_LIMIT);
+        LogInfo("\n--- Test 10: recvBatched - wake on limit ({} items) ---", TEST10_LIMIT);
         g_total++;
 
         IOSchedulerType scheduler;

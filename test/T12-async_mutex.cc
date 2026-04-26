@@ -279,7 +279,7 @@ void runTests() {
 
     // 测试3：多协程竞争（互斥性验证）
     {
-        LogInfo("\n--- Test 3: Mutual exclusion ({} coroutines) ---", TEST12_COROUTINE_COUNT);
+        LogInfo("\n--- Test 3: Mutual exclusion ({} coroutines) ---", TEST3_COROUTINE_COUNT);
         g_total++;
 
         IOSchedulerType scheduler;
@@ -467,7 +467,7 @@ void runTests() {
 
     // 测试9：快速 lock/unlock 切换
     {
-        LogInfo("\n--- Test 9: Rapid lock/unlock ({} iterations x 5 coroutines) ---", TEST12_ITERATIONS);
+        LogInfo("\n--- Test 9: Rapid lock/unlock ({} iterations x 5 coroutines) ---", TEST9_ITERATIONS);
         g_total++;
 
         IOSchedulerType scheduler;

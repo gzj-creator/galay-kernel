@@ -356,7 +356,7 @@ void runTests() {
 
     // 测试2：多次 send/recv
     {
-        LogInfo("\n--- Test 2: Multiple send/recv ({} messages) ---", TEST13_COUNT);
+        LogInfo("\n--- Test 2: Multiple send/recv ({} messages) ---", TEST2_COUNT);
         g_total++;
 
         ComputeScheduler scheduler;
@@ -656,7 +656,7 @@ void runTests() {
 
     // 测试10：高并发压力测试
     {
-        LogInfo("\n--- Test 10: High concurrency ({} messages) ---", TEST13_TOTAL);
+        LogInfo("\n--- Test 10: High concurrency ({} messages) ---", TEST10_TOTAL);
         g_total++;
 
         ComputeScheduler scheduler;
