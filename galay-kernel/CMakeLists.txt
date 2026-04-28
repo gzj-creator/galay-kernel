@@ -58,7 +58,7 @@ target_include_directories(galay-kernel
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
-        $<INSTALL_INTERFACE:include/galay-kernel>
+        $<INSTALL_INTERFACE:include>
 )
 
 # 链接平台特定库
@@ -91,14 +91,14 @@ if(GALAY_KERNEL_CPP23_MODULES_EFFECTIVE)
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
             $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
-            $<INSTALL_INTERFACE:include/galay-kernel>
+            $<INSTALL_INTERFACE:include>
     )
 
     target_sources(galay-kernel-modules
         PUBLIC
             FILE_SET CXX_MODULES
             BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/module
-            FILES ${CMAKE_CURRENT_SOURCE_DIR}/module/galay.kernel.cppm
+            FILES ${CMAKE_CURRENT_SOURCE_DIR}/module/galay_kernel.cppm
     )
     set_target_properties(galay-kernel-modules PROPERTIES CXX_SCAN_FOR_MODULES ON)
 

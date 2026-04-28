@@ -28,10 +28,10 @@
 
 ## 源码 / 验证锚点
 
-- 源码：`galay-kernel/kernel/Runtime.h`、`galay-kernel/kernel/Runtime.cc`
-- 关联类型：`galay-kernel/kernel/Task.h`、`galay-kernel/kernel/ComputeScheduler.h`、`galay-kernel/kernel/IOScheduler.hpp`
-- 测试：`test/T10-compute_scheduler.cc`、`test/T11-mixed_scheduler.cc`、`test/T22-runtime_stress.cc`、`test/T37-runtime_strict_scheduler_counts.cc`、`test/T46-runtime_block_on_result.cc`、`test/T48-runtime_spawn_join_handle.cc`、`test/T49-runtime_handle_current.cc`、`test/T50-runtime_spawn_blocking.cc`
-- 示例：`examples/include/E2-tcp_echo_server.cc`、`examples/include/E3-tcp_client.cc`、`examples/include/E4-task_basic.cc`
+- 源码：`galay-kernel/kernel/runtime.h`、`galay-kernel/kernel/runtime.cc`
+- 关联类型：`galay-kernel/kernel/task.h`、`galay-kernel/kernel/compute_scheduler.h`、`galay-kernel/kernel/io_scheduler.hpp`
+- 测试：`test/t10_compute.cc`、`test/t11_mixed.cc`、`test/t22_runtime.cc`、`test/t37_rtcounts.cc`、`test/t46_blockres.cc`、`test/t48_joinhandle.cc`、`test/t49_handle.cc`、`test/t50_spawnblk.cc`
+- 示例：`examples/include/e2_echo.cc`、`examples/include/e3_tcp.cc`、`examples/include/e4_task.cc`
 
 ## RAG 关键词
 

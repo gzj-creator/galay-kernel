@@ -72,8 +72,8 @@
 
 ## 命名风格约束
 
-- **核心库文件命名**：`<core-module>/` 下头文件采用 `PascalCase`，如 `Runtime.h`、`IOUringScheduler.h`、`AsyncMutex.h`；新增核心模块文件保持同风格。
-- **测试/示例/压测文件命名**：统一使用“编号前缀 + 语义名”模式，推荐 `T<number>-snake_case.cc`、`E<number>-snake_case.cc`、`B<number>-snake_case.cc`，如 `T10-compute_scheduler.cc`、`E1-sendfile_example.cc`、`B3-tcp_client.cc`。
+- **核心库文件命名**：`<core-module>/` 下源码与头文件采用 `lower_snake_case`，如 `runtime.h`、`uring_scheduler.h`、`async_mutex.h`；新增核心模块文件保持同风格。
+- **测试/示例/压测文件命名**：统一使用小写“编号前缀 + 下划线 + 语义名”模式，推荐 `t<number>_snake_case.cc`、`e<number>_snake_case.cc`、`b<number>_snake_case.cc`，如 `t10_compute.cc`、`e1_sendfile.cc`、`b3_tcp.cc`。
 - **类型命名**：类、结构体、枚举、类型别名使用 `PascalCase`，如 `TaskState`、`AwaitableBuilder`、`SchedulerCoreStage`。
 - **函数命名**：函数/方法使用 `lowerCamelCase`，如 `scheduleTaskDeferred()`、`takeTaskResult()`、`setTaskScheduler()`；布尔语义优先 `is/has/can/should` 前缀。
 - **成员变量命名**：类成员统一 `m_` 前缀 + `snake_case`，如 `m_state`、`m_runtime`、`m_result_storage`；原子与锁相关成员同样遵循该规则。

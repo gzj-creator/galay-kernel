@@ -279,11 +279,11 @@ fi
 MATRIX_SCRIPT="$PROJECT_ROOT/scripts/run_benchmark_matrix.sh"
 COMPAT_ROOT="$OUTPUT_ROOT"
 COMPAT_BENCHMARKS=(
-  "b1:B1-ComputeScheduler:benchmark/B1-compute_scheduler.cc"
-  "b6:B6-Udp:benchmark/B6-Udp.cc"
-  "b8:B8-MpscChannel:benchmark/B8-mpsc_channel.cc"
-  "b10:B10-Ringbuffer:benchmark/B10-Ringbuffer.cc"
-  "b14:B14-SchedulerInjectedWakeup:benchmark/B14-scheduler_injected_wakeup.cc"
+  "b1:B1-ComputeScheduler:benchmark/b1_compute.cc"
+  "b6:B6-Udp:benchmark/b6_udp.cc"
+  "b8:B8-MpscChannel:benchmark/b8_mpsc.cc"
+  "b10:B10-Ringbuffer:benchmark/b10_ringbuffer.cc"
+  "b14:B14-SchedulerInjectedWakeup:benchmark/b14_wakeup.cc"
 )
 
 ensure_worktree() {

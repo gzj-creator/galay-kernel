@@ -29,8 +29,8 @@
 - 若 `concurrentqueue` 头文件不在标准系统前缀，consumer 需要额外传入 `GALAY_KERNEL_CONCURRENTQUEUE_INCLUDE_DIR`
 - 稳定 direct-include 入口以本页“稳定公开头快速索引”和实际安装树中的公开头为准
 - 当前源码尚未额外导出 `GALAY_KERNEL_SUPPORTED_HEADERS` / `GALAY_KERNEL_INTERNAL_HEADERS` 这类头文件边界变量
-- `Awaitable.h`、`IOController.hpp`、`Timeout.hpp`、`Scheduler.hpp`、`IOScheduler.hpp` 默认仍属于低层扩展 / 排障入口；日常业务优先使用 `Runtime`、`TcpSocket`、`UdpSocket` 等高层接口
-- 其中 `Awaitable.h` 在 `v3.2.0` 起承载正式的组合式扩展面：`SequenceAwaitable`、`SequenceStep`、`AwaitableBuilder`、`ParseStatus`
+- `awaitable.h`、`io_controller.hpp`、`timeout.hpp`、`scheduler.hpp`、`io_scheduler.hpp` 默认仍属于低层扩展 / 排障入口；日常业务优先使用 `Runtime`、`TcpSocket`、`UdpSocket` 等高层接口
+- 其中 `awaitable.h` 在 `v3.2.0` 起承载正式的组合式扩展面：`SequenceAwaitable`、`SequenceStep`、`AwaitableBuilder`、`ParseStatus`
 - `v3.3.0` 进一步补充 `AwaitContext`、`SequenceOwnerDomain` 与共享 state-machine `.timeout(...)` 收口，便于 builder / direct awaitable 统一扩展
 - 当前工作树未包含受版本控制的 package consumer fixture；如需验证安装消费，请单独准备最小 consumer 工程
 
@@ -39,38 +39,38 @@
 按模块归类的公开安装面：
 
 - Runtime / 调度：
-  - `galay-kernel/kernel/Runtime.h`
-  - `galay-kernel/kernel/Task.h`
-  - `galay-kernel/kernel/Scheduler.hpp`
-  - `galay-kernel/kernel/IOScheduler.hpp`
-  - `galay-kernel/kernel/ComputeScheduler.h`
-  - `galay-kernel/kernel/EpollScheduler.h`
-  - `galay-kernel/kernel/KqueueScheduler.h`
-  - `galay-kernel/kernel/IOUringScheduler.h`
-  - `galay-kernel/kernel/TimerScheduler.h`
-  - `galay-kernel/kernel/Awaitable.h`（仅当你要做底层组合 Awaitable / 协议扩展）
+  - `galay-kernel/kernel/runtime.h`
+  - `galay-kernel/kernel/task.h`
+  - `galay-kernel/kernel/scheduler.hpp`
+  - `galay-kernel/kernel/io_scheduler.hpp`
+  - `galay-kernel/kernel/compute_scheduler.h`
+  - `galay-kernel/kernel/epoll_scheduler.h`
+  - `galay-kernel/kernel/kqueue_scheduler.h`
+  - `galay-kernel/kernel/uring_scheduler.h`
+  - `galay-kernel/kernel/timer_scheduler.h`
+  - `galay-kernel/kernel/awaitable.h`（仅当你要做底层组合 Awaitable / 协议扩展）
 - 网络与文件：
-  - `galay-kernel/async/TcpSocket.h`
-  - `galay-kernel/async/UdpSocket.h`
-  - `galay-kernel/async/AsyncFile.h`
-  - `galay-kernel/async/AioFile.h`
-  - `galay-kernel/async/FileWatcher.h`
+  - `galay-kernel/async/tcp_socket.h`
+  - `galay-kernel/async/udp_socket.h`
+  - `galay-kernel/async/async_file.h`
+  - `galay-kernel/async/aio_file.h`
+  - `galay-kernel/async/file_watcher.h`
 - 通用辅助：
-  - `galay-kernel/common/HandleOption.h`
-  - `galay-kernel/common/Host.hpp`
-  - `galay-kernel/common/Sleep.hpp`
-  - `galay-kernel/common/Bytes.h`
-  - `galay-kernel/common/Buffer.h`
-  - `galay-kernel/common/ByteQueueView.h`
-  - `galay-kernel/common/Error.h`
+  - `galay-kernel/common/handle_option.h`
+  - `galay-kernel/common/host.hpp`
+  - `galay-kernel/common/sleep.hpp`
+  - `galay-kernel/common/bytes.h`
+  - `galay-kernel/common/buffer.h`
+  - `galay-kernel/common/queue_view.h`
+  - `galay-kernel/common/error.h`
 - 并发：
-  - `galay-kernel/concurrency/AsyncMutex.h`
-  - `galay-kernel/concurrency/AsyncWaiter.h`
-  - `galay-kernel/concurrency/MpscChannel.h`
-  - `galay-kernel/concurrency/UnsafeChannel.h`
+  - `galay-kernel/concurrency/async_mutex.h`
+  - `galay-kernel/concurrency/async_waiter.h`
+  - `galay-kernel/concurrency/mpsc_channel.h`
+  - `galay-kernel/concurrency/unsafe_channel.h`
 - 模块：
-  - `galay-kernel/module/ModulePrelude.hpp`
-  - `galay-kernel/module/galay.kernel.cppm`
+  - `galay-kernel/module/module_prelude.hpp`
+  - `galay-kernel/module/galay_kernel.cppm`
 
 ## 命名空间与头文件范围
 
@@ -94,8 +94,8 @@
 
 头文件 / 模块入口：
 
-- `galay-kernel/module/ModulePrelude.hpp`
-- `galay-kernel/module/galay.kernel.cppm`
+- `galay-kernel/module/module_prelude.hpp`
+- `galay-kernel/module/galay_kernel.cppm`
 
 模块生效条件：
 
@@ -105,27 +105,27 @@
 
 `import galay.kernel;` 当前导出面：
 
-- 通用类型：`Defn.hpp`、`Error.h`、`Host.hpp`、`HandleOption.h`、`Bytes.h`、`Buffer.h`、`Sleep.hpp`
-- Runtime：`Task.h`、`Scheduler.hpp`、`IOScheduler.hpp`、`ComputeScheduler.h`、`Runtime.h`、`TimerScheduler.h`
-- 并发：`MpscChannel.h`、`UnsafeChannel.h`、`AsyncMutex.h`、`AsyncWaiter.h`
-- IO：`TcpSocket.h`、`UdpSocket.h`、`FileWatcher.h`
+- 通用类型：`defn.hpp`、`error.h`、`host.hpp`、`handle_option.h`、`bytes.h`、`buffer.h`、`sleep.hpp`
+- Runtime：`task.h`、`scheduler.hpp`、`io_scheduler.hpp`、`compute_scheduler.h`、`runtime.h`、`timer_scheduler.h`
+- 并发：`mpsc_channel.h`、`unsafe_channel.h`、`async_mutex.h`、`async_waiter.h`
+- IO：`tcp_socket.h`、`udp_socket.h`、`file_watcher.h`
 - 平台裁剪：
-  - `AsyncFile.h` 仅在 `USE_KQUEUE` 或 `USE_IOURING`
-  - `AioFile.h` 仅在 `USE_EPOLL`
+  - `async_file.h` 仅在 `USE_KQUEUE` 或 `USE_IOURING`
+  - `aio_file.h` 仅在 `USE_EPOLL`
 
 注意：
 
 - `galay.kernel` 是聚合导出入口，适合模块消费；direct-include 仍以本页列出的稳定公开头与实际安装树内容为准
-- `Scheduler.hpp`、`IOScheduler.hpp` 会进入模块可见面，但当前仍不应把它们当成稳定的 direct-include 业务入口头
+- `scheduler.hpp`、`io_scheduler.hpp` 会进入模块可见面，但当前仍不应把它们当成稳定的 direct-include 业务入口头
 
 ## 地址、错误与字节缓冲工具
 
 头文件：
 
-- `galay-kernel/common/Host.hpp`
-- `galay-kernel/common/Error.h`
-- `galay-kernel/common/Bytes.h`
-- `galay-kernel/common/Buffer.h`
+- `galay-kernel/common/host.hpp`
+- `galay-kernel/common/error.h`
+- `galay-kernel/common/bytes.h`
+- `galay-kernel/common/buffer.h`
 
 `IPType` / `Host`：
 
@@ -284,17 +284,17 @@
 
 头文件：
 
-- `galay-kernel/kernel/Runtime.h`
-- `galay-kernel/kernel/ComputeScheduler.h`
-- `galay-kernel/kernel/EpollScheduler.h`
-- `galay-kernel/kernel/KqueueScheduler.h`
-- `galay-kernel/kernel/IOUringScheduler.h`
-- `galay-kernel/kernel/Task.h`
-- `galay-kernel/kernel/Scheduler.hpp`
-- `galay-kernel/kernel/IOScheduler.hpp`
-- `galay-kernel/kernel/TimerScheduler.h`
-- `galay-kernel/common/Timer.hpp`
-- `galay-kernel/common/Sleep.hpp`
+- `galay-kernel/kernel/runtime.h`
+- `galay-kernel/kernel/compute_scheduler.h`
+- `galay-kernel/kernel/epoll_scheduler.h`
+- `galay-kernel/kernel/kqueue_scheduler.h`
+- `galay-kernel/kernel/uring_scheduler.h`
+- `galay-kernel/kernel/task.h`
+- `galay-kernel/kernel/scheduler.hpp`
+- `galay-kernel/kernel/io_scheduler.hpp`
+- `galay-kernel/kernel/timer_scheduler.h`
+- `galay-kernel/common/timer.hpp`
+- `galay-kernel/common/sleep.hpp`
 
 关键类型：
 
@@ -425,8 +425,8 @@
 
 头文件：
 
-- `galay-kernel/kernel/Awaitable.h`
-- `galay-kernel/common/ByteQueueView.h`
+- `galay-kernel/kernel/awaitable.h`
+- `galay-kernel/common/queue_view.h`
 
 公开类型：
 
@@ -489,20 +489,20 @@ builder iovec 公开面：
 
 真实参考：
 
-- 线性 builder：`test/T56-custom_sequence_awaitable.cc`
-- 显式步骤编排：`test/T25-custom_awaitable.cc`
-- 半包不提前唤醒：`test/T59-sequence_parser_need_more.cc`
-- 粘包单次恢复尽量吃完：`test/T60-sequence_parser_coalesced_frames.cc`
-- 状态机读写切换：`test/T69-state_machine_read_write_loop.cc`
-- 状态机入口与 builder 桥接：`test/T70-awaitable_builder_state_machine_bridge.cc`
-- 状态机错误动作：`test/T71-state_machine_fail_action.cc`
-- 零长度读写动作：`test/T72-state_machine_zero_length_actions.cc`
-- builder connect 桥接：`test/T73-awaitable_builder_connect_bridge.cc`
-- 自定义状态机 connect：`test/T74-state_machine_connect_action.cc`
-- builder queue 误用拒绝：`test/T75-awaitable_builder_queue_rejected.cc`
-- builder iovec surface：`test/T76-awaitable_builder_iovec_surface.cc`
-- builder iovec 往返：`test/T77-awaitable_builder_iovec_roundtrip.cc`
-- builder iovec parse 桥接：`test/T78-awaitable_builder_iovec_parse_bridge.cc`
+- 线性 builder：`test/t56_seqawait.cc`
+- 显式步骤编排：`test/t25_await.cc`
+- 半包不提前唤醒：`test/t59_needmore.cc`
+- 粘包单次恢复尽量吃完：`test/t60_coalframe.cc`
+- 状态机读写切换：`test/t69_smloop.cc`
+- 状态机入口与 builder 桥接：`test/t70_smbridge.cc`
+- 状态机错误动作：`test/t71_failact.cc`
+- 零长度读写动作：`test/t72_zeroact.cc`
+- builder connect 桥接：`test/t73_connbridge.cc`
+- 自定义状态机 connect：`test/t74_connact.cc`
+- builder queue 误用拒绝：`test/t75_qreject.cc`
+- builder iovec surface：`test/t76_iov.cc`
+- builder iovec 往返：`test/t77_iovrtp.cc`
+- builder iovec parse 桥接：`test/t78_iovparse.cc`
 
 任务辅助：
 
@@ -527,7 +527,7 @@ builder iovec 公开面：
 内部说明：
 
 - `TaskRef`、`ComputeTask`、调度器绑定 / resume plumbing 已降级为 runtime/scheduler 内核实现细节，不再作为公开工作流 API 描述
-- 需要排障或读实现时，以 `galay-kernel/kernel/Task.h`、`Scheduler.hpp` 与相关测试为准，不建议业务代码直接依赖这些内部类型
+- 需要排障或读实现时，以 `galay-kernel/kernel/task.h`、`scheduler.hpp` 与相关测试为准，不建议业务代码直接依赖这些内部类型
 
 语义说明：
 
@@ -569,9 +569,9 @@ builder iovec 公开面：
 
 头文件：
 
-- `galay-kernel/common/HandleOption.h`
-- `galay-kernel/async/TcpSocket.h`
-- `galay-kernel/async/UdpSocket.h`
+- `galay-kernel/common/handle_option.h`
+- `galay-kernel/async/tcp_socket.h`
+- `galay-kernel/async/udp_socket.h`
 
 `HandleOption` 公开方法：
 
@@ -619,10 +619,10 @@ builder iovec 公开面：
 
 头文件：
 
-- `galay-kernel/async/AsyncFile.h`
-- `galay-kernel/async/AioFile.h`
-- `galay-kernel/async/FileWatcher.h`
-- `galay-kernel/kernel/FileWatchDefs.hpp`
+- `galay-kernel/async/async_file.h`
+- `galay-kernel/async/aio_file.h`
+- `galay-kernel/async/file_watcher.h`
+- `galay-kernel/kernel/watch_defs.hpp`
 
 `AsyncFile`：
 
@@ -676,10 +676,10 @@ builder iovec 公开面：
 
 头文件：
 
-- `galay-kernel/concurrency/AsyncMutex.h`
-- `galay-kernel/concurrency/MpscChannel.h`
-- `galay-kernel/concurrency/UnsafeChannel.h`
-- `galay-kernel/concurrency/AsyncWaiter.h`
+- `galay-kernel/concurrency/async_mutex.h`
+- `galay-kernel/concurrency/mpsc_channel.h`
+- `galay-kernel/concurrency/unsafe_channel.h`
+- `galay-kernel/concurrency/async_waiter.h`
 
 `AsyncMutex`：
 
@@ -770,10 +770,10 @@ builder iovec 公开面：
 
 - 当前工作树未包含受版本控制的 package consumer fixture
 - 公开 API 面当前主要通过 `test/` 与 `examples/` 交叉验证
-- 调度 / 运行时：`test/T10-compute_scheduler.cc`、`test/T11-mixed_scheduler.cc`
-- task / sleep：`test/T1-task_chain.cc`
-- 并发：`test/T12-async_mutex.cc`、`test/T13-mpsc_channel.cc`、`test/T15-unsafe_channel.cc`
-- 定时器：`test/T14-timing_wheel.cc`、`test/T16-timer_scheduler.cc`
+- 调度 / 运行时：`test/t10_compute.cc`、`test/t11_mixed.cc`
+- task / sleep：`test/t1_chain.cc`
+- 并发：`test/t12_mutex.cc`、`test/t13_mpsc.cc`、`test/t15_unsafe.cc`
+- 定时器：`test/t14_wheel.cc`、`test/t16_timer.cc`
 - 真实示例总览：`docs/04-示例代码.md`
 
 ## 专题问题优先落点

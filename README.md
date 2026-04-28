@@ -100,9 +100,9 @@
 
 ### Awaitable 入门
 
-- 先看 `examples/include/E10-custom_awaitable.cc`：
+- 先看 `examples/include/e10_await.cc`：
   这是最小状态机自定义 Awaitable 示例，适合 `connect / read / write / shutdown / handshake` 这类多状态推进场景。
-- 先看 `examples/include/E11-builder_protocol.cc`：
+- 先看 `examples/include/e11_proto.cc`：
   这是最小链式 Builder 协议示例，适合 `recv -> parse -> send` 这类线性协议流，尤其是半包/粘包解析。
 - 如果你需要显式 `ops.queue(...)` 或长期持有步骤对象，请直接使用 `SequenceAwaitable + SequenceStep`。
 - 更完整的选型说明与入口骨架见 `docs/03-使用指南.md`。

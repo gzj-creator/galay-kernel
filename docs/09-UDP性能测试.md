@@ -27,10 +27,10 @@
 
 ## 源码 / 验证锚点
 
-- 源码：`galay-kernel/async/UdpSocket.h`、`galay-kernel/async/UdpSocket.cc`
-- 测试：`test/T5-udp_socket.cc`、`test/T6-udp_server.cc`、`test/T7-udp_client.cc`
-- 示例：`examples/include/E5-udp_echo.cc`
-- benchmark：`benchmark/B4-udp_server.cc`、`benchmark/B5-udp_client.cc`、`benchmark/B6-Udp.cc`
+- 源码：`galay-kernel/async/udp_socket.h`、`galay-kernel/async/udp_socket.cc`
+- 测试：`test/t5_udp.cc`、`test/t6_udp.cc`、`test/t7_udp.cc`
+- 示例：`examples/include/e5_udp.cc`
+- benchmark：`benchmark/b4_udp.cc`、`benchmark/b5_udp.cc`、`benchmark/b6_udp.cc`
 
 ## RAG 关键词
 
