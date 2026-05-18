@@ -31,3 +31,13 @@
   - 将源码、头文件、测试、示例与 benchmark 文件统一重命名为 lower_snake_case，编号前缀同步改为小写下划线形式。
   - 同步更新 CMake/Bazel 构建描述、模块入口、README/docs、脚本和所有项目内 include 路径引用。
   - 移除项目内相对 include，统一使用基于公开 include 根或模块根的非相对路径。
+
+## v4.0.1 - 2026-05-18
+
+- 版本级别：小版本（patch）
+- Git 提交消息：`fix: 修复 Task 结果存储告警并统一导出命名`
+- Git Tag：`v4.0.1`
+- 自述摘要：
+  - 修复 `TaskResultStorageTraits` 在内联结果类型上仍实例化堆释放路径的问题，避免 `Task<std::string>` 在 GCC 优化内联后触发 `-Wfree-nonheap-object`。
+  - 新增 `t121_taskresult_storage` 回归测试，在 GNU 编译器下把该告警提升为错误，并覆盖 `Task<std::string>` 的返回与消费路径。
+  - 将安装导出的 CMake targets 文件改为 `galayKernelConfigTargets.cmake`，Release 安装生成 `galayKernelConfigTargets-release.cmake`，并将 CMake/Bazel 版本元数据提升到 `4.0.1`。

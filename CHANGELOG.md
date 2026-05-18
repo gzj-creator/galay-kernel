@@ -5,6 +5,18 @@
 
 ## [Unreleased]
 
+## [v4.0.1] - 2026-05-18
+
+### Fixed
+- `TaskResultStorageTraits` 按编译期内联/堆存储策略拆分销毁与取值路径，避免 `Task<std::string>` 在 GCC 下触发 `-Wfree-nonheap-object`。
+- 新增 `t121_taskresult_storage` 回归测试，在 GNU 编译器下将该告警提升为错误，锁定内联结果存储行为。
+
+### Changed
+- 将安装导出的 CMake targets 文件改为 `galayKernelConfigTargets.cmake`，同步 package config 的 include 路径。
+- Release 安装现在生成 `galayKernelConfigTargets-release.cmake`，与新的驼峰导出文件命名保持一致。
+- 将 CMake 与 Bazel project 版本提升到 `4.0.1`，对齐本次发布 tag。
+
+
 ## [v4.0.0] - 2026-04-29
 
 ### Changed

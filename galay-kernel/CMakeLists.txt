@@ -179,13 +179,13 @@ install(FILES
 # 单配置生成器（Unix Makefiles/Ninja）下只安装当前配置，避免复用同一构建目录时把历史残留配置一起导出。
 if(CMAKE_CONFIGURATION_TYPES)
     install(EXPORT galay-kernel-targets
-        FILE galay-kernel-targets.cmake
+        FILE galayKernelConfigTargets.cmake
         NAMESPACE galay-kernel::
         DESTINATION lib/cmake/galay-kernel
     )
 else()
     install(EXPORT galay-kernel-targets
-        FILE galay-kernel-targets.cmake
+        FILE galayKernelConfigTargets.cmake
         NAMESPACE galay-kernel::
         DESTINATION lib/cmake/galay-kernel
         CONFIGURATIONS ${CMAKE_BUILD_TYPE}

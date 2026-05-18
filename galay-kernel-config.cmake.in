@@ -38,7 +38,7 @@ if(NOT TARGET concurrentqueue::concurrentqueue)
 endif()
 
 # 提供导入的目标
-include("${CMAKE_CURRENT_LIST_DIR}/galay-kernel-targets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/galayKernelConfigTargets.cmake")
 
 # 设置别名以便于使用
 if(NOT TARGET galay-kernel::galay-kernel)

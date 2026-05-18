@@ -12,6 +12,10 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     add_executable(${TEST_NAME} ${TEST_SOURCE})
     target_link_libraries(${TEST_NAME} PRIVATE galay-kernel)
     target_include_directories(${TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR})
+    if(TEST_NAME STREQUAL "t121_taskresult_storage")
+        target_compile_options(${TEST_NAME} PRIVATE
+            $<$<CXX_COMPILER_ID:GNU>:-Werror=free-nonheap-object>)
+    endif()
 
     add_test(NAME ${TEST_NAME} COMMAND $<TARGET_FILE:${TEST_NAME}>)
     set_tests_properties(${TEST_NAME} PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

@@ -220,11 +220,16 @@ struct TaskResultStorageTraits
 
     static void destroy(TaskState& state) noexcept
     {
-        if (state.m_result_kind == TaskState::ResultStorageKind::Inline) {
-            std::destroy_at(reinterpret_cast<T*>(state.resultStorage()));
-        } else if (state.m_result_kind == TaskState::ResultStorageKind::Heap) {
-            delete *reinterpret_cast<T**>(state.resultStorage());
-            *reinterpret_cast<T**>(state.resultStorage()) = nullptr;
+        if constexpr (kInline) {
+            if (state.m_result_kind == TaskState::ResultStorageKind::Inline) {
+                std::destroy_at(reinterpret_cast<T*>(state.resultStorage()));
+            }
+        } else {
+            if (state.m_result_kind == TaskState::ResultStorageKind::Heap) {
+                auto*& ptr = *reinterpret_cast<T**>(state.resultStorage());
+                delete ptr;
+                ptr = nullptr;
+            }
         }
         state.m_result_kind = TaskState::ResultStorageKind::Empty;
     }
@@ -243,16 +248,23 @@ struct TaskResultStorageTraits
 
     static T take(TaskState& state)
     {
-        if (state.m_result_kind == TaskState::ResultStorageKind::Inline) {
+        if constexpr (kInline) {
+            if (state.m_result_kind != TaskState::ResultStorageKind::Inline) {
+                throw std::runtime_error("task result not available");
+            }
             T value = std::move(*reinterpret_cast<T*>(state.resultStorage()));
             destroy(state);
             return value;
         }
 
-        auto* ptr = *reinterpret_cast<T**>(state.resultStorage());
-        *reinterpret_cast<T**>(state.resultStorage()) = nullptr;
+        if (state.m_result_kind != TaskState::ResultStorageKind::Heap) {
+            throw std::runtime_error("task result not available");
+        }
+        auto*& ptr = *reinterpret_cast<T**>(state.resultStorage());
+        auto* result = ptr;
+        ptr = nullptr;
         state.m_result_kind = TaskState::ResultStorageKind::Empty;
-        std::unique_ptr<T> holder(ptr);
+        std::unique_ptr<T> holder(result);
         return std::move(*holder);
     }
 };
