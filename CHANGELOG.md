@@ -5,6 +5,17 @@
 
 ## [Unreleased]
 
+## [v4.0.2] - 2026-05-20
+
+### Added
+- 新增 `BaseLogger` 虚基类与 `LoggerRegistry` 全局注册中心（`common/logger.h`），支持用户注入自定义日志实现。
+- 新增 `GALAY_LOG_*` 宏族（`common/log_macro.h`），未设置 logger 时零开销（仅 atomic load + null check）。
+- 支持 `LogLevel` 五级过滤（kTrace/kDebug/kInfo/kWarn/kError），通过 `minLevel()` 在格式化前截断低级别消息。
+- 导出 `logger.h` 到 C++23 module `galay.kernel`。
+
+### Docs
+- 为全部 68 个源文件（common/kernel/async/concurrency）添加完整中文 Doxygen 注释，覆盖文件级、类级和方法级文档。
+
 ## [v4.0.1] - 2026-05-18
 
 ### Fixed

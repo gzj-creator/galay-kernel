@@ -1,3 +1,16 @@
+/**
+ * @file timeout.hpp
+ * @brief 异步 IO awaitable 的超时支持
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 提供：
+ * - TimeoutTimer：定时器子类，在超时时唤醒关联协程
+ * - TimeoutSupport<Derived>：CRTP 混入，为任意 awaitable 添加 .timeout(ms) 方法
+ * - WithTimeout<Awaitable>：组合 awaitable 与定时器的包装器，
+ *   当内部操作未在规定时间内完成时注入超时错误
+ */
+
 #ifndef GALAY_KERNEL_TIMEOUT_HPP
 #define GALAY_KERNEL_TIMEOUT_HPP
 

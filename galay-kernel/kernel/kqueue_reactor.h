@@ -1,3 +1,14 @@
+/**
+ * @file kqueue_reactor.h
+ * @brief 基于 macOS/BSD kqueue 的 IO reactor
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 使用 BSD kqueue 实现事件通知、EVFILT_USER 跨线程唤醒、
+ * EVFILT_VNODE 文件系统监控。使用稳定的 RegistrationToken 指针作为 kevent udata，
+ * 安全处理 fd 复用和控制器迁移。
+ */
+
 #ifndef GALAY_KERNEL_KQUEUE_REACTOR_H
 #define GALAY_KERNEL_KQUEUE_REACTOR_H
 

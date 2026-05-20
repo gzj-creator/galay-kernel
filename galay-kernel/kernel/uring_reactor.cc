@@ -1,3 +1,13 @@
+/**
+ * @file uring_reactor.cc
+ * @brief Linux io_uring reactor 实现
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 使用 Linux io_uring 实现 IO 事件注册、multishot accept/recv
+ * （配合 provided buffer ring）、send_zc 门控、sequence SQE 提交和 CQE 处理。
+ */
+
 #include "uring_reactor.h"
 
 #ifdef USE_IOURING

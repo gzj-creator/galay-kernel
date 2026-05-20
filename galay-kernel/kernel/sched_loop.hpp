@@ -1,3 +1,13 @@
+/**
+ * @file sched_loop.hpp
+ * @brief 共用的 IO 调度器事件循环骨架
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 提供三个 IO 调度器后端（epoll、kqueue、io_uring）共用的通用事件循环模板。
+ * 循环交替执行：排空就绪任务、驱动时间轮 tick、轮询后端完成事件。
+ */
+
 #ifndef GALAY_KERNEL_IOSCHEDULER_EVENT_LOOP_HPP
 #define GALAY_KERNEL_IOSCHEDULER_EVENT_LOOP_HPP
 

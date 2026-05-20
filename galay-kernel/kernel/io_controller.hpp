@@ -1,3 +1,16 @@
+/**
+ * @file io_controller.hpp
+ * @brief IO 事件控制器与 io_uring SQE 状态管理
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 定义 IOController，追踪每个 fd 的 IO 状态（事件类型、awaitable 槽位、
+ * sequence 所有权）。在 io_uring 模式下还管理 SQE 代追踪、multishot accept/recv 队列、
+ * 以及 provided-buffer recv 数据块缓存。
+ *
+ * @note IOController 非线程安全；只能在所属调度器线程上访问。
+ */
+
 #ifndef GALAY_KERNEL_IOCONTROLLER_HPP
 #define GALAY_KERNEL_IOCONTROLLER_HPP
 

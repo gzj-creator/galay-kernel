@@ -12,6 +12,7 @@ export {
 #include "galay-kernel/common/bytes.h"
 #include "galay-kernel/common/buffer.h"
 #include "galay-kernel/common/sleep.hpp"
+#include "galay-kernel/common/logger.h"
 
 #include "galay-kernel/kernel/task.h"
 #include "galay-kernel/kernel/scheduler.hpp"

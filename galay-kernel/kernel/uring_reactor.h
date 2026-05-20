@@ -1,3 +1,14 @@
+/**
+ * @file uring_reactor.h
+ * @brief 基于 Linux io_uring 的 IO reactor
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 使用 Linux io_uring 实现高吞吐异步 IO 的 BackendReactor 接口。
+ * 支持 multishot accept/recv（配合 provided buffer ring）、
+ * send_zc（用于大负载零拷贝发送）和 eventfd 跨线程唤醒。
+ */
+
 #ifndef GALAY_KERNEL_IOURING_REACTOR_H
 #define GALAY_KERNEL_IOURING_REACTOR_H
 

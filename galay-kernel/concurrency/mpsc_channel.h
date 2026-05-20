@@ -1,6 +1,19 @@
 /**
  * @file mpsc_channel.h
  * @brief 多生产者单消费者异步通道
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 无锁、线程安全的异步通道，支持多个生产者线程和单个消费者协程。
+ * 底层存储基于 moodycamel::ConcurrentQueue。提供单条和批量接收操作，
+ * 均兼容 co_await，并可选 .timeout() 链式调用。
+ *
+ * 特性：
+ * - 任意数量的生产者线程均可安全发送
+ * - 单消费者协程接收
+ * - 批量发送与接收
+ * - 单条接收的预取缓存，减少队列竞争
+ * - 通过 TimeoutSupport 可选超时支持
  */
 
 #ifndef GALAY_KERNEL_MPSC_CHANNEL_H
@@ -24,11 +37,11 @@
 namespace galay::kernel
 {
 
-template <typename T>
 /**
- * @brief MpscChannel 可接受的元素类型约束
- * @tparam T 元素类型
+ * @brief 约束 MpscChannel 可接受的元素类型
+ * @tparam T 元素类型；必须可移动且可默认构造
  */
+template <typename T>
 concept MpscValue = std::movable<T> && std::default_initializable<T>;
 
 template <typename T>

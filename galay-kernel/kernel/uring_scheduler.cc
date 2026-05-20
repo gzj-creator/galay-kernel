@@ -1,3 +1,13 @@
+/**
+ * @file uring_scheduler.cc
+ * @brief Linux io_uring IO 调度器实现
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 将 IO 操作委托给 IOUringReactor，复用 SchedulerCore / WakeCoordinator 事件循环机制。
+ * 由于 io_uring SQE 获取/提交在调度器内必须保持单线程，跨线程窃取被禁用。
+ */
+
 #include "uring_scheduler.h"
 #include "sched_loop.hpp"
 
@@ -15,8 +25,8 @@ IOUringScheduler::IOUringScheduler(int queue_depth, int batch_size)
     , m_core(m_worker, static_cast<size_t>(batch_size))
     , m_reactor(queue_depth, m_last_error_code)
 {
-    // io_uring SQE acquisition/submission stays single-threaded per scheduler; a stolen
-    // coroutine can still submit through its owner reactor, so cross-thread stealing is unsafe.
+    // io_uring SQE 获取/提交在每个调度器内保持单线程；被窃取的协程
+    // 仍可通过其所属 reactor 提交，因此跨线程窃取不安全。
     m_worker.setStealingEnabled(false);
 }
 

@@ -1,3 +1,17 @@
+/**
+ * @file task.cc
+ * @brief 任务状态分配器、TaskRef 生命周期及任务调度辅助函数
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 实现：
+ * - TaskState 对象的线程局部空闲链分配器
+ * - TaskRef 引用计数（retain/release）
+ * - TaskState 析构函数和等待器清理
+ * - 任务生命周期辅助函数：调度、完成、等待、continuation 附加
+ * - 线程局部 Runtime 作用域管理（g_currentRuntime）
+ */
+
 #include "task.h"
 #include "scheduler.hpp"
 

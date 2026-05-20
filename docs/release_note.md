@@ -41,3 +41,14 @@
   - 修复 `TaskResultStorageTraits` 在内联结果类型上仍实例化堆释放路径的问题，避免 `Task<std::string>` 在 GCC 优化内联后触发 `-Wfree-nonheap-object`。
   - 新增 `t121_taskresult_storage` 回归测试，在 GNU 编译器下把该告警提升为错误，并覆盖 `Task<std::string>` 的返回与消费路径。
   - 将安装导出的 CMake targets 文件改为 `galayKernelConfigTargets.cmake`，Release 安装生成 `galayKernelConfigTargets-release.cmake`，并将 CMake/Bazel 版本元数据提升到 `4.0.1`。
+
+## v4.0.2 - 2026-05-20
+
+- 版本级别：中版本（minor）
+- Git 提交消息：`feat: 新增 BaseLogger 日志抽象接口并为所有源文件添加中文 Doxygen 注释`
+- Git Tag：`v4.0.2`
+- 自述摘要：
+  - 新增 `BaseLogger` 虚基类、`LoggerRegistry` 全局注册中心和 `GALAY_LOG_*` 宏族，提供零开销可插拔日志基础设施。未设置 logger 时仅执行 atomic load + null check，不进入格式化。
+  - 支持 `LogLevel` 五级过滤（kTrace/kDebug/kInfo/kWarn/kError），低级别消息在 `std::format` 前被截断。
+  - 为全部 68 个源文件（common/kernel/async/concurrency）添加完整中文 Doxygen 注释，覆盖文件级、类级和方法级文档。
+  - 导出 `logger.h` 到 C++23 module `galay.kernel`。

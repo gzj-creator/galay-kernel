@@ -1,6 +1,11 @@
 /**
  * @file runtime.cc
- * @brief Runtime scheduler manager implementation
+ * @brief 运行时调度器管理实现
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 实现 Runtime 生命周期管理、默认调度器创建、亲和性配置、
+ * 工作窃取域设置以及线程局部 RuntimeHandle 访问器。
  */
 
 #include "runtime.h"

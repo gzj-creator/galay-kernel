@@ -1,3 +1,17 @@
+/**
+ * @file io_scheduler.hpp
+ * @brief IO 调度器接口、工作线程状态及 Chase-Lev 工作窃取环
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 定义：
+ * - IOScheduler：具体后端（epoll、kqueue、io_uring）实现的抽象基类
+ * - IOSchedulerWorkerState：每线程本地队列、LIFO 槽位和跨线程注入队列
+ * - ChaseLevTaskRing：固定容量无锁环，支持 owner push / steal-front 语义
+ * - IOController::getAwaitable<T> 特化集合，提供类型安全的 awaitable 访问
+ * - completeAwaitableAndWake：通用 IO 完成 + 协程唤醒辅助函数
+ */
+
 #ifndef GALAY_KERNEL_IOSCHEDULER_HPP
 #define GALAY_KERNEL_IOSCHEDULER_HPP
 
@@ -293,8 +307,8 @@ struct IOSchedulerWorkerState {
         }
         const size_t target = std::min(remaining, inject_buffer.size());
         const size_t count = inject_queue.try_dequeue_bulk(inject_buffer.data(), target);
-        // inject_queue preserves producer order; reverse the batch so owner-side pop_back()
-        // still observes oldest-first FIFO semantics for deferred and overflowed work.
+        // inject_queue 保持生产者顺序；逆序填充以使 owner 端 pop_back()
+        // 仍按最旧优先的 FIFO 语义处理延后和溢出任务。
         for (size_t i = count; i > 0; --i) {
             local_ring.push_back(std::move(inject_buffer[i - 1]));
         }

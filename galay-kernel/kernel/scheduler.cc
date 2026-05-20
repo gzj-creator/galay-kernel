@@ -1,3 +1,14 @@
+/**
+ * @file scheduler.cc
+ * @brief 调度器基类 CPU 亲和性实现
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 实现 setAffinity()（存储目标 CPU）和 applyConfiguredAffinity()
+ * （在 Linux 上通过 pthread_setaffinity_np 应用）。
+ * 非 Linux 平台回退为空操作或不支持。
+ */
+
 #include "scheduler.hpp"
 
 #include <cstddef>
@@ -10,6 +21,12 @@
 namespace galay::kernel
 {
 
+/**
+ * @brief 配置或清除调度器的 CPU 亲和性目标
+ *
+ * @param cpu_id  目标 CPU 核心索引，传 std::nullopt 清除亲和性
+ * @return true 成功；false 平台不支持亲和性或 CPU 索引越界
+ */
 bool Scheduler::setAffinity(std::optional<uint32_t> cpu_id)
 {
     if (!cpu_id.has_value()) {
@@ -30,6 +47,11 @@ bool Scheduler::setAffinity(std::optional<uint32_t> cpu_id)
 #endif
 }
 
+/**
+ * @brief 将先前配置的 CPU 亲和性应用到当前线程
+ *
+ * @return true 亲和性已应用或无需应用；false 在 Linux 上 pthread_setaffinity_np 失败或平台不支持
+ */
 bool Scheduler::applyConfiguredAffinity()
 {
     const int32_t cpu_id = m_affinity_cpu.load(std::memory_order_acquire);

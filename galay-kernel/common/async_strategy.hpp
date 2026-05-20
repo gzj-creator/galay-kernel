@@ -5,14 +5,14 @@
  * @version 1.0.0
  *
  * @details 提供多种负载均衡算法：
- * - RoundRobinLoadBalancer: 轮询（原子操作，天然线程安全）
- * - WeightRoundRobinLoadBalancer: 加权轮询（平滑加权轮询算法）
- * - RandomLoadBalancer: 随机
- * - WeightedRandomLoadBalancer: 加权随机
+ * - RoundRobinLoadBalancer：轮询（原子计数器，天然线程安全）
+ * - WeightRoundRobinLoadBalancer：平滑加权轮询
+ * - RandomLoadBalancer：均匀随机选择
+ * - WeightedRandomLoadBalancer：加权随机选择
  *
- * 所有负载均衡器都提供 select() 方法用于选择节点。
- * RoundRobinLoadBalancer 使用原子操作，天然线程安全。
- * 其他负载均衡器的 select() 方法非线程安全，需要外部同步。
+ * 所有负载均衡器暴露 select() 方法返回下一个节点。
+ * RoundRobinLoadBalancer 使用原子操作，是线程安全的。
+ * 其他均衡器不是线程安全的；需要外部同步。
  */
 
 #ifndef GALAY_ASYNC_STRATEGY_HPP
@@ -30,8 +30,8 @@ namespace galay::details
 
 /**
  * @brief 轮询负载均衡器
- * @tparam Type 节点类型
- * @details 使用原子操作实现，天然线程安全
+ * @tparam Type 节点类型（必须可拷贝构造）
+ * @details 使用原子计数器实现无锁线程安全选择
  */
 template<std::copy_constructible Type>
 class RoundRobinLoadBalancer
@@ -47,11 +47,16 @@ public:
 
     RoundRobinLoadBalancer() : m_index(0) {}
 
+    /**
+     * @brief 以初始节点集合构造
+     * @param nodes 节点列表
+     */
     explicit RoundRobinLoadBalancer(const std::vector<Type>& nodes)
         : m_index(0), m_nodes(nodes) {}
 
     /**
-     * @brief 选择下一个节点（线程安全，无锁）
+     * @brief 以轮询顺序选择下一个节点（线程安全，无锁）
+     * @return 被选中的节点，若无可用节点则返回 std::nullopt
      */
     std::optional<Type> select() {
         if (m_nodes.empty()) {
@@ -61,16 +66,27 @@ public:
         return m_nodes[idx % m_nodes.size()];
     }
 
+    /**
+     * @brief 获取已注册的节点数
+     * @return 节点数量
+     */
     size_t size() const { return m_nodes.size(); }
 
+    /**
+     * @brief 向均衡器追加节点
+     * @param node 要添加的节点
+     */
     void append(Type node) {
         m_nodes.emplace_back(std::move(node));
     }
 };
 
 /**
- * @brief 加权轮询负载均衡器（平滑加权轮询算法）
- * @tparam Type 节点类型
+ * @brief 平滑加权轮询负载均衡器
+ * @tparam Type 节点类型（必须可拷贝构造）
+ *
+ * @details 实现 Nginx 风格的平滑加权轮询算法。
+ * 非线程安全；需要外部同步。
  */
 template<std::copy_constructible Type>
 class WeightRoundRobinLoadBalancer
@@ -95,6 +111,11 @@ public:
 
     WeightRoundRobinLoadBalancer() : m_total_weight(0) {}
 
+    /**
+     * @brief 以节点和对应权重构造
+     * @param nodes 节点列表
+     * @param weights 各节点权重；若大小与 nodes 不匹配，所有权重默认为 1
+     */
     WeightRoundRobinLoadBalancer(const std::vector<Type>& nodes, const std::vector<uint32_t>& weights)
         : m_total_weight(0)
     {
@@ -114,8 +135,9 @@ public:
     }
 
     /**
-     * @brief 选择下一个节点（非线程安全）
-     * @note 仅在单线程环境使用，或外部加锁
+     * @brief 使用平滑加权轮询选择下一个节点（非线程安全）
+     * @return 被选中的节点，若无可用节点则返回 std::nullopt
+     * @note 仅在单线程上下文或使用外部锁时使用
      */
     std::optional<Type> select() {
         if (m_nodes.empty()) {
@@ -137,8 +159,17 @@ public:
         return std::nullopt;
     }
 
+    /**
+     * @brief 获取已注册的节点数
+     * @return 节点数量
+     */
     size_t size() const { return m_nodes.size(); }
 
+    /**
+     * @brief 向均衡器追加带权重的节点
+     * @param node 要添加的节点
+     * @param weight 相对权重
+     */
     void append(Type node, uint32_t weight) {
         m_nodes.emplace_back(std::move(node), static_cast<int32_t>(weight));
         m_total_weight += static_cast<int32_t>(weight);
@@ -146,8 +177,11 @@ public:
 };
 
 /**
- * @brief 随机负载均衡器
- * @tparam Type 节点类型
+ * @brief 均匀随机负载均衡器
+ * @tparam Type 节点类型（必须可拷贝构造）
+ *
+ * @details 使用 mt19937_64 均匀随机选择节点。
+ * 非线程安全；需要外部同步。
  */
 template<std::copy_constructible Type>
 class RandomLoadBalancer
@@ -166,6 +200,10 @@ public:
         m_rng.seed(rd());
     }
 
+    /**
+     * @brief 以初始节点集合构造
+     * @param nodes 节点列表
+     */
     explicit RandomLoadBalancer(const std::vector<Type>& nodes) {
         std::random_device rd;
         m_rng.seed(rd());
@@ -173,8 +211,9 @@ public:
     }
 
     /**
-     * @brief 随机选择一个节点（非线程安全）
-     * @note 仅在单线程环境使用，或外部加锁
+     * @brief 均匀随机选择节点（非线程安全）
+     * @return 被选中的节点，若无可用节点则返回 std::nullopt
+     * @note 仅在单线程上下文或使用外部锁时使用
      */
     std::optional<Type> select() {
         if (m_nodes.empty()) {
@@ -184,8 +223,16 @@ public:
         return m_nodes[dist(m_rng)];
     }
 
+    /**
+     * @brief 获取已注册的节点数
+     * @return 节点数量
+     */
     size_t size() const { return m_nodes.size(); }
 
+    /**
+     * @brief 向均衡器追加节点
+     * @param node 要添加的节点
+     */
     void append(Type node) {
         m_nodes.emplace_back(std::move(node));
     }
@@ -193,7 +240,10 @@ public:
 
 /**
  * @brief 加权随机负载均衡器
- * @tparam Type 节点类型
+ * @tparam Type 节点类型（必须可拷贝构造）
+ *
+ * @details 以与权重成正比的概率选择节点。
+ * 非线程安全；需要外部同步。
  */
 template<std::copy_constructible Type>
 class WeightedRandomLoadBalancer
@@ -220,6 +270,11 @@ public:
         m_rng.seed(rd());
     }
 
+    /**
+     * @brief 以节点和对应权重构造
+     * @param nodes 节点列表
+     * @param weights 各节点权重；若大小与 nodes 不匹配，所有权重默认为 1
+     */
     WeightedRandomLoadBalancer(const std::vector<Type>& nodes, const std::vector<uint32_t>& weights)
         : m_total_weight(0)
     {
@@ -242,8 +297,9 @@ public:
     }
 
     /**
-     * @brief 根据权重随机选择一个节点（非线程安全）
-     * @note 仅在单线程环境使用，或外部加锁
+     * @brief 以与权重成正比的概率选择节点（非线程安全）
+     * @return 被选中的节点，若无节点或总权重为 0 则返回 std::nullopt
+     * @note 仅在单线程上下文或使用外部锁时使用
      */
     std::optional<Type> select() {
         if (m_nodes.empty() || m_total_weight == 0) {
@@ -262,9 +318,18 @@ public:
         return m_nodes.back().node;
     }
 
-    size_t size() const { return m_nodes.size(); }  ///< 返回当前可选节点数量
+    /**
+     * @brief 获取已注册的节点数
+     * @return 节点数量
+     */
+    size_t size() const { return m_nodes.size(); }
 
-    void append(Type node, uint32_t weight) {  ///< 追加一个带权节点到负载均衡器
+    /**
+     * @brief 向均衡器追加带权重的节点
+     * @param node 要添加的节点
+     * @param weight 相对权重
+     */
+    void append(Type node, uint32_t weight) {
         m_nodes.emplace_back(std::move(node), weight);
         m_total_weight += weight;
     }

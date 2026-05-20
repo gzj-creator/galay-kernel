@@ -1,3 +1,14 @@
+/**
+ * @file io_handlers.hpp
+ * @brief 平台相关的 IO 系统调用封装
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 提供 POSIX 和平台相关 IO 系统调用（accept、recv、send、readv、writev、
+ * connect、sendfile 等）的薄内联封装，将错误码转换为 galay::kernel::IOError。
+ * 在 io_uring 模式下，封装通过消费完成队列条目（CQE）而非直接执行系统调用。
+ */
+
 #ifndef GALAY_KERNEL_IOHANDLERS_HPP
 #define GALAY_KERNEL_IOHANDLERS_HPP
 

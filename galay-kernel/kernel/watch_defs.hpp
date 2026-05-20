@@ -1,3 +1,13 @@
+/**
+ * @file watch_defs.hpp
+ * @brief 文件系统监控事件类型与结果结构
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 定义 FileWatchEvent（文件变更通知的位掩码枚举）、
+ * 位运算符以及 FileWatchResult（完成时传递给 FileWatchAwaitable 的结果）。
+ */
+
 #ifndef GALAY_KERNEL_FILEWATCHDEFS_HPP
 #define GALAY_KERNEL_FILEWATCHDEFS_HPP
 

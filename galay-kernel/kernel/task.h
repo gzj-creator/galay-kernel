@@ -1,6 +1,19 @@
 /**
  * @file task.h
- * @brief Public task primitives for galay-kernel
+ * @brief 协程任务、promise 和 join handle 基础组件
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 定义核心协程基础设施：
+ * - TaskState：共享状态块，持有 handle、调度器、运行时和结果存储
+ * - TaskRef：TaskState 的轻量引用计数句柄
+ * - Task<T>：只移动的协程所有者，支持 co_await
+ * - JoinHandle<T>：同步结果消费者，支持 wait/join 语义
+ * - TaskPromise<T>：协程 promise，负责创建 Task 和处理完成逻辑
+ * - TaskCompletionState<T>：用于阻塞 spawn 的线程安全结果/异常交付
+ * - TaskAwaiter<T>：链接父子协程恢复的 awaiter
+ *
+ * 同时提供 TaskState 的线程局部空闲链分配器，以减少热路径上的分配开销。
  */
 
 #ifndef GALAY_KERNEL_TASK_H

@@ -1,29 +1,27 @@
 /**
  * @file handle_option.h
- * @brief Socket句柄选项配置
+ * @brief 套接字句柄选项配置
  * @author galay-kernel
  * @version 1.0.0
  *
- * @details 提供对socket句柄的各种选项配置功能，包括：
- * - 阻塞/非阻塞模式设置
- * - 地址重用（SO_REUSEADDR）
- * - 端口重用（SO_REUSEPORT）
+ * @details 提供套接字句柄的配置方法，包括：
+ * - 阻塞/非阻塞模式
+ * - 地址复用（SO_REUSEADDR）
+ * - 端口复用（SO_REUSEPORT）
  * - 低延迟传输（TCP_NODELAY）
  *
- * @example
  * @code
  * TcpSocket socket(scheduler);
  * socket.create();
  *
- * // 链式调用设置选项
+ * // 链式选项调用
  * socket.option().handleReuseAddr();
  * socket.option().handleReusePort();
  * socket.option().handleNonBlock();
  *
- * // 或者检查返回值
+ * // 或检查返回值
  * auto result = socket.option().handleNonBlock();
  * if (!result) {
- *     // 向上层传播错误，统一处理
  *     return std::unexpected(result.error());
  * }
  * @endcode
@@ -40,15 +38,15 @@ namespace galay::kernel
 {
 
 /**
- * @brief 句柄选项配置类
+ * @brief 套接字句柄选项配置器
  *
- * @details 提供对socket句柄的各种选项配置功能。
- * 该类是轻量级的，可以按值传递和返回。
+ * @details 轻量级包装器，用于配置套接字句柄的选项。
+ * 可按值传递和返回。
  *
  * @note
- * - 所有方法都是同步的，立即生效
- * - 失败时返回IOError，包含系统错误码
- * - 跨平台支持：Linux/macOS/Windows
+ * - 所有方法均为同步且立即生效
+ * - 失败时返回包含系统错误码的 IOError
+ * - 跨平台：Linux / macOS / Windows
  *
  * @see TcpSocket::option()
  */
@@ -56,113 +54,109 @@ class HandleOption
 {
 public:
     /**
-     * @brief 构造函数
-     * @param handle 要配置的socket句柄
-     * @note 不会验证句柄有效性，调用方需确保句柄有效
+     * @brief 从句柄构造
+     * @param handle 要配置的套接字句柄
+     * @note 不验证句柄；调用方必须确保句柄有效
      */
     explicit HandleOption(GHandle handle);
 
     /**
-     * @brief 设置句柄为阻塞模式
+     * @brief 将句柄设置为阻塞模式
      *
-     * @return std::expected<void, IOError> 成功返回void，失败返回IOError
+     * @return std::expected<void, IOError> 成功返回 void，失败返回 IOError
      *
-     * @details 阻塞模式下，IO操作会阻塞直到完成或出错。
-     * 这是socket的默认模式。
+     * @details 在阻塞模式下，I/O 操作会阻塞直到完成或发生错误。
+     * 这是套接字的默认模式。
      *
      * @note
-     * - Linux/macOS: 使用fcntl清除O_NONBLOCK标志
-     * - Windows: 使用ioctlsocket设置FIONBIO为0
+     * - Linux/macOS：使用 fcntl 清除 O_NONBLOCK
+     * - Windows：使用 ioctlsocket 设置 FIONBIO = 0
      */
-    std::expected<void, IOError> handleBlock();  ///< 设置句柄为阻塞模式
+    std::expected<void, IOError> handleBlock();
 
     /**
-     * @brief 设置句柄为非阻塞模式
+     * @brief 将句柄设置为非阻塞模式
      *
-     * @return std::expected<void, IOError> 成功返回void，失败返回IOError
+     * @return std::expected<void, IOError> 成功返回 void，失败返回 IOError
      *
-     * @details 非阻塞模式下，IO操作会立即返回，如果无法完成则返回EAGAIN/EWOULDBLOCK。
-     * 异步IO必须使用非阻塞模式。
+     * @details 在非阻塞模式下，I/O 操作若无法完成则立即返回
+     * EAGAIN/EWOULDBLOCK。异步 I/O 所必需。
      *
      * @note
-     * - Linux/macOS: 使用fcntl设置O_NONBLOCK标志
-     * - Windows: 使用ioctlsocket设置FIONBIO为1
+     * - Linux/macOS：使用 fcntl 设置 O_NONBLOCK
+     * - Windows：使用 ioctlsocket 设置 FIONBIO = 1
      *
      * @code
-     * socket.option().handleNonBlock();  // 异步IO前必须调用
+     * socket.option().handleNonBlock();  // 异步 I/O 前必须调用
      * @endcode
      */
-    std::expected<void, IOError> handleNonBlock();  ///< 设置句柄为非阻塞模式
+    std::expected<void, IOError> handleNonBlock();
 
     /**
-     * @brief 设置地址重用选项（SO_REUSEADDR）
+     * @brief 启用 SO_REUSEADDR 以允许重新绑定处于 TIME_WAIT 状态的端口
      *
-     * @return std::expected<void, IOError> 成功返回void，失败返回IOError
+     * @return std::expected<void, IOError> 成功返回 void，失败返回 IOError
      *
-     * @details 允许绑定到处于TIME_WAIT状态的地址。
-     * 服务器重启时通常需要此选项，否则可能因"Address already in use"而绑定失败。
+     * @details 服务器通常需要此选项以在重启时不遇到"地址已被使用"错误。
      *
-     * @note 建议服务端在bind之前调用
+     * @note 在 bind() 之前调用
      *
      * @code
      * socket.option().handleReuseAddr();
-     * socket.bind(host);  // 即使地址处于TIME_WAIT也能绑定
+     * socket.bind(host);
      * @endcode
      */
-    std::expected<void, IOError> handleReuseAddr();  ///< 设置 SO_REUSEADDR 选项
+    std::expected<void, IOError> handleReuseAddr();
 
     /**
-     * @brief 设置端口重用选项（SO_REUSEPORT）
+     * @brief 启用 SO_REUSEPORT 用于多进程/多线程负载均衡
      *
-     * @return std::expected<void, IOError> 成功返回void，失败返回IOError
+     * @return std::expected<void, IOError> 成功返回 void，失败返回 IOError
      *
-     * @details 允许多个socket绑定到同一端口。
-     * 可用于实现多进程/多线程负载均衡。
+     * @details 允许多个套接字绑定到同一端口。
      *
      * @note
-     * - Linux 3.9+/macOS支持
-     * - Windows不支持，会回退到SO_REUSEADDR
-     * - 所有绑定到同一端口的socket都必须设置此选项
+     * - Linux 3.9+ 和 macOS 支持
+     * - Windows 上回退到 SO_REUSEADDR
+     * - 绑定到同一端口的所有套接字都必须设置此选项
      *
      * @code
-     * // 多进程负载均衡
      * socket.option().handleReusePort();
      * socket.bind(Host(IPType::IPV4, "0.0.0.0", 8080));
      * @endcode
      */
-    std::expected<void, IOError> handleReusePort();  ///< 设置 SO_REUSEPORT 选项
+    std::expected<void, IOError> handleReusePort();
 
     /**
-     * @brief 设置 TCP_NODELAY 选项
+     * @brief 通过 TCP_NODELAY 禁用 Nagle 算法
      *
-     * @return std::expected<void, IOError> 成功返回void，失败返回IOError
+     * @return std::expected<void, IOError> 成功返回 void，失败返回 IOError
      *
-     * @details 禁用 Nagle 算法，减少小包写入时的额外等待。
-     * 适合对延迟敏感的请求/响应和 WebSocket 场景。
+     * @details 通过禁用 Nagle 缓冲延迟来减少小写入的延迟。
+     * 推荐用于延迟敏感的请求/响应和 WebSocket 场景。
      *
-     * @note 建议在连接建立后尽早调用
+     * @note 在连接建立后尽快调用
      */
-    std::expected<void, IOError> handleTcpNoDelay();  ///< 设置 TCP_NODELAY 选项
+    std::expected<void, IOError> handleTcpNoDelay();
 
     /**
-     * @brief 设置 TCP_DEFER_ACCEPT 选项
+     * @brief 启用 TCP_DEFER_ACCEPT（仅 Linux）
      *
-     * @param seconds 内核在 accept 唤醒前等待首个数据包的最长秒数
+     * @param seconds 在唤醒 accept 之前等待第一个数据包的最大时间
      * @return std::expected<void, IOError> 成功返回 void，失败返回 IOError
      *
      * @details
-     * - Linux 上会通过 `setsockopt(IPPROTO_TCP, TCP_DEFER_ACCEPT, ...)` 延迟 accept 唤醒，
-     *   只有连接上首个数据包到达时才把 listener 视为 ready。
-     * - 非 Linux 平台当前静默返回成功，不改变原有行为。
+     * - Linux：设置 TCP_DEFER_ACCEPT，使 accept 仅在数据到达时唤醒
+     * - 非 Linux：静默成功，不改变行为
      *
      * @note
-     * - 仅建议监听 socket 在 `listen()` 前调用
-     * - `seconds` 需为正整数；过大可能增加纯建连场景的首包等待
+     * - 仅在监听套接字上调用，且在 listen() 之前
+     * - seconds 必须为正数；值过大会增加首包延迟
      */
-    std::expected<void, IOError> handleTcpDeferAccept(int seconds = 1);  ///< 设置 TCP_DEFER_ACCEPT 选项
+    std::expected<void, IOError> handleTcpDeferAccept(int seconds = 1);
 
 private:
-    GHandle m_handle;  ///< 要配置的socket句柄
+    GHandle m_handle;  ///< 要配置的套接字句柄
 };
 
 } // namespace galay::kernel

@@ -1,3 +1,13 @@
+/**
+ * @file blocking_executor.cc
+ * @brief 自适应阻塞任务执行器实现
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 实现动态伸缩的 BlockingExecutor 线程池。
+ * 工作线程按需创建，遵循可配置的保活超时，空闲时自动收缩到最小线程数。
+ */
+
 #include "blocking_executor.h"
 #include <stdexcept>
 #include <thread>
@@ -9,15 +19,26 @@ namespace galay::kernel
 namespace
 {
 
+/// 多余线程退出前的默认空闲超时时间
 constexpr auto kDefaultBlockingKeepAlive = std::chrono::milliseconds(5000);
 
 } // namespace
 
+/**
+ * @brief 使用默认线程数和保活超时构造
+ */
 BlockingExecutor::BlockingExecutor()
     : BlockingExecutor(0, defaultMaxWorkers(), kDefaultBlockingKeepAlive)
 {
 }
 
+/**
+ * @brief 使用自定义线程数和保活超时构造
+ *
+ * @param minWorkers  最少保留的工作线程数
+ * @param maxWorkers  允许的最大工作线程数
+ * @param keepAlive   多余线程的空闲超时时间
+ */
 BlockingExecutor::BlockingExecutor(size_t minWorkers,
                                    size_t maxWorkers,
                                    std::chrono::milliseconds keepAlive)
@@ -30,6 +51,9 @@ BlockingExecutor::BlockingExecutor(size_t minWorkers,
     }
 }
 
+/**
+ * @brief 析构函数，通知停止并等待所有工作线程退出
+ */
 BlockingExecutor::~BlockingExecutor()
 {
     std::unique_lock<std::mutex> lock(m_mutex);
@@ -38,12 +62,29 @@ BlockingExecutor::~BlockingExecutor()
     m_shutdownCv.wait(lock, [this]() { return m_workerCount == 0; });
 }
 
+/**
+ * @brief 根据硬件并发度推导默认最大工作线程数
+ *
+ * @return 可用 CPU 核心数，无法确定时返回 4
+ */
 size_t BlockingExecutor::defaultMaxWorkers()
 {
     const size_t hardware = std::thread::hardware_concurrency();
     return hardware > 0 ? hardware : 4;
 }
 
+/**
+ * @brief 提交一个阻塞任务
+ *
+ * @details 若存在空闲工作线程，任务入队并唤醒一个线程；
+ * 若线程池未达到上限，则创建新的分离线程并以该任务作为初始工作；
+ * 否则任务入队等待工作线程可用时处理。
+ *
+ * @param task  待执行的非空调用对象
+ *
+ * @throws std::runtime_error 执行器正在关闭时抛出
+ * @throws std::system_error 线程创建失败时抛出
+ */
 void BlockingExecutor::submit(std::function<void()> task)
 {
     if (!task) {
@@ -93,6 +134,15 @@ void BlockingExecutor::submit(std::function<void()> task)
     }
 }
 
+/**
+ * @brief 工作线程主循环
+ *
+ * @details 执行初始任务后进入循环等待新任务。
+ * 超过最小线程数的空闲线程在保活超时后退出。
+ * 关闭时排空剩余任务后退出。
+ *
+ * @param initialTask  首个执行的任务（来自创建该线程的 submit() 调用）
+ */
 void BlockingExecutor::workerLoop(std::function<void()> initialTask)
 {
     std::function<void()> task = std::move(initialTask);
@@ -144,6 +194,11 @@ void BlockingExecutor::workerLoop(std::function<void()> initialTask)
     }
 }
 
+/**
+ * @brief 在持锁状态下递减工作线程计数，必要时通知关闭等待
+ *
+ * @note 必须在持有 m_mutex 时调用
+ */
 void BlockingExecutor::retireWorkerLocked()
 {
     --m_workerCount;

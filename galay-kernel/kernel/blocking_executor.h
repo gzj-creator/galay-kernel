@@ -1,3 +1,13 @@
+/**
+ * @file blocking_executor.h
+ * @brief 自适应阻塞任务线程池
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 提供按需伸缩的线程池，当线程空闲超过配置的保活超时后自动收缩。
+ * 由 Runtime::spawnBlocking() 用于卸载不可协程化的阻塞调用。
+ */
+
 #ifndef GALAY_KERNEL_BLOCKING_EXECUTOR_H
 #define GALAY_KERNEL_BLOCKING_EXECUTOR_H
 

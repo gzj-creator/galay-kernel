@@ -1,3 +1,13 @@
+/**
+ * @file kqueue_scheduler.h
+ * @brief 基于 macOS/BSD kqueue 的 IO 调度器
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 将 KqueueReactor 与 SchedulerCore 事件循环骨架组合，
+ * 提供 macOS 和 BSD 系统下的具体 IOScheduler 实现。
+ */
+
 #ifndef GALAY_KERNEL_KQUEUE_SCHEDULER_H
 #define GALAY_KERNEL_KQUEUE_SCHEDULER_H
 

@@ -1,3 +1,13 @@
+/**
+ * @file kqueue_reactor.cc
+ * @brief macOS/BSD kqueue reactor 实现
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 使用 BSD kqueue 实现 IO 事件注册、稳定 token 管理、
+ * sequence 感兴趣位同步和事件分发。
+ */
+
 #include "kqueue_reactor.h"
 
 #ifdef USE_KQUEUE

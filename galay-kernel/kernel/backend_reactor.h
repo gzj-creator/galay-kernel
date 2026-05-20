@@ -1,3 +1,13 @@
+/**
+ * @file backend_reactor.h
+ * @brief 平台无关的 IO 事件后端 reactor 抽象
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 定义所有具体 IO 后端（epoll、kqueue、io_uring）必须实现的 BackendReactor 接口，
+ * 同时提供用于在原子槽位中存储和加载后端错误码的辅助函数。
+ */
+
 #ifndef GALAY_KERNEL_BACKEND_REACTOR_H
 #define GALAY_KERNEL_BACKEND_REACTOR_H
 

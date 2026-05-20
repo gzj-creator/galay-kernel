@@ -1,3 +1,10 @@
+/**
+ * @file handle_option.cc
+ * @brief 套接字句柄选项的平台特定实现
+ * @author galay-kernel
+ * @version 1.0.0
+ */
+
 #include "handle_option.h"
 #include <fcntl.h>
 #include <cerrno>
@@ -13,11 +20,20 @@
 namespace galay::kernel
 {
 
+/**
+ * @brief 存储要配置的句柄
+ * @param handle 平台相关的套接字/文件描述符
+ */
 HandleOption::HandleOption(GHandle handle)
     : m_handle(handle)
 {
 }
 
+/**
+ * @brief 将句柄设置为阻塞模式
+ * @details POSIX 上使用 fcntl 清除 O_NONBLOCK，Windows 上使用 ioctlsocket
+ * @return 成功返回 void，失败返回 IOError
+ */
 std::expected<void, IOError> HandleOption::handleBlock()
 {
 #if defined(_WIN32) || defined(_WIN64)
@@ -37,6 +53,11 @@ std::expected<void, IOError> HandleOption::handleBlock()
     return {};
 }
 
+/**
+ * @brief 将句柄设置为非阻塞模式
+ * @details POSIX 上使用 fcntl 设置 O_NONBLOCK，Windows 上使用 ioctlsocket
+ * @return 成功返回 void，失败返回 IOError
+ */
 std::expected<void, IOError> HandleOption::handleNonBlock()
 {
 #if defined(_WIN32) || defined(_WIN64)
@@ -56,6 +77,10 @@ std::expected<void, IOError> HandleOption::handleNonBlock()
     return {};
 }
 
+/**
+ * @brief 启用 SO_REUSEADDR 以允许在 TIME_WAIT 期间重新绑定
+ * @return 成功返回 void，失败返回 IOError
+ */
 std::expected<void, IOError> HandleOption::handleReuseAddr()
 {
     int opt = 1;
@@ -72,10 +97,15 @@ std::expected<void, IOError> HandleOption::handleReuseAddr()
     return {};
 }
 
+/**
+ * @brief 启用 SO_REUSEPORT 用于多进程负载均衡
+ * @details Windows 上回退到 SO_REUSEADDR
+ * @return 成功返回 void，失败返回 IOError
+ */
 std::expected<void, IOError> HandleOption::handleReusePort()
 {
 #if defined(_WIN32) || defined(_WIN64)
-    // Windows doesn't have SO_REUSEPORT, use SO_REUSEADDR instead
+    // Windows 没有 SO_REUSEPORT，改用 SO_REUSEADDR
     return handleReuseAddr();
 #else
     int opt = 1;
@@ -86,6 +116,10 @@ std::expected<void, IOError> HandleOption::handleReusePort()
 #endif
 }
 
+/**
+ * @brief 通过 TCP_NODELAY 禁用 Nagle 算法
+ * @return 成功返回 void，句柄无效时返回 IOError（kParamInvalid）
+ */
 std::expected<void, IOError> HandleOption::handleTcpNoDelay()
 {
     if (m_handle.fd < 0) {
@@ -107,6 +141,11 @@ std::expected<void, IOError> HandleOption::handleTcpNoDelay()
     return {};
 }
 
+/**
+ * @brief 在 Linux 上启用 TCP_DEFER_ACCEPT；其他平台为空操作
+ * @param seconds accept 返回前等待第一个数据包的最大时间
+ * @return 成功返回 void，句柄无效或 seconds <= 0 时返回 IOError
+ */
 std::expected<void, IOError> HandleOption::handleTcpDeferAccept(int seconds)
 {
     if (m_handle.fd < 0) {

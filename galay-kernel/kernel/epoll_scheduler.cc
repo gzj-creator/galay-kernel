@@ -1,3 +1,12 @@
+/**
+ * @file epoll_scheduler.cc
+ * @brief Linux epoll IO 调度器实现
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 将 IO 操作委托给 EpollReactor，复用 SchedulerCore / WakeCoordinator 事件循环机制。
+ */
+
 #include "epoll_scheduler.h"
 #include "sched_loop.hpp"
 

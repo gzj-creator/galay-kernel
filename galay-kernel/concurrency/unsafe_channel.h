@@ -1,9 +1,20 @@
 /**
  * @file unsafe_channel.h
- * @brief 单调度器内部使用的轻量级异步通道（非线程安全）
+ * @brief 轻量级单调度器异步通道（非线程安全）
+ * @author galay-kernel
+ * @version 1.0.0
  *
- * 警告：此通道仅供同一调度器内的协程使用，不支持跨线程/跨调度器通信。
- * 如需跨调度器通信，请使用 MpscChannel。
+ * @details 非线程安全的异步通道，针对调度器内部协程通信优化。
+ * 使用 std::deque 存储，无锁开销。提供单条接收、批量接收和
+ * 攒批（阈值）接收操作，均兼容 co_await 和 .timeout() 链式调用。
+ *
+ * 特性：
+ * - 零锁设计，在单个调度器内实现最高性能
+ * - 内联与延迟唤醒两种模式
+ * - 批量发送与接收
+ * - 攒批接收，可配置唤醒前累积阈值
+ *
+ * @warning 请勿跨线程或跨调度器使用。跨线程通信请使用 MpscChannel。
  */
 
 #ifndef GALAY_KERNEL_UNSAFE_CHANNEL_H
@@ -23,11 +34,11 @@
 namespace galay::kernel
 {
 
-template <typename T>
 /**
- * @brief UnsafeChannel 可接受的元素类型约束
- * @tparam T 元素类型
+ * @brief 约束 UnsafeChannel 可接受的元素类型
+ * @tparam T 元素类型；必须可移动
  */
+template <typename T>
 concept UnsafeChannelValue = std::movable<T>;
 
 /**

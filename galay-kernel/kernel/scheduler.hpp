@@ -1,16 +1,15 @@
 /**
- * @file Scheduler.h
- * @brief 协程调度器基类和IO控制器
+ * @file scheduler.hpp
+ * @brief 协程调度器基类与任务调度辅助函数
  * @author galay-kernel
  * @version 1.0.0
  *
- * @details 定义协程调度器的基类接口和IO事件控制器。
- * 包含：
- * - Scheduler: 协程调度器基类
- * - IOScheduler: IO调度器接口
- * - IOController: IO事件控制器
+ * @details 定义抽象 Scheduler 接口（start、stop、schedule、scheduleDeferred、
+ * scheduleImmediately），包含处理 Runtime 作用域的共享 resume() 实现。
+ * 同时提供用于便捷 Task 提交的 scheduleTask 重载函数。
  *
- * @note 具体实现见 KqueueScheduler (macOS), EpollScheduler (Linux)
+ * @note 具体实现：KqueueScheduler (macOS)、EpollScheduler (Linux)、
+ *       IOUringScheduler (Linux)、ComputeScheduler
  */
 
 #ifndef GALAY_KERNEL_SCHEDULER_HPP

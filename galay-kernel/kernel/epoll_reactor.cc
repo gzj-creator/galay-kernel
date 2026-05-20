@@ -1,3 +1,13 @@
+/**
+ * @file epoll_reactor.cc
+ * @brief Linux epoll reactor 实现
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 使用 Linux epoll 实现IO事件注册、批量提交和事件分发，
+ * eventfd 用于跨线程唤醒，inotify 用于文件监控，libaio 用于异步文件IO。
+ */
+
 #include "epoll_reactor.h"
 
 #ifdef USE_EPOLL

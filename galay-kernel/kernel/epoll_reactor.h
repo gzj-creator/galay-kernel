@@ -1,3 +1,13 @@
+/**
+ * @file epoll_reactor.h
+ * @brief 基于 Linux epoll 的 IO reactor
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 使用 Linux epoll、eventfd、inotify 和 libaio 实现 BackendReactor 接口。
+ * 通过待提交变更队列批量处理事件注册以减少系统调用。
+ */
+
 #ifndef GALAY_KERNEL_EPOLL_REACTOR_H
 #define GALAY_KERNEL_EPOLL_REACTOR_H
 

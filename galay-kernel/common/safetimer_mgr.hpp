@@ -1,13 +1,15 @@
 /**
  * @file safetimer_mgr.hpp
  * @brief 线程安全的多层时间轮定时器管理器
+ * @author galay-kernel
+ * @version 1.0.0
  *
- * 设计参考 Tokio 的定时器实现：
- * - 添加路径：通过无锁 MPSC 队列（ConcurrentQueue）接收新定时器
- * - 处理路径：单线程批量出队并操作时间轮，无需加锁
- * - 取消操作：通过 Timer 的原子标志实现
+ * @details 设计灵感来自 Tokio 的定时器实现：
+ * - 添加路径：无锁 MPSC 队列（ConcurrentQueue）接收新定时器
+ * - 处理路径：单线程批量出队和时间轮操作
+ * - 取消：每个 Timer 上的原子标志
  *
- * 性能特点：
+ * 性能特征：
  * - 添加定时器：O(1)，无锁
  * - 取消定时器：O(1)，原子操作
  * - tick 处理：O(到期定时器数量)

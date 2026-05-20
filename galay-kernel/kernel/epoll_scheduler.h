@@ -1,3 +1,13 @@
+/**
+ * @file epoll_scheduler.h
+ * @brief 基于 Linux epoll 的 IO 调度器
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 将 EpollReactor 与 SchedulerCore 事件循环骨架组合，
+ * 提供 Linux epoll 环境下的具体 IOScheduler 实现。
+ */
+
 #ifndef GALAY_KERNEL_EPOLL_SCHEDULER_H
 #define GALAY_KERNEL_EPOLL_SCHEDULER_H
 

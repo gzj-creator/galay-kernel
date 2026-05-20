@@ -1,3 +1,13 @@
+/**
+ * @file scheduler_core.h
+ * @brief 调度器事件循环核心，支持 ready-pass 和工作窃取
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 实现 SchedulerCore，驱动每次迭代的任务处理周期：
+ * 收集跨线程注入任务、以预算限制运行 ready pass、空闲时回退到从兄弟调度器窃取任务。
+ */
+
 #ifndef GALAY_KERNEL_SCHEDULER_CORE_H
 #define GALAY_KERNEL_SCHEDULER_CORE_H
 

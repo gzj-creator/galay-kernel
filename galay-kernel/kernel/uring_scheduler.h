@@ -1,3 +1,14 @@
+/**
+ * @file uring_scheduler.h
+ * @brief 基于 Linux io_uring 的 IO 调度器
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 将 IOUringReactor 与 SchedulerCore 事件循环骨架组合，
+ * 提供 Linux io_uring 环境下的具体 IOScheduler 实现。
+ * 由于 io_uring SQE 提交必须保持单线程，禁用了跨线程工作窃取。
+ */
+
 #ifndef GALAY_KERNEL_IOURING_SCHEDULER_H
 #define GALAY_KERNEL_IOURING_SCHEDULER_H
 

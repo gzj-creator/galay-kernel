@@ -1,3 +1,12 @@
+/**
+ * @file kqueue_scheduler.cc
+ * @brief macOS/BSD kqueue IO 调度器实现
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 将 IO 操作委托给 KqueueReactor，复用 SchedulerCore / WakeCoordinator 事件循环机制。
+ */
+
 #include "kqueue_scheduler.h"
 #include "sched_loop.hpp"
 #include "galay-kernel/common/defn.hpp"
@@ -35,7 +44,7 @@ KqueueScheduler::~KqueueScheduler()
 void KqueueScheduler::start()
 {
     if (m_running.exchange(true, std::memory_order_acq_rel)) {
-        return; // Already running
+        return; // 已经在运行
     }
     m_last_error_code.store(0, std::memory_order_release);
 
@@ -49,7 +58,7 @@ void KqueueScheduler::start()
 void KqueueScheduler::stop()
 {
     if (!m_running.exchange(false, std::memory_order_acq_rel)) {
-        return; // Already stopped
+        return; // 已经停止
     }
 
     m_wake_coordinator.forceWake([this]() { notify(); });

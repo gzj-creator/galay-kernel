@@ -1,3 +1,16 @@
+/**
+ * @file runtime.h
+ * @brief 管理 IO 和 compute 调度器的运行时入口
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 定义 Runtime（顶层调度器编排器）、RuntimeHandle（运行时上下文轻量访问器）、
+ * RuntimeConfig（构造参数）和 RuntimeBuilder（流式配置 API）。
+ *
+ * Runtime 持有 IO 调度器、compute 调度器和阻塞执行器，
+ * 支持 IO 调度器间的工作窃取和 CPU 亲和性绑定。
+ */
+
 #ifndef GALAY_KERNEL_RUNTIME_H
 #define GALAY_KERNEL_RUNTIME_H
 

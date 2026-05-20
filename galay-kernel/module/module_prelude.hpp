@@ -56,6 +56,9 @@
 #if __has_include(<functional>)
 #include <functional>
 #endif
+#if __has_include(<format>)
+#include <format>
+#endif
 #if __has_include(<memory>)
 #include <memory>
 #endif

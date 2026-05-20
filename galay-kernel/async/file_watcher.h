@@ -1,3 +1,18 @@
+/**
+ * @file file_watcher.h
+ * @brief 异步文件和目录变更监控
+ * @author galay-kernel
+ * @version 1.0.0
+ *
+ * @details 提供平台自适应的文件监控能力：
+ * - Linux (io_uring/epoll)：使用 inotify 监控文件和目录事件
+ * - macOS (kqueue)：使用 EVFILT_VNODE 进行逐文件监控
+ *
+ * 监控器对协程友好：调用 addWatch 注册路径，然后 co_await watch() 异步接收变更事件。
+ *
+ * 在使用 USE_IOURING、USE_EPOLL 或 USE_KQUEUE 编译时可用。
+ */
+
 #ifndef GALAY_ASYNC_FILE_WATCHER_H
 #define GALAY_ASYNC_FILE_WATCHER_H
 
@@ -45,77 +60,99 @@ namespace galay::async
  * }
  * @endcode
  */
+/**
+ * @brief 异步文件和目录变更监控器
+ *
+ * @details 监控文件系统路径的变更，如修改、创建、删除和移动。
+ * 使用平台特定机制：
+ * - Linux：通过 io_uring 或 epoll 使用 inotify
+ * - macOS：kqueue EVFILT_VNODE
+ *
+ * 典型用法：
+ * 1. 构造 FileWatcher
+ * 2. 为每个要监控的路径调用 addWatch()
+ * 3. 在循环中 co_await watch() 接收事件
+ *
+ * @note 不可拷贝；可移动。
+ */
 class FileWatcher
 {
 public:
     /**
-     * @brief 构造函数
+     * @brief 构造 FileWatcher 并初始化平台特定的后端
      */
     FileWatcher();
 
     /**
-     * @brief 析构函数
+     * @brief 析构函数；移除所有监控并释放资源
      */
     ~FileWatcher();
 
-    // 禁止拷贝
     FileWatcher(const FileWatcher&) = delete;
     FileWatcher& operator=(const FileWatcher&) = delete;
 
-    // 允许移动
+    /**
+     * @brief 移动构造函数；转移监控状态
+     * @param other 被移动的对象
+     */
     FileWatcher(FileWatcher&& other) noexcept;
+
+    /**
+     * @brief 移动赋值运算符；清理当前状态后再转移
+     * @param other 被移动的对象
+     * @return 当前对象的引用
+     */
     FileWatcher& operator=(FileWatcher&& other) noexcept;
 
     /**
-     * @brief 添加监控路径
-     * @param path 要监控的文件或目录路径
-     * @param events 要监控的事件类型（可用 | 组合多个事件）
-     * @return 成功返回监控描述符，失败返回IOError
+     * @brief 注册路径以进行文件系统变更监控
      *
-     * @note Linux: 监控目录时，FileWatchResult::name 包含变化的文件名
-     * @note macOS: kqueue 需要为每个文件单独添加监控
+     * @param path 要监控的文件或目录路径
+     * @param events 要监控的事件类型位掩码（默认 All）
+     * @return 成功时返回监控描述符，失败时返回 IOError
+     *
+     * @note 在 Linux 上使用目录监控时，FileWatchResult::name 包含变更的文件名。
+     *       在 macOS 上，每个文件需要单独的监控。
      */
     std::expected<int, galay::kernel::IOError> addWatch(
         const std::string& path,
         galay::kernel::FileWatchEvent events = galay::kernel::FileWatchEvent::All);
 
     /**
-     * @brief 移除监控
-     * @param wd 监控描述符（addWatch返回的值）
-     * @return 成功返回void，失败返回IOError
+     * @brief 移除先前注册的监控
+     * @param wd 由 addWatch 返回的监控描述符
+     * @return 成功返回 void，描述符无效时返回 IOError
      */
     std::expected<void, galay::kernel::IOError> removeWatch(int wd);
 
     /**
-     * @brief 异步等待文件事件
-     * @return FileWatchAwaitable 可等待对象
-     *
-     * @note co_await 后返回 FileWatchResult 或 IOError
+     * @brief 异步等待下一个文件系统事件
+     * @return FileWatchAwaitable，解析为 FileWatchResult 或 IOError
      */
     galay::kernel::FileWatchAwaitable watch();
 
     /**
-     * @brief 检查是否有效
-     * @return 监控是否初始化成功
+     * @brief 检查监控器是否初始化成功
+     * @return 如果底层文件描述符有效则返回 true
      */
     bool isValid() const { return m_watch_fd >= 0; }
 
     /**
-     * @brief 获取监控文件描述符
-     * @return Linux: inotify fd, macOS: 第一个监控的文件 fd
+     * @brief 获取底层监控文件描述符
+     * @return Linux：inotify fd；macOS：第一个被监控文件的 fd
      */
     int fd() const { return m_watch_fd; }
 
     /**
-     * @brief 获取监控路径
+     * @brief 查找与监控描述符关联的路径
      * @param wd 监控描述符
-     * @return 对应的路径，如果不存在返回空字符串
+     * @return 注册的路径，未找到时返回空字符串
      */
     std::string getPath(int wd) const;
 
-    /*
-     * @brief 获取IO控制器
-     * @return IOController* IO控制器
+    /**
+     * @brief 获取内部 IO 控制器（用于高级操作）
+     * @return IOController 指针
      */
     galay::kernel::IOController* getController() { return &m_controller; }
 
