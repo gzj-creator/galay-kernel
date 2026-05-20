@@ -52,3 +52,14 @@
   - 支持 `LogLevel` 五级过滤（kTrace/kDebug/kInfo/kWarn/kError），低级别消息在 `std::format` 前被截断。
   - 为全部 68 个源文件（common/kernel/async/concurrency）添加完整中文 Doxygen 注释，覆盖文件级、类级和方法级文档。
   - 导出 `logger.h` 到 C++23 module `galay.kernel`。
+
+## v5.0.0 - 2026-05-20
+
+- 版本级别：大版本（major）
+- Git 提交消息：`refactor: 按库隔离 BaseLogger 日志入口`
+- Git Tag：`v5.0.0`
+- 自述摘要：
+  - 移除全局 `LoggerRegistry` 和旧 `GALAY_LOG_*` 公共入口，改为 `LoggerSlot<Tag>` 按库隔离日志槽位。
+  - `galay-kernel` 自身日志使用 `galay::kernel::log::set()` / `galay::kernel::log::get()` 与 `GALAY_KERNEL_LOG_*` 宏，下游库通过 `GALAY_LOG_WITH_LOGGER` 定义各自命名空间日志宏。
+  - 新增 `GALAY_LOG_ENABLED` / `GALAY_KERNEL_LOG_ENABLED`，允许调用点在昂贵日志参数构造前先判断 logger 是否存在且级别是否会写入。
+  - 新增 `t122_logger_slot` 回归测试，覆盖槽位隔离、kernel 日志入口，以及 logger 为空或级别过滤时不求值格式化参数的行为。

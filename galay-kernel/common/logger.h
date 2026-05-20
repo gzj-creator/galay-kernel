@@ -1,13 +1,13 @@
 /**
  * @file logger.h
- * @brief 全局日志抽象接口与注册中心
+ * @brief 日志抽象接口与按库隔离的注册槽
  * @author galay-kernel
  * @version 1.0.0
  *
- * @details 提供可插拔的日志基础设施，galay 系列库（galay-http、galay-ssl 等）
- * 在关键路径上埋入日志点位，用户通过继承 BaseLogger 并调用 LoggerRegistry::set()
- * 注入自定义日志实现即可接收日志。未设置 logger 时，所有埋点仅执行一次 atomic
- * load + null 判断，不进入格式化，零开销。
+ * @details 提供可插拔的日志基础设施。galay 系列库共享 BaseLogger 和
+ * LogLevel 类型，但每个库通过自己的 log::set()/log::get() 持有独立 logger，
+ * 从而支持用户只启用某一个库的日志。未设置 logger 时，埋点仅执行一次
+ * atomic load + null 判断，不进入格式化。
  *
  * 使用方式：
  * @code
@@ -23,9 +23,8 @@
  *     }
  * };
  *
- * // 2. 在程序初始化时设置（仅调用一次，线程不安全）
- * galay::kernel::LoggerRegistry::set(
- *     std::make_unique<MyLogger>());
+ * // 2. 只启用指定库日志
+ * galay::kernel::log::set(std::make_unique<MyLogger>());
  *
  * // 3. 库内部埋点自动生效，无需其他操作
  * // 4. 若需重置，用户自行保证线程安全后再次调用 set()
@@ -36,8 +35,10 @@
 #define GALAY_KERNEL_LOGGER_H
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string_view>
+#include <utility>
 
 namespace galay::kernel
 {
@@ -46,8 +47,7 @@ namespace galay::kernel
  * @brief 日志级别枚举
  *
  * @details 从低到高分为五个级别，用于过滤和分类日志消息。
- * LoggerRegistry::get()->minLevel() 返回的值决定了哪些级别的消息
- * 会被实际发送到日志实现。
+ * 各库 log::get()->minLevel() 返回的值决定了哪些级别的消息会被实际发送到日志实现。
  */
 enum class LogLevel : uint8_t
 {
@@ -65,7 +65,7 @@ enum class LogLevel : uint8_t
  * 日志埋点重定向到任意日志后端（控制台、文件、远程日志服务等）。
  *
  * 生命周期约定：
- * - 实例通过 LoggerRegistry::set() 注入，由 LoggerRegistry 持有所有权
+ * - 实例通过各库 log::set() 注入，由对应库的 LoggerSlot 持有所有权
  * - 设置后在程序整个生命周期内保持有效
  * - 如需替换或销毁，用户须保证在没有任何库代码并发调用 get() 时执行
  *
@@ -127,71 +127,100 @@ public:
 };
 
 /**
- * @brief 全局 Logger 注册中心
+ * @brief 按标签隔离的 logger 存储槽
  *
- * @details 提供全局唯一的 logger 存储和访问接口。内部使用 atomic 裸指针
- * 实现 get() 的无锁访问，适合在高频 IO 路径中调用。
+ * @details 每个库应定义一个唯一 tag 类型，并使用 LoggerSlot<Tag> 作为该库
+ * log::set()/log::get() 的后端。不同 tag 的槽位拥有独立 logger，
+ * 因此用户只设置某个库 logger 时不会启用其他库日志。
  *
  * 所有权模型：
  * - set() 接受 std::unique_ptr<BaseLogger>，取得 logger 的所有权
- * - 内部通过 static unique_ptr 持有，程序退出时自动析构
+ * - 内部通过 inline static unique_ptr 持有，程序退出时自动析构
  *
  * 线程安全模型：
  * - get() 是线程安全的，使用 atomic acquire 语义，可在任意线程调用
  * - set() 是线程不安全的，用户须在程序初始化阶段（单线程环境）调用一次
  * - 若需在运行时替换 logger，用户须自行保证 set() 与 get() 的同步
- *
- * 使用示例：
- * @code
- * // 初始化时设置（main 函数开头）
- * galay::kernel::LoggerRegistry::set(std::make_unique<MyLogger>());
- *
- * // 库内部任意位置获取 logger 并检查
- * if (auto* logger = galay::kernel::LoggerRegistry::get()) {
- *     logger->log(LogLevel::kError, "[http] [connect]", "connection refused", ...);
- * }
- * @endcode
  */
-class LoggerRegistry
+template <typename Tag>
+class LoggerSlot
 {
 public:
     /**
-     * @brief 设置全局 logger
+     * @brief 设置当前槽位的 logger
      *
-     * @details 将 logger 存入全局原子指针并取得所有权。
-     * 调用后所有线程的 get() 将返回新设置的 logger。
+     * @details 将 logger 存入当前 tag 对应的槽位并取得所有权。
+     * 调用后该槽位的 get() 将返回新设置的 logger，其他 tag 不受影响。
      *
      * @param logger 用户实现的日志实例，通过 unique_ptr 传入以转移所有权。
      *               传入 nullptr 等价于禁用日志（get() 返回 nullptr）。
      *
      * @note 线程不安全。不得与 get() 并发调用。
-     *       推荐在 main() 开头、创建任何 galay Runtime 之前调用。
-     *
-     * @code
-     * galay::kernel::LoggerRegistry::set(std::make_unique<MyLogger>());
-     * @endcode
+     *       推荐在 main() 开头、创建任何 galay 对象之前调用。
      */
-    static void set(BaseLogger::uptr logger);
+    static void set(BaseLogger::uptr logger)
+    {
+        m_owned = std::move(logger);
+        m_instance.store(m_owned.get(), std::memory_order_release);
+    }
 
     /**
-     * @brief 获取当前全局 logger
+     * @brief 获取当前槽位的 logger
      *
      * @details 返回通过 set() 设置的 logger 裸指针，未设置时返回 nullptr。
-     * 使用 atomic acquire 语义，保证看到 set() 中 store 的完整 logger 对象。
+     * 使用 atomic acquire 语义，保证看到 set() 中 store 的完整 BaseLogger 对象。
      *
      * @return 当前 logger 指针，或 nullptr（未设置时）
      *
      * @note 线程安全。可在任意线程、任意上下文中调用。
      * @note 返回的指针在 set() 被再次调用或程序退出前保持有效。
      */
-    [[nodiscard]] static BaseLogger* get() noexcept;
+    [[nodiscard]] static BaseLogger* get() noexcept
+    {
+        return m_instance.load(std::memory_order_acquire);
+    }
 
     /**
      * @brief 禁止实例化
-     * @details LoggerRegistry 仅提供静态方法，不允许创建实例。
+     * @details LoggerSlot 仅提供静态方法，不允许创建实例。
      */
-    LoggerRegistry() = delete;
+    LoggerSlot() = delete;
+
+private:
+    static inline BaseLogger::uptr m_owned{};
+    static inline std::atomic<BaseLogger*> m_instance{nullptr};
 };
+
+namespace detail
+{
+struct KernelLogTag;
+} // namespace detail
+
+/**
+ * @brief kernel 库自身使用的 logger 槽位
+ *
+ * @details 下游库不得复用此槽位，应在各自命名空间内定义独立 tag 和 log::set/get。
+ */
+using KernelLoggerSlot = LoggerSlot<detail::KernelLogTag>;
+
+namespace log
+{
+/**
+ * @brief 设置 galay-kernel 自身 logger
+ *
+ * @details 只影响 `GALAY_KERNEL_LOG_*` 宏产生的 kernel 日志，不会启用其他 galay 库日志。
+ *
+ * @param logger 用户实现的 logger；传入 nullptr 时禁用 kernel 日志。
+ */
+void set(BaseLogger::uptr logger);
+
+/**
+ * @brief 获取 galay-kernel 自身 logger
+ *
+ * @return 当前 kernel logger 指针；未设置时返回 nullptr。
+ */
+[[nodiscard]] BaseLogger* get() noexcept;
+} // namespace log
 
 } // namespace galay::kernel
 

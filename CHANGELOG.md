@@ -1,9 +1,26 @@
 # CHANGELOG
 
 维护说明：
-- 未打 tag 的改动先写入 `
+- 未打 tag 的改动先写入 `## [Unreleased]`。
+- 打新 tag 时，将 `Unreleased` 中累计变更整理成对应版本节，并保留空的 `Unreleased` 节。
+- 版本号遵循语义化版本：破坏性接口变更升主版本，新增能力升次版本，修复与维护升修订版本。
+- 记录内容以可读变更摘要为主，避免机械罗列完整 diff。
 
 ## [Unreleased]
+
+## [v5.0.0] - 2026-05-20
+
+### Changed
+- 将日志注册从全局 `LoggerRegistry` 改为按库隔离的 `LoggerSlot<Tag>`，下游库通过各自命名空间的 `log::set()` / `log::get()` 独立启用日志。
+- 移除旧 `GALAY_LOG_*` 全局宏入口，新增 `GALAY_LOG_WITH_LOGGER(getter, level, ...)` 作为下游库定义日志宏的公共基础。
+- 新增 `GALAY_LOG_ENABLED(getter, level)` 与 `GALAY_KERNEL_LOG_ENABLED(level)`，供调用点在构造昂贵日志参数前先判断是否会实际写日志。
+- `galay-kernel` 自身日志改为 `galay::kernel::log::set()` / `galay::kernel::log::get()` 与 `GALAY_KERNEL_LOG_*` 宏。
+
+### Fixed
+- 新增 `t122_logger_slot` 回归测试，验证不同 logger 槽位互相隔离，并验证 logger 为空或日志级别被过滤时不会求值格式化参数。
+
+### Release
+- 本次移除全局日志注册兼容层，属于破坏性公共接口变更，版本提升到 `v5.0.0`。
 
 ## [v4.0.2] - 2026-05-20
 

@@ -1,6 +1,6 @@
 module(
     name = "galay_kernel",
-    version = "4.0.1",
+    version = "5.0.0",
     compatibility_level = 1,
 )
 
