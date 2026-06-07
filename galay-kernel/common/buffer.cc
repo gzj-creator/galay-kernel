@@ -1,6 +1,6 @@
 /**
  * @file buffer.cc
- * @brief StringMetaData 辅助函数、Buffer 和 RingBuffer 的实现
+ * @brief Buffer 和 RingBuffer 的实现
  * @author galay-kernel
  * @version 1.0.0
  */
@@ -14,121 +14,6 @@
 namespace galay::kernel
 {
     /**
-     * @brief 从 std::string 构造（非拥有视图）
-     * @param str 源字符串；调用方必须保证其生命周期
-     */
-    StringMetaData::StringMetaData(std::string &str)
-    {
-        data = (uint8_t*)str.data();
-        size = str.size();
-        capacity = str.capacity();
-    }
-
-    /**
-     * @brief 从 std::string_view 构造（非拥有视图）
-     * @param str 字符串视图；底层数据的生命周期必须超过本对象
-     */
-    StringMetaData::StringMetaData(const std::string_view &str)
-    {
-        data = (uint8_t*)str.data();
-        size = str.size();
-        capacity = str.length();
-    }
-
-    /**
-     * @brief 从 C 风格字符串构造（非拥有视图）
-     * @param str 指向以 null 结尾的字符串的指针
-     */
-    StringMetaData::StringMetaData(const char *str)
-    {
-        size = strlen(str);
-        capacity = size;
-        data = (uint8_t*)str;
-    }
-
-    /**
-     * @brief 从字节数组构造（非拥有视图）
-     * @param str 指向以 null 结尾的字节序列的指针
-     */
-    StringMetaData::StringMetaData(const uint8_t *str)
-    {
-        size = strlen(reinterpret_cast<const char*>(str));
-        capacity = size;
-        data = (uint8_t*)str;
-    }
-
-    /**
-     * @brief 从 char 指针和显式长度构造（非拥有视图）
-     * @param str 数据指针
-     * @param length 字节数；必须大于 0
-     * @throws std::invalid_argument 若 length 为 0
-     */
-    StringMetaData::StringMetaData(const char* str, size_t length)
-    {
-        if(length <= 0) throw std::invalid_argument("length must be greater than 0");
-        size = strlen(reinterpret_cast<const char*>(str));
-        capacity = length;
-        size = length;
-    }
-
-    /**
-     * @brief 从字节指针和显式长度构造（非拥有视图）
-     * @param str 数据指针
-     * @param length 字节数；必须大于 0
-     * @throws std::invalid_argument 若 length 为 0
-     */
-    StringMetaData::StringMetaData(const uint8_t* str, size_t length)
-    {
-        if(length <= 0) throw std::invalid_argument("length must be greater than 0");
-        size = strlen(reinterpret_cast<const char*>(str));
-        capacity = length;
-        size = length;
-    }
-
-    /**
-     * @brief 移动构造函数；转移数据指针的所有权
-     * @param other 源元数据（移后处于归零状态）
-     */
-    StringMetaData::StringMetaData(StringMetaData &&other)
-        : data(other.data), size(other.size), capacity(other.capacity)
-    {
-        other.data = nullptr;
-        other.size = 0;
-        other.capacity = 0;
-    }
-
-    /**
-     * @brief 移动赋值；转移所有权，将 other 置为归零状态
-     * @param other 源元数据
-     * @return 本对象的引用
-     */
-    StringMetaData& StringMetaData::operator=(StringMetaData&& other)
-    {
-        if (this != &other) {
-            data = other.data;
-            size = other.size;
-            capacity = other.capacity;
-            other.data = nullptr;
-            other.size = 0;
-            other.capacity = 0;
-        }
-        return *this;
-    }
-
-    /**
-     * @brief 析构函数；重置字段但不释放内存
-     * @note 基于所有权的释放由 freeString() 或拥有类处理
-     */
-    StringMetaData::~StringMetaData()
-    {
-        if(data) {
-            data = nullptr;
-            size = 0;
-            capacity = 0;
-        }
-    }
-
-    /**
      * @brief 默认构造空缓冲区，不分配存储空间
      */
     Buffer::Buffer()
@@ -141,7 +26,7 @@ namespace galay::kernel
      */
     Buffer::Buffer(size_t capacity)
     {
-        m_data = mallocString(capacity);
+        m_data = galay::utils::mallocBytes(capacity);
     }
 
     /**
@@ -151,7 +36,7 @@ namespace galay::kernel
      */
     Buffer::Buffer(const void *data, size_t size)
     {
-        m_data = mallocString(size);
+        m_data = galay::utils::mallocBytes(size);
         memcpy(m_data.data, data, size);
         m_data.size = size;
     }
@@ -162,7 +47,7 @@ namespace galay::kernel
      */
     Buffer::Buffer(const std::string &str)
     {
-        m_data = mallocString(str.size());
+        m_data = galay::utils::mallocBytes(str.size());
         memcpy(m_data.data, str.data(), str.size());
         m_data.size = str.size();
     }
@@ -172,7 +57,7 @@ namespace galay::kernel
      */
     void Buffer::clear()
     {
-        clearString(m_data);
+        galay::utils::clearBytes(m_data);
     }
 
     /**
@@ -217,7 +102,7 @@ namespace galay::kernel
      */
     void Buffer::resize(size_t capacity)
     {
-        reallocString(m_data, capacity);
+        galay::utils::reallocBytes(m_data, capacity);
     }
 
     /**
@@ -246,8 +131,9 @@ namespace galay::kernel
     Buffer &Buffer::operator=(Buffer &&other)
     {
         if(this != &other) {
-            freeString(m_data);
-            m_data = std::move(other.m_data);
+            galay::utils::freeBytes(m_data);
+            m_data = other.m_data;
+            other.m_data = {};
         }
         return *this;
     }
@@ -257,7 +143,7 @@ namespace galay::kernel
      */
     Buffer::~Buffer()
     {
-        clearString(m_data);
+        galay::utils::freeBytes(m_data);
     }
 
     // ============ RingBuffer 实现 ============

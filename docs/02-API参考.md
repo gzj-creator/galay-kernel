@@ -59,7 +59,6 @@
   - `galay-kernel/common/handle_option.h`
   - `galay-kernel/common/host.hpp`
   - `galay-kernel/common/sleep.hpp`
-  - `galay-kernel/common/bytes.h`
   - `galay-kernel/common/buffer.h`
   - `galay-kernel/common/queue_view.h`
   - `galay-kernel/common/error.h`
@@ -105,7 +104,7 @@
 
 `import galay.kernel;` 当前导出面：
 
-- 通用类型：`defn.hpp`、`error.h`、`host.hpp`、`handle_option.h`、`bytes.h`、`buffer.h`、`sleep.hpp`
+- 通用类型：`defn.hpp`、`error.h`、`host.hpp`、`handle_option.h`、`buffer.h`、`sleep.hpp`
 - Runtime：`task.h`、`scheduler.hpp`、`io_scheduler.hpp`、`compute_scheduler.h`、`runtime.h`、`timer_scheduler.h`
 - 并发：`mpsc_channel.h`、`unsafe_channel.h`、`async_mutex.h`、`async_waiter.h`
 - IO：`tcp_socket.h`、`udp_socket.h`、`file_watcher.h`
@@ -124,7 +123,7 @@
 
 - `galay-kernel/common/host.hpp`
 - `galay-kernel/common/error.h`
-- `galay-kernel/common/bytes.h`
+- `galay-utils/cache/bytes.hpp`
 - `galay-kernel/common/buffer.h`
 
 `IPType` / `Host`：
@@ -218,30 +217,26 @@
 - `toString()` 返回副本；`toStringView()` 返回零拷贝视图
 - `c_str()` 当前实现会在末尾不是 `\0` 时尝试原地补终止符，因此更适合本身可写、并且为终止符预留了容量的文本缓冲；对二进制数据或精确容量缓冲，更稳妥的读取方式是 `toString()` / `toStringView()`
 
-`StringMetaData` 与辅助函数：
+`ByteMetaData` 与辅助函数：
 
-- `struct StringMetaData { uint8_t* data; size_t size; size_t capacity; }`
-- `StringMetaData(std::string& str)`
-- `StringMetaData(const std::string_view& str)`
-- `StringMetaData(const char* str)`
-- `StringMetaData(const uint8_t* str)`
-- `StringMetaData(const char* str, size_t length)`
-- `StringMetaData(const uint8_t* str, size_t length)`
-- `StringMetaData(StringMetaData&& other)`
-- `StringMetaData& operator=(StringMetaData&& other)`
-- `StringMetaData mallocString(size_t length)`
-- `StringMetaData deepCopyString(const StringMetaData& meta)`
-- `void reallocString(StringMetaData& meta, size_t length)`
-- `void clearString(StringMetaData& meta)`
-- `void freeString(StringMetaData& meta)`
+- `struct ByteMetaData { uint8_t* data; size_t size; size_t capacity; }`
+- `ByteMetaData(std::string& str)` / `ByteMetaData(std::string_view str)`
+- `ByteMetaData(const char* str)` / `ByteMetaData(const uint8_t* str)`
+- `ByteMetaData(const char* str, size_t length)` / `ByteMetaData(const uint8_t* str, size_t length)`
+- `ByteMetaData mallocBytes(size_t length)`
+- `ByteMetaData deepCopyBytes(const ByteMetaData& meta)`
+- `void reallocBytes(ByteMetaData& meta, size_t length)`
+- `void clearBytes(ByteMetaData& meta)`
+- `void freeBytes(ByteMetaData& meta)`
 
 语义说明：
 
-- `StringMetaData` 是公开可见但偏底层的原始缓冲描述结构；业务代码更推荐优先使用 `Bytes` / `Buffer`
-- `mallocString(...)` 分配容量并把 `size` 初始化为 `0`
-- `deepCopyString(...)` 会按源对象的 `capacity` 分配并复制已有 `size`
-- `reallocString(...)` 在缩容时会同步截断 `size`；若重新分配失败会抛 `std::bad_alloc`
-- `clearString(...)` 只清空内容并保留容量；`freeString(...)` 才真正释放内存
+- `Bytes`、`ByteMetaData` 与辅助函数由 `galay-utils/cache/bytes.hpp` 提供，`galay-kernel` 不再保留本地 `bytes.h` / `bytes.cc`
+- `ByteMetaData` 是公开可见但偏底层的原始缓冲描述结构；业务代码更推荐优先使用 `Bytes` / `Buffer`
+- `mallocBytes(...)` 分配容量并把 `size` 初始化为 `0`
+- `deepCopyBytes(...)` 会按源对象的 `capacity` 分配并复制已有 `size`
+- `reallocBytes(...)` 在缩容时会同步截断 `size`；若重新分配失败会抛 `std::bad_alloc`
+- `clearBytes(...)` 只清空内容并保留容量；`freeBytes(...)` 才真正释放内存
 
 `Buffer` / `RingBuffer`：
 
@@ -274,7 +269,7 @@
 
 语义说明：
 
-- `Buffer` 是 owning 动态缓冲区；`resize(...)` 最终调用 `reallocString(...)`，缩容时可能截断已有 `length()`
+- `Buffer` 是 owning 动态缓冲区；`resize(...)` 最终调用 `reallocBytes(...)`，缩容时可能截断已有 `length()`
 - `Buffer::clear()` 会把已有容量区间清零，但保留已分配容量，适合重复复用
 - `RingBuffer` 是固定容量、不会自动扩容的环形缓冲；写满后 `write(...)` / `produce(...)` 只会推进可容纳的那部分字节
 - `getWriteIovecs(...)` / `getReadIovecs(...)` 最多返回两段连续内存，专门服务 `readv` / `writev`
@@ -781,7 +776,7 @@ builder iovec 公开面：
 - `galay.kernel` / `Runtime` / `RuntimeBuilder` / `IOScheduler` / `ComputeScheduler` / `Task` / `TimerScheduler`：
   - 先看本页 `模块门面 galay.kernel`、`Runtime / Scheduler / Task / Timer`
   - 再看 `docs/01-架构设计.md` 与 `docs/03-使用指南.md`
-- `Bytes` / `StringMetaData` / `Buffer` / `RingBuffer` / `IOError` / `Host` / `IPType`：
+- `Bytes` / `ByteMetaData` / `Buffer` / `RingBuffer` / `IOError` / `Host` / `IPType`：
   - 先看本页 `地址、错误与字节缓冲工具`
   - 再看 `docs/03-使用指南.md`、`docs/07-常见问题.md`
 - `TcpSocket` / `UdpSocket` / `HandleOption`：

@@ -9,7 +9,7 @@ export {
 #include "galay-kernel/common/error.h"
 #include "galay-kernel/common/host.hpp"
 #include "galay-kernel/common/handle_option.h"
-#include "galay-kernel/common/bytes.h"
+#include <galay-utils/cache/bytes.hpp>
 #include "galay-kernel/common/buffer.h"
 #include "galay-kernel/common/sleep.hpp"
 #include "galay-kernel/common/logger.h"

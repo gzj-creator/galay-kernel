@@ -277,7 +277,7 @@ bash scripts/run_benchmark_matrix.sh \
 优先落到主干页的查询类型：
 
 - `galay.kernel` / Runtime / Scheduler / Task / TimerScheduler：先看 `docs/01-架构设计.md`、`docs/02-API参考.md`、`docs/03-使用指南.md`
-- `Bytes` / `StringMetaData` / `Buffer` / `RingBuffer` / `Host` / `IOError`：先看 `docs/02-API参考.md`、`docs/07-常见问题.md`
+- `Bytes` / `ByteMetaData` / `Buffer` / `RingBuffer` / `Host` / `IOError`：先看 `docs/02-API参考.md`、`docs/07-常见问题.md`
 - TcpSocket / UdpSocket / AsyncFile / FileWatcher：先看 `docs/02-API参考.md`、`docs/03-使用指南.md`
 - MpscChannel / UnsafeChannel / AsyncMutex / AsyncWaiter：先看 `docs/02-API参考.md`、`docs/03-使用指南.md`、`docs/07-常见问题.md`
 - benchmark / 当前性能事实：先看 `docs/05-性能测试.md`

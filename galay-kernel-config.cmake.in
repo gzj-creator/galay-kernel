@@ -37,8 +37,32 @@ if(NOT TARGET concurrentqueue::concurrentqueue)
     )
 endif()
 
+set(_galay_kernel_utils_hints
+    "${GALAY_UTILS_INCLUDE_DIR}"
+    "@PACKAGE_CMAKE_INSTALL_PREFIX@/include"
+    "/opt/homebrew/include"
+    "/usr/local/include"
+    "/usr/include"
+)
+unset(GALAY_UTILS_INCLUDE_DIR CACHE)
+find_path(GALAY_UTILS_INCLUDE_DIR
+    NAMES galay-utils/cache/bytes.hpp
+    HINTS ${_galay_kernel_utils_hints}
+)
+if(NOT GALAY_UTILS_INCLUDE_DIR)
+    message(FATAL_ERROR
+        "galay-kernel requires galay-utils headers. Set "
+        "GALAY_UTILS_INCLUDE_DIR to the include prefix containing "
+        "galay-utils/cache/bytes.hpp")
+endif()
+
 # 提供导入的目标
 include("${CMAKE_CURRENT_LIST_DIR}/galayKernelConfigTargets.cmake")
+
+if(TARGET galay-kernel::galay-kernel)
+    set_property(TARGET galay-kernel::galay-kernel APPEND PROPERTY
+        INTERFACE_INCLUDE_DIRECTORIES "${GALAY_UTILS_INCLUDE_DIR}")
+endif()
 
 # 设置别名以便于使用
 if(NOT TARGET galay-kernel::galay-kernel)

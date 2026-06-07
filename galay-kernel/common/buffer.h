@@ -5,7 +5,7 @@
  * @version 1.0.0
  *
  * @details 为 galay-kernel I/O 子系统提供两种缓冲区抽象：
- * - StringMetaData：底层字符串元数据（指针、大小、容量）
+ * - ByteMetaData：底层字节元数据（指针、大小、容量）
  * - Buffer：支持动态增长和移动语义的线性字节缓冲区
  * - RingBuffer：固定容量的环形缓冲区，针对 scatter-gather I/O（readv/writev）优化
  */
@@ -20,104 +20,11 @@
 #include <cstdint>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <galay-utils/cache/bytes.hpp>
 
 namespace galay::kernel
 {
-    /**
-     * @brief 底层字符串元数据结构
-     * @details 管理原始数据指针及其大小和容量
-     */
-    struct StringMetaData
-    {
-        StringMetaData() {};
-
-        /**
-         * @brief 从 std::string 构造（非拥有视图）
-         * @param str 源字符串
-         */
-        StringMetaData(std::string& str);
-
-        /**
-         * @brief 从 std::string_view 构造（非拥有视图）
-         * @param str 字符串视图
-         */
-        StringMetaData(const std::string_view& str);
-
-        /**
-         * @brief 从 C 风格字符串构造（非拥有视图）
-         * @param str C 字符串指针
-         */
-        StringMetaData(const char* str);
-
-        /**
-         * @brief 从字节数组构造（非拥有视图）
-         * @param str 字节数组指针
-         */
-        StringMetaData(const uint8_t* str);
-
-        /**
-         * @brief 从原始指针和显式长度构造
-         * @param str C 字符串指针
-         * @param length 字节数
-         */
-        StringMetaData(const char* str, size_t length);
-
-        /**
-         * @brief 从原始字节指针和显式长度构造
-         * @param str 字节数组指针
-         * @param length 字节数
-         */
-        StringMetaData(const uint8_t* str, size_t length);
-
-        /**
-         * @brief 移动构造函数
-         */
-        StringMetaData(StringMetaData&& other);
-
-        /**
-         * @brief 移动赋值运算符
-         */
-        StringMetaData& operator=(StringMetaData&& other);
-
-        ~StringMetaData();
-
-        uint8_t* data = nullptr;    ///< 数据指针
-        size_t size = 0;             ///< 当前数据大小（字节）
-        size_t capacity = 0;         ///< 已分配容量（字节）
-    };
-
-    /**
-     * @brief 分配指定长度的 StringMetaData 缓冲区
-     * @param length 要分配的字节数
-     * @return 容量已设置、大小初始化为 0 的 StringMetaData
-     */
-    StringMetaData mallocString(size_t length);
-
-    /**
-     * @brief 深拷贝 StringMetaData 到新分配的缓冲区
-     * @param meta 源元数据
-     * @return 拥有独立数据副本的新 StringMetaData
-     */
-    StringMetaData deepCopyString(const StringMetaData& meta);
-
-    /**
-     * @brief 重新分配 StringMetaData 缓冲区到新大小
-     * @param meta 要重新分配的元数据
-     * @param length 新容量（字节）；若为 0 则释放缓冲区
-     */
-    void reallocString(StringMetaData& meta, size_t length);
-
-    /**
-     * @brief 将数据清零但不释放；大小重置为 0
-     * @param meta 要清除的元数据
-     */
-    void clearString(StringMetaData& meta);
-
-    /**
-     * @brief 释放 StringMetaData 持有的缓冲区并重置所有字段
-     * @param meta 数据指针将被释放的元数据
-     */
-    void freeString(StringMetaData& meta);
+    using galay::utils::ByteMetaData;
 
     /**
      * @brief 支持动态增长和移动语义的线性字节缓冲区
@@ -213,7 +120,7 @@ namespace galay::kernel
         }
 
     private:
-        StringMetaData m_data;
+        ByteMetaData m_data;
     };
 
     /**

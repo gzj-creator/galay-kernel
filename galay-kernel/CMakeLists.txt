@@ -39,6 +39,26 @@ if(NOT TARGET concurrentqueue::concurrentqueue)
     )
 endif()
 
+set(GALAY_UTILS_INCLUDE_DIR "" CACHE PATH
+    "Directory containing galay-utils/cache/bytes.hpp")
+if(NOT GALAY_UTILS_INCLUDE_DIR)
+    unset(GALAY_UTILS_INCLUDE_DIR CACHE)
+    find_path(GALAY_UTILS_INCLUDE_DIR
+        NAMES galay-utils/cache/bytes.hpp
+        HINTS
+            "${CMAKE_SOURCE_DIR}/../galay-utils"
+            /opt/homebrew/include
+            /usr/local/include
+            /usr/include
+    )
+endif()
+
+if(NOT GALAY_UTILS_INCLUDE_DIR)
+    message(FATAL_ERROR
+        "galay-utils headers not found. Set GALAY_UTILS_INCLUDE_DIR "
+        "to the include prefix containing galay-utils/cache/bytes.hpp")
+endif()
+
 # 创建库目标
 add_library(galay-kernel ${SOURCES} ${HEADERS})
 
@@ -58,6 +78,7 @@ target_include_directories(galay-kernel
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${GALAY_UTILS_INCLUDE_DIR}>
         $<INSTALL_INTERFACE:include>
 )
 

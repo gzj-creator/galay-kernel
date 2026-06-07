@@ -16,7 +16,6 @@
 
 #include "galay-kernel/common/defn.hpp"
 #include "galay-kernel/common/error.h"
-#include "galay-kernel/common/bytes.h"
 #include "galay-kernel/common/host.hpp"
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -216,7 +215,6 @@ inline std::expected<size_t, IOError> handleSendFile(GHandle socket_handle, int 
 
 #include "galay-kernel/common/defn.hpp"
 #include "galay-kernel/common/error.h"
-#include "galay-kernel/common/bytes.h"
 #include "galay-kernel/common/host.hpp"
 #include "watch_defs.hpp"
 #include <liburing.h>
