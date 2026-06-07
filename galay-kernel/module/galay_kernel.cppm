@@ -10,9 +10,14 @@ export {
 #include "galay-kernel/common/host.hpp"
 #include "galay-kernel/common/handle_option.h"
 #include <galay-utils/cache/bytes.hpp>
+#include <galay-utils/cache/byte_queue_view.hpp>
 #include "galay-kernel/common/buffer.h"
 #include "galay-kernel/common/sleep.hpp"
 #include "galay-kernel/common/logger.h"
+
+namespace galay::kernel {
+using ::galay::utils::ByteQueueView;
+}
 
 #include "galay-kernel/kernel/task.h"
 #include "galay-kernel/kernel/scheduler.hpp"

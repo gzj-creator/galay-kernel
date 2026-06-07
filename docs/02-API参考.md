@@ -60,7 +60,7 @@
   - `galay-kernel/common/host.hpp`
   - `galay-kernel/common/sleep.hpp`
   - `galay-kernel/common/buffer.h`
-  - `galay-kernel/common/queue_view.h`
+  - `galay-utils/cache/byte_queue_view.hpp`
   - `galay-kernel/common/error.h`
 - 并发：
   - `galay-kernel/concurrency/async_mutex.h`
@@ -271,6 +271,7 @@
 
 - `Buffer` 是 owning 动态缓冲区；`resize(...)` 最终调用 `reallocBytes(...)`，缩容时可能截断已有 `length()`
 - `Buffer::clear()` 会把已有容量区间清零，但保留已分配容量，适合重复复用
+- `RingBuffer` 由 `galay-utils/cache/ring_buffer.hpp` 提供，`galay-kernel` 只在 `common/buffer.h` 中保留 `galay::kernel::RingBuffer` using 入口
 - `RingBuffer` 是固定容量、不会自动扩容的环形缓冲；写满后 `write(...)` / `produce(...)` 只会推进可容纳的那部分字节
 - `getWriteIovecs(...)` / `getReadIovecs(...)` 最多返回两段连续内存，专门服务 `readv` / `writev`
 - `consume(...)` 在把可读数据完全耗尽后，会把读写指针都重置到 `0`
@@ -421,7 +422,7 @@
 头文件：
 
 - `galay-kernel/kernel/awaitable.h`
-- `galay-kernel/common/queue_view.h`
+- `galay-utils/cache/byte_queue_view.hpp`
 
 公开类型：
 
@@ -445,6 +446,7 @@
 - 复杂双向协议、读写切换或 handshake/shutdown 状态推进优先用 `AwaitableBuilder::fromStateMachine(...)` 或直接 `StateMachineAwaitable<MachineT>`
 - 需要显式持有步骤对象、跨步骤共享状态或自定义 re-arm 路径时使用 `SequenceAwaitable + SequenceStep`
 - 协议解析优先使用 `AwaitableBuilder::parse(...)`，parse handler 返回 `ParseStatus`
+- `ByteQueueView` 由 `galay-utils/cache/byte_queue_view.hpp` 提供，`galay-kernel` 不再保留本地 `queue_view.h`
 - 链式 `AwaitableBuilder` 的 `build()` 现在返回 machine-backed awaitable，并与 `fromStateMachine(...)` 共享同一套状态机驱动
 
 parse 语义：

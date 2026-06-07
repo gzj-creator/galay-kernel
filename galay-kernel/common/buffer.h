@@ -4,10 +4,10 @@
  * @author galay-kernel
  * @version 1.0.0
  *
- * @details 为 galay-kernel I/O 子系统提供两种缓冲区抽象：
- * - ByteMetaData：底层字节元数据（指针、大小、容量）
+ * @details 为 galay-kernel I/O 子系统提供缓冲区抽象：
+ * - ByteMetaData：由 galay-utils 提供的底层字节元数据（指针、大小、容量）
  * - Buffer：支持动态增长和移动语义的线性字节缓冲区
- * - RingBuffer：固定容量的环形缓冲区，针对 scatter-gather I/O（readv/writev）优化
+ * - RingBuffer：由 galay-utils 提供的固定容量环形缓冲区，针对 scatter-gather I/O 优化
  */
 
 #ifndef GALAY_BUFFER_H
@@ -18,13 +18,13 @@
 #include <cstring>
 #include <string>
 #include <cstdint>
-#include <sys/types.h>
-#include <sys/uio.h>
 #include <galay-utils/cache/bytes.hpp>
+#include <galay-utils/cache/ring_buffer.hpp>
 
 namespace galay::kernel
 {
     using galay::utils::ByteMetaData;
+    using galay::utils::RingBuffer;
 
     /**
      * @brief 支持动态增长和移动语义的线性字节缓冲区
@@ -123,147 +123,6 @@ namespace galay::kernel
         ByteMetaData m_data;
     };
 
-    /**
-     * @brief 固定容量的环形缓冲区，用于 scatter-gather 网络 I/O
-     *
-     * @details 支持环绕式读写，提供简洁的接口：
-     *
-     * 内存布局示例（容量=1000，读位置=800，写位置=200，已环绕）：
-     * +------------------+--------+------------------+
-     * |     0-200        | 200-800|    800-1000      |
-     * |     可读         | 可写   |     可读         |
-     * +------------------+--------+------------------+
-     *
-     * 特性：
-     * - 固定容量，不自动增长
-     * - 环绕式读写
-     * - getWriteIovecs() 返回 1-2 个 iovec 用于 readv
-     * - getReadIovecs() 返回 1-2 个 iovec 用于 writev
-     */
-    class RingBuffer
-    {
-    public:
-        static constexpr size_t kDefaultCapacity = 4096;
-
-        /**
-         * @brief 以指定固定容量构造环形缓冲区
-         * @param capacity 缓冲区大小（字节），固定不变，不增长
-         */
-        explicit RingBuffer(size_t capacity = kDefaultCapacity);
-
-        RingBuffer(const RingBuffer&) = delete;
-        RingBuffer& operator=(const RingBuffer&) = delete;
-
-        RingBuffer(RingBuffer&& other) noexcept;
-        RingBuffer& operator=(RingBuffer&& other) noexcept;
-
-        ~RingBuffer();
-
-        // ============ 基本状态查询 ============
-
-        size_t readable() const { return m_size; }              ///< 可读字节数
-        size_t writable() const { return m_capacity - m_size; } ///< 可写字节数
-        size_t capacity() const { return m_capacity; }          ///< 缓冲区总容量
-        bool empty() const { return m_size == 0; }              ///< 是否无可读数据
-        bool full() const { return m_size == m_capacity; }      ///< 是否无可写空间
-
-        // ============ 核心接口 ============
-
-        /**
-         * @brief 获取可写区域的 iovec 描述符（用于 readv）
-         * @param out 输出 iovec 数组
-         * @param max_iovecs 数组容量；最多使用 2 个槽位
-         * @return 填充的 iovec 条目数
-         *
-         * @code
-         * std::array<struct iovec, 2> iovecs{};
-         * size_t count = buffer.getWriteIovecs(iovecs);
-         * ssize_t n = co_await socket.readv(iovecs, count);
-         * buffer.produce(n);
-         * @endcode
-         */
-        size_t getWriteIovecs(struct iovec* out, size_t max_iovecs = 2) const;
-
-        /**
-         * @brief 获取可写区域的 iovec 描述符（std::array 重载）
-         * @tparam N 数组大小
-         * @param out 输出 iovec 数组
-         * @return 填充的 iovec 条目数
-         */
-        template<size_t N>
-        size_t getWriteIovecs(std::array<struct iovec, N>& out) const {
-            return getWriteIovecs(out.data(), N);
-        }
-
-        /**
-         * @brief 获取可读区域的 iovec 描述符（用于 writev）
-         * @param out 输出 iovec 数组
-         * @param max_iovecs 数组容量；最多使用 2 个槽位
-         * @return 填充的 iovec 条目数
-         *
-         * @code
-         * std::array<struct iovec, 2> iovecs{};
-         * size_t count = buffer.getReadIovecs(iovecs);
-         * ssize_t n = co_await socket.writev(iovecs, count);
-         * buffer.consume(n);
-         * @endcode
-         */
-        size_t getReadIovecs(struct iovec* out, size_t max_iovecs = 2) const;
-
-        /**
-         * @brief 获取可读区域的 iovec 描述符（std::array 重载）
-         * @tparam N 数组大小
-         * @param out 输出 iovec 数组
-         * @return 填充的 iovec 条目数
-         */
-        template<size_t N>
-        size_t getReadIovecs(std::array<struct iovec, N>& out) const {
-            return getReadIovecs(out.data(), N);
-        }
-
-        /**
-         * @brief 确认已写入的字节数并推进写指针
-         * @param len 已写入的字节数
-         */
-        void produce(size_t len);
-
-        /**
-         * @brief 消费字节并推进读指针
-         * @param len 要消费的字节数
-         */
-        void consume(size_t len);
-
-        /**
-         * @brief 清空缓冲区（重置读写指针，不释放内存）
-         */
-        void clear();
-
-        // ============ 便捷方法 ============
-
-        /**
-         * @brief 将数据拷贝到环形缓冲区
-         * @param data 源指针
-         * @param len 要写入的字节数
-         * @return 实际写入的字节数（缓冲区满时可能少于请求量）
-         */
-        size_t write(const void* data, size_t len);
-
-        /**
-         * @brief 将 string_view 写入环形缓冲区
-         * @param str 要写入的数据
-         * @return 实际写入的字节数
-         */
-        size_t write(const std::string_view& str) {
-            return write(str.data(), str.size());
-        }
-
-    private:
-        char* m_buffer;         ///< 底层存储
-        size_t m_capacity;      ///< 总容量（字节）
-        size_t m_readIndex;     ///< 读指针位置
-        size_t m_writeIndex;    ///< 写指针位置
-        size_t m_size;          ///< 当前可读数据大小
-    };
 }
 
 #endif

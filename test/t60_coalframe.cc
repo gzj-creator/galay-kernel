@@ -7,7 +7,7 @@
 
 #include "galay-kernel/kernel/task.h"
 #include "galay-kernel/kernel/awaitable.h"
-#include "galay-kernel/common/queue_view.h"
+#include <galay-utils/cache/byte_queue_view.hpp>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -34,6 +34,7 @@ using TestScheduler = galay::kernel::KqueueScheduler;
 #endif
 
 using namespace galay::kernel;
+using galay::utils::ByteQueueView;
 using namespace std::chrono_literals;
 
 namespace {

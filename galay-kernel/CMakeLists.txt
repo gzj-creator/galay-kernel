@@ -39,9 +39,12 @@ if(NOT TARGET concurrentqueue::concurrentqueue)
     )
 endif()
 
+set(GALAY_KERNEL_MIN_GALAY_UTILS_VERSION "3.1.0")
+find_package(galay-utils ${GALAY_KERNEL_MIN_GALAY_UTILS_VERSION} CONFIG QUIET)
+
 set(GALAY_UTILS_INCLUDE_DIR "" CACHE PATH
-    "Directory containing galay-utils/cache/bytes.hpp")
-if(NOT GALAY_UTILS_INCLUDE_DIR)
+    "Directory containing galay-utils/cache/bytes.hpp from galay-utils >= 3.1.0")
+if(NOT TARGET galay::galay-utils AND NOT GALAY_UTILS_INCLUDE_DIR)
     unset(GALAY_UTILS_INCLUDE_DIR CACHE)
     find_path(GALAY_UTILS_INCLUDE_DIR
         NAMES galay-utils/cache/bytes.hpp
@@ -53,10 +56,11 @@ if(NOT GALAY_UTILS_INCLUDE_DIR)
     )
 endif()
 
-if(NOT GALAY_UTILS_INCLUDE_DIR)
+if(NOT TARGET galay::galay-utils AND NOT GALAY_UTILS_INCLUDE_DIR)
     message(FATAL_ERROR
-        "galay-utils headers not found. Set GALAY_UTILS_INCLUDE_DIR "
-        "to the include prefix containing galay-utils/cache/bytes.hpp")
+        "galay-kernel requires galay-utils >= 3.1.0. Install galay-utils "
+        "or set GALAY_UTILS_INCLUDE_DIR to the include prefix containing "
+        "galay-utils/cache/bytes.hpp")
 endif()
 
 # 创建库目标
@@ -78,7 +82,7 @@ target_include_directories(galay-kernel
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
-        $<BUILD_INTERFACE:${GALAY_UTILS_INCLUDE_DIR}>
+        $<$<BOOL:${GALAY_UTILS_INCLUDE_DIR}>:$<BUILD_INTERFACE:${GALAY_UTILS_INCLUDE_DIR}>>
         $<INSTALL_INTERFACE:include>
 )
 
@@ -88,6 +92,10 @@ if(PLATFORM_LIBS)
 endif()
 
 target_link_libraries(galay-kernel PUBLIC concurrentqueue::concurrentqueue)
+
+if(TARGET galay::galay-utils)
+    target_link_libraries(galay-kernel PUBLIC galay::galay-utils)
+endif()
 
 # 设置库的编译选项
 target_compile_options(galay-kernel PRIVATE

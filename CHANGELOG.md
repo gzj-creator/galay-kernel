@@ -8,6 +8,20 @@
 
 ## [Unreleased]
 
+## [v5.1.0] - 2026-06-07
+
+### Changed
+- 移除 `galay-kernel` 本地 `common/bytes.h` / `bytes.cc`，统一复用 `galay-utils/cache/bytes.hpp` 中的 `Bytes`、`ByteMetaData` 与字节内存辅助函数。
+- 移除 `galay-kernel/common/queue_view.h` 本地实现，协议解析示例与测试改为直接包含 `galay-utils/cache/byte_queue_view.hpp`。
+- 移除 `galay-kernel` 本地 `RingBuffer` 实现，`galay-kernel/common/buffer.h` 通过 using 保留 `galay::kernel::RingBuffer` 入口并复用 `galay-utils/cache/ring_buffer.hpp`。
+- `galay-kernel` CMake 与 package config 声明依赖 `galay-utils >= 3.1.0`，优先使用已安装的 `galay::galay-utils` 目标，开发构建仍支持 `GALAY_UTILS_INCLUDE_DIR`。
+
+### Docs
+- 更新 API、使用指南与环形缓冲区文档，说明 `Bytes`、`ByteQueueView` 和 `RingBuffer` 已由 `galay-utils` 提供。
+
+### Release
+- 将 CMake 与 Bazel 版本元数据提升到 `v5.1.0`。
+
 ## [v5.0.0] - 2026-05-20
 
 ### Changed
