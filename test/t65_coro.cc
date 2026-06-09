@@ -1,4 +1,5 @@
 #include <concepts>
+#include <expected>
 #include <utility>
 
 #include "galay-kernel/kernel/compute_scheduler.h"
@@ -15,6 +16,7 @@
 
 using galay::kernel::ComputeScheduler;
 using galay::kernel::Runtime;
+using galay::kernel::RuntimeError;
 using galay::kernel::Scheduler;
 using galay::kernel::Task;
 using galay::kernel::TaskRef;
@@ -30,8 +32,8 @@ concept HasTaskRefScheduleSurface = std::derived_from<S, Scheduler> &&
 static_assert(HasTaskRefScheduleSurface<ComputeScheduler>,
               "Public scheduler headers should expose TaskRef-native scheduling");
 static_assert(requires(Runtime runtime, Task<int> task) {
-    { runtime.blockOn(std::move(task)) } -> std::same_as<int>;
-}, "Runtime should expose Task-native blockOn");
+    { runtime.blockOn(std::move(task)) } -> std::same_as<std::expected<int, RuntimeError>>;
+}, "Runtime should expose expected-returning Task-native blockOn");
 
 int main()
 {

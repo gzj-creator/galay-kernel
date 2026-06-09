@@ -38,13 +38,13 @@ int main()
         .build();
 
     const auto direct = runtime.blockOn(readyTask());
-    if (!direct || direct.value() != 42) {
+    if (!direct || !direct->has_value() || **direct != 42) {
         std::cerr << "direct ready awaitable returned unexpected result\n";
         return 1;
     }
 
     const auto timed = runtime.blockOn(readyTimeoutTask());
-    if (!timed || timed.value() != 77) {
+    if (!timed || !timed->has_value() || **timed != 77) {
         std::cerr << "timed ready awaitable returned unexpected result\n";
         return 1;
     }

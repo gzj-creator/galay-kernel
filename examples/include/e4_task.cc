@@ -8,6 +8,7 @@
 #include "galay-kernel/kernel/task.h"
 #include "galay-kernel/kernel/runtime.h"
 #include "test/stdout_log.h"
+#include <cassert>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -44,8 +45,11 @@ Task<void> spawnFromCurrentRuntime()
 {
     LogInfo("Spawning detached tasks through RuntimeHandle::current()");
     auto runtimeHandle = RuntimeHandle::current();
-    runtimeHandle.spawn(detachedTask(1));
-    runtimeHandle.spawn(detachedTask(2));
+    assert(runtimeHandle.has_value());
+    auto first = runtimeHandle->spawn(detachedTask(1));
+    auto second = runtimeHandle->spawn(detachedTask(2));
+    assert(first.has_value());
+    assert(second.has_value());
     co_return;
 }
 
@@ -61,14 +65,20 @@ Task<void> waitForDetachedTasks()
 
 Task<void> spawnBlockingDemo()
 {
-    auto blocking = RuntimeHandle::current().spawnBlocking([]() {
+    auto runtimeHandle = RuntimeHandle::current();
+    assert(runtimeHandle.has_value());
+
+    auto blocking = runtimeHandle->spawnBlocking([]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         return 7;
     });
-    blocking.wait();
-    int value = blocking.join();
+    assert(blocking.has_value());
+    auto waitResult = blocking->wait();
+    assert(waitResult.has_value());
+    auto value = blocking->join();
+    assert(value.has_value());
 
-    LogInfo("spawnBlocking returned {}", value);
+    LogInfo("spawnBlocking returned {}", *value);
     co_return;
 }
 
@@ -84,20 +94,28 @@ int main()
         .build();
 
     LogInfo("\n--- Example 1: blockOn(Task<int>) ---");
-    int rootValue = runtime.blockOn(sumTask(1, 1000));
-    LogInfo("blockOn returned {}", rootValue);
+    auto rootValue = runtime.blockOn(sumTask(1, 1000));
+    assert(rootValue.has_value());
+    LogInfo("blockOn returned {}", *rootValue);
 
     LogInfo("\n--- Example 2: spawn(Task<int>) -> JoinHandle<int> ---");
     auto handle = runtime.spawn(sumTask(2, 2000));
-    handle.wait();
-    LogInfo("spawn().join() returned {}", handle.join());
+    assert(handle.has_value());
+    auto handleWait = handle->wait();
+    assert(handleWait.has_value());
+    auto handleValue = handle->join();
+    assert(handleValue.has_value());
+    LogInfo("spawn().join() returned {}", *handleValue);
 
     LogInfo("\n--- Example 3: RuntimeHandle::current().spawn(...) ---");
-    runtime.blockOn(spawnFromCurrentRuntime());
-    runtime.blockOn(waitForDetachedTasks());
+    auto spawnResult = runtime.blockOn(spawnFromCurrentRuntime());
+    assert(spawnResult.has_value());
+    auto waitResult = runtime.blockOn(waitForDetachedTasks());
+    assert(waitResult.has_value());
 
     LogInfo("\n--- Example 4: RuntimeHandle::spawnBlocking(...) ---");
-    runtime.blockOn(spawnBlockingDemo());
+    auto blockingResult = runtime.blockOn(spawnBlockingDemo());
+    assert(blockingResult.has_value());
 
     LogInfo("\n=== Example Completed ===");
     return 0;

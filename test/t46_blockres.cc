@@ -23,8 +23,9 @@ int main()
         .computeSchedulerCount(1)
         .build();
 
-    int value = runtime.blockOn(answerTask());
-    assert(value == 42);
+    auto value = runtime.blockOn(answerTask());
+    assert(value.has_value());
+    assert(*value == 42);
 
     std::cout << "T46-RuntimeBlockOnResult PASS\n";
     return 0;

@@ -10,6 +10,7 @@
 #include "galay-kernel/kernel/task.h"
 #include "galay-kernel/kernel/waker.h"
 
+#include <cassert>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -149,7 +150,8 @@ Task<void> waitChild(WaitChainState* state) {
 }
 
 Task<void> waitParent(WaitChainState* state) {
-    co_await waitChild(state);
+    auto child_result = co_await waitChild(state);
+    assert(child_result.has_value());
     state->waiter_resumes.fetch_add(1, std::memory_order_relaxed);
     state->done.store(true, std::memory_order_release);
     co_return;

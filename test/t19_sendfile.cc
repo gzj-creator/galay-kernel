@@ -151,7 +151,12 @@ Task<void> server(size_t file_size) {
     TcpSocket client(acceptResult.value());
     client.option().handleNonBlock();
 
-    co_await handleClient(std::move(client), file_size);
+    auto handleResult = co_await handleClient(std::move(client), file_size);
+    if (!handleResult) {
+        g_failed++;
+        g_test_done = true;
+        co_return;
+    }
     co_await listener.close();
     g_test_done = true;
 }

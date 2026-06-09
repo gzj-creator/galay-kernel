@@ -11,15 +11,55 @@
 #ifndef GALAY_KERNEL_BLOCKING_EXECUTOR_H
 #define GALAY_KERNEL_BLOCKING_EXECUTOR_H
 
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
+#include <expected>
 #include <functional>
 #include <mutex>
+#include <string_view>
 
 namespace galay::kernel
 {
+
+/**
+ * @brief 阻塞执行器提交错误类别。
+ */
+enum class BlockingExecutorErrorCode : uint8_t {
+    kStopping  ///< 执行器正在停止，不能再接受新任务
+};
+
+/**
+ * @brief 阻塞执行器错误对象。
+ */
+class BlockingExecutorError
+{
+public:
+    explicit BlockingExecutorError(BlockingExecutorErrorCode error_code) noexcept
+        : m_code(error_code)
+    {
+    }
+
+    BlockingExecutorErrorCode code() const noexcept { return m_code; }  ///< 返回阻塞执行器错误类别
+    std::string_view message() const noexcept
+    {
+        static constexpr std::array<std::string_view, static_cast<size_t>(BlockingExecutorErrorCode::kStopping) + 1> kMessages = {{
+            "blocking executor is stopping and cannot accept new tasks"
+        }};
+
+        const auto index = static_cast<size_t>(m_code);
+        if (index < kMessages.size()) {
+            return kMessages[index];
+        }
+        return "unknown blocking executor error";
+    }
+
+private:
+    BlockingExecutorErrorCode m_code;
+};
 
 /**
  * @brief 自适应阻塞任务执行器
@@ -35,7 +75,7 @@ public:
     BlockingExecutor(const BlockingExecutor&) = delete;
     BlockingExecutor& operator=(const BlockingExecutor&) = delete;
 
-    void submit(std::function<void()> task);  ///< 提交一个阻塞任务；必要时会拉起额外工作线程
+    std::expected<void, BlockingExecutorError> submit(std::function<void()> task);  ///< 提交一个阻塞任务；必要时会拉起额外工作线程
 
 private:
     void workerLoop(std::function<void()> initialTask);  ///< 工作线程主循环，持续拉取并执行阻塞任务

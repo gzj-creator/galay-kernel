@@ -165,11 +165,19 @@ bool Runtime::submitTask(const TaskRef& task)
     return detail::scheduleTask(task);
 }
 
-RuntimeHandle RuntimeHandle::current()
+RuntimeError Runtime::mapTaskResultError(const detail::TaskResultError& error) noexcept
+{
+    if (error.code() == detail::TaskResultErrorCode::kTaskException) {
+        return RuntimeError(RuntimeErrorCode::kTaskException);
+    }
+    return RuntimeError(RuntimeErrorCode::kSubmitFailed);
+}
+
+std::expected<RuntimeHandle, RuntimeError> RuntimeHandle::current()
 {
     auto* runtime = detail::currentRuntime();
     if (runtime == nullptr) {
-        throw std::runtime_error("not currently running inside a runtime");
+        return std::unexpected(RuntimeError(RuntimeErrorCode::kNoCurrentRuntime));
     }
     return RuntimeHandle(runtime);
 }

@@ -7,6 +7,7 @@
 
 import galay.kernel;
 
+#include <cassert>
 #include <atomic>
 #include <chrono>
 #include <iostream>
@@ -43,8 +44,11 @@ Task<void> detachedTask(int id)
 Task<void> spawnFromCurrentRuntime()
 {
     auto runtimeHandle = RuntimeHandle::current();
-    runtimeHandle.spawn(detachedTask(1));
-    runtimeHandle.spawn(detachedTask(2));
+    assert(runtimeHandle.has_value());
+    auto first = runtimeHandle->spawn(detachedTask(1));
+    auto second = runtimeHandle->spawn(detachedTask(2));
+    assert(first.has_value());
+    assert(second.has_value());
     co_return;
 }
 
@@ -60,14 +64,20 @@ Task<void> waitForDetachedTasks()
 
 Task<void> spawnBlockingDemo()
 {
-    auto blocking = RuntimeHandle::current().spawnBlocking([]() {
+    auto runtimeHandle = RuntimeHandle::current();
+    assert(runtimeHandle.has_value());
+
+    auto blocking = runtimeHandle->spawnBlocking([]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         return 7;
     });
-    blocking.wait();
-    int value = blocking.join();
+    assert(blocking.has_value());
+    auto waitResult = blocking->wait();
+    assert(waitResult.has_value());
+    auto value = blocking->join();
+    assert(value.has_value());
 
-    std::cout << "spawnBlocking returned " << value << "\n";
+    std::cout << "spawnBlocking returned " << *value << "\n";
     co_return;
 }
 
@@ -80,16 +90,24 @@ int main()
         .computeSchedulerCount(1)
         .build();
 
-    int rootValue = runtime.blockOn(sumTask(1, 1000));
-    std::cout << "blockOn returned " << rootValue << "\n";
+    auto rootValue = runtime.blockOn(sumTask(1, 1000));
+    assert(rootValue.has_value());
+    std::cout << "blockOn returned " << *rootValue << "\n";
 
     auto handle = runtime.spawn(sumTask(2, 2000));
-    handle.wait();
-    std::cout << "spawn().join() returned " << handle.join() << "\n";
+    assert(handle.has_value());
+    auto handleWait = handle->wait();
+    assert(handleWait.has_value());
+    auto handleValue = handle->join();
+    assert(handleValue.has_value());
+    std::cout << "spawn().join() returned " << *handleValue << "\n";
 
-    runtime.blockOn(spawnFromCurrentRuntime());
-    runtime.blockOn(waitForDetachedTasks());
-    runtime.blockOn(spawnBlockingDemo());
+    auto spawnResult = runtime.blockOn(spawnFromCurrentRuntime());
+    assert(spawnResult.has_value());
+    auto waitResult = runtime.blockOn(waitForDetachedTasks());
+    assert(waitResult.has_value());
+    auto blockingResult = runtime.blockOn(spawnBlockingDemo());
+    assert(blockingResult.has_value());
 
     return 0;
 }

@@ -46,14 +46,19 @@ int main()
 
     {
         auto handle = runtime.spawn(sumTask());
-        assert(handle.join() == 7);
+        assert(handle.has_value());
+        auto result = handle->join();
+        assert(result.has_value());
+        assert(*result == 7);
     }
 
     {
         auto detached = runtime.spawn(detachedTask());
+        assert(detached.has_value());
     }
 
-    runtime.blockOn(waitForDetached());
+    auto wait_result = runtime.blockOn(waitForDetached());
+    assert(wait_result.has_value());
     runtime.stop();
 
     std::cout << "T48-RuntimeSpawnJoinHandle PASS\n";

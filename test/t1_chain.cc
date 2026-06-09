@@ -6,6 +6,7 @@
  */
 
 #include "galay-kernel/kernel/runtime.h"
+#include <cassert>
 #include <iostream>
 
 using namespace galay::kernel;
@@ -21,7 +22,8 @@ Task<void> test2()
 Task<void> test1()
 {
     std::cout << "test1 wait" << std::endl;
-    co_await test2();
+    auto result = co_await test2();
+    assert(result.has_value());
     std::cout << "test1 end" <<std::endl;
     co_return;
 }
@@ -29,20 +31,23 @@ Task<void> test1()
 Task<void> test()
 {
     std::cout << "test wait" << std::endl;
-    co_await test1();
+    auto result = co_await test1();
+    assert(result.has_value());
     std::cout << "test end" <<std::endl;
     co_return;
 }
 
 Task<void> rootTask()
 {
-    co_await test();
+    auto result = co_await test();
+    assert(result.has_value());
 }
 
 
 int main()
 {
     Runtime runtime;
-    runtime.blockOn(rootTask());
+    auto result = runtime.blockOn(rootTask());
+    assert(result.has_value());
     return 0;
 }

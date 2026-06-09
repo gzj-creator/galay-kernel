@@ -9,6 +9,7 @@
 #include "galay-kernel/kernel/task.h"
 #include "galay-kernel/kernel/waker.h"
 
+#include <cassert>
 #include <deque>
 #include <iostream>
 
@@ -97,7 +98,8 @@ Task<void> childTask(ChildSuspendState* state) {
 }
 
 Task<void> parentTask(ChildSuspendState* child_state, ParentState* parent_state) {
-    co_await childTask(child_state);
+    auto child_result = co_await childTask(child_state);
+    assert(child_result.has_value());
     ++parent_state->parent_resumes;
     parent_state->parent_done = true;
     co_return;

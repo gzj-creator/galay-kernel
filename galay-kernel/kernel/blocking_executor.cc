@@ -9,7 +9,6 @@
  */
 
 #include "blocking_executor.h"
-#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -82,13 +81,12 @@ size_t BlockingExecutor::defaultMaxWorkers()
  *
  * @param task  待执行的非空调用对象
  *
- * @throws std::runtime_error 执行器正在关闭时抛出
- * @throws std::system_error 线程创建失败时抛出
+ * @return 成功时返回空 expected；执行器停止时返回 BlockingExecutorError
  */
-void BlockingExecutor::submit(std::function<void()> task)
+std::expected<void, BlockingExecutorError> BlockingExecutor::submit(std::function<void()> task)
 {
     if (!task) {
-        return;
+        return {};
     }
 
     bool shouldNotify = false;
@@ -97,7 +95,7 @@ void BlockingExecutor::submit(std::function<void()> task)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_stopping) {
-            throw std::runtime_error("blocking executor is stopping");
+            return std::unexpected(BlockingExecutorError(BlockingExecutorErrorCode::kStopping));
         }
 
         if (m_idleWorkers > 0) {
@@ -113,25 +111,17 @@ void BlockingExecutor::submit(std::function<void()> task)
 
     if (shouldNotify) {
         m_taskCv.notify_one();
-        return;
+        return {};
     }
 
     if (!shouldSpawn) {
-        return;
+        return {};
     }
 
-    try {
-        std::thread([this, initialTask = std::move(task)]() mutable {
-            workerLoop(std::move(initialTask));
-        }).detach();
-    } catch (...) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        --m_workerCount;
-        if (m_stopping && m_workerCount == 0) {
-            m_shutdownCv.notify_all();
-        }
-        throw;
-    }
+    std::thread([this, initialTask = std::move(task)]() mutable {
+        workerLoop(std::move(initialTask));
+    }).detach();
+    return {};
 }
 
 /**
@@ -149,10 +139,7 @@ void BlockingExecutor::workerLoop(std::function<void()> initialTask)
 
     for (;;) {
         if (task) {
-            try {
-                task();
-            } catch (...) {
-            }
+            task();
             task = {};
         }
 

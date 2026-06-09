@@ -26,8 +26,9 @@ int main()
         .computeSchedulerCount(1)
         .build();
 
-    bool inside_runtime = runtime.blockOn(checkCurrentHandle());
-    assert(inside_runtime);
+    auto inside_runtime = runtime.blockOn(checkCurrentHandle());
+    assert(inside_runtime.has_value());
+    assert(*inside_runtime);
 
     std::cout << "T49-RuntimeHandleCurrent PASS\n";
     return 0;

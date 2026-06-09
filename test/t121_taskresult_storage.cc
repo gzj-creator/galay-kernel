@@ -5,6 +5,7 @@
  */
 #include "galay-kernel/kernel/task.h"
 
+#include <expected>
 #include <string>
 
 namespace
@@ -15,7 +16,7 @@ galay::kernel::Task<std::string> makeStringTask()
     co_return std::string("inline-result");
 }
 
-std::string consumeStringTask(galay::kernel::Task<std::string>& task)
+std::expected<std::string, galay::kernel::detail::TaskResultError> consumeStringTask(galay::kernel::Task<std::string>& task)
 {
     return galay::kernel::detail::TaskAccess::takeResult(task);
 }
@@ -33,5 +34,6 @@ int main()
     }
 
     task_ref.state()->m_handle.resume();
-    return consumeStringTask(task) == "inline-result" ? 0 : 2;
+    auto result = consumeStringTask(task);
+    return result.has_value() && *result == "inline-result" ? 0 : 2;
 }

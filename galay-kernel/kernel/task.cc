@@ -236,23 +236,24 @@ void completeTaskState(const TaskRef& task) noexcept
     }
 }
 
-void waitTaskCompletion(const TaskRef& task)
+bool waitTaskCompletion(const TaskRef& task)
 {
     auto* state = task.state();
     if (state == nullptr) {
-        throw std::runtime_error("invalid task state");
+        return false;
     }
 
     while (!state->m_done.load(std::memory_order_acquire)) {
         TaskWaiter& waiter = ensureTaskWaiter(*state);
         std::unique_lock<std::mutex> lock(waiter.m_mutex);
         if (state->m_done.load(std::memory_order_acquire)) {
-            return;
+            return true;
         }
         waiter.m_cv.wait(lock, [state]() {
             return state->m_done.load(std::memory_order_acquire);
         });
     }
+    return true;
 }
 
 } // namespace detail

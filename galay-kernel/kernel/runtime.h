@@ -18,13 +18,14 @@
 #include "task.h"
 #include "compute_scheduler.h"
 #include "io_scheduler.hpp"
+#include <array>
 #include <atomic>
 #include <cstdint>
-#include <exception>
+#include <expected>
 #include <functional>
 #include <memory>
 #include <optional>
-#include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -70,6 +71,58 @@ struct RuntimeConfig {
  */
 struct RuntimeStats {
     std::vector<IOSchedulerStealStats> io_schedulers;  ///< 与 getIOScheduler(i) 对齐的 stealing 统计
+};
+
+/**
+ * @brief Runtime API 的错误类别。
+ *
+ * 这些错误只描述提交、上下文和根任务取结果阶段的失败；具体 I/O 操作错误仍由
+ * 对应 awaitable 的 `std::expected<..., IOError>` 返回。
+ */
+enum class RuntimeErrorCode : uint8_t {
+    kNoSchedulerAvailable,  ///< runtime 中没有可用于根任务的 scheduler
+    kSubmitFailed,          ///< 根任务提交到 scheduler 失败
+    kNoCurrentRuntime,      ///< 当前线程未绑定 Runtime 上下文
+    kInvalidHandle,         ///< RuntimeHandle 未绑定有效 Runtime
+    kTaskException,         ///< 根任务执行或取结果阶段产生异常
+    kBlockingSubmitFailed   ///< 阻塞线程池提交 callable 失败
+};
+
+/**
+ * @brief Runtime API 的错误对象。
+ *
+ * @details
+ * `RuntimeError` 用于 `Runtime` 和 `RuntimeHandle` 的 `std::expected` 错误分支。
+ */
+class RuntimeError
+{
+public:
+    explicit RuntimeError(RuntimeErrorCode error_code) noexcept
+        : m_code(error_code)
+    {
+    }
+
+    RuntimeErrorCode code() const noexcept { return m_code; }  ///< 返回 Runtime 错误类别
+    std::string_view message() const noexcept
+    {
+        static constexpr std::array<std::string_view, static_cast<size_t>(RuntimeErrorCode::kBlockingSubmitFailed) + 1> kMessages = {{
+            "runtime has no scheduler available for task execution",
+            "runtime failed to submit the task to its scheduler",
+            "current thread is not running inside a runtime context",
+            "runtime handle is not bound to a runtime",
+            "root task completed with an unhandled exception",
+            "runtime failed to submit the blocking task"
+        }};
+
+        const auto index = static_cast<size_t>(m_code);
+        if (index < kMessages.size()) {
+            return kMessages[index];
+        }
+        return "unknown runtime error";
+    }
+
+private:
+    RuntimeErrorCode m_code;
 };
 
 class RuntimeHandle;
@@ -119,51 +172,55 @@ public:
     /**
      * @brief 在 runtime 上提交一个根任务并同步等待结果。
      * @param task 要提交的任务；所有权转移到 runtime
-     * @return 任务返回值；`Task<void>` 时无返回
-     *
-     * @throws std::runtime_error 当 runtime 无可用 scheduler 或任务提交失败
-     * @throws 任务内部抛出的异常会在取结果时重新抛出
+     * @return 成功时返回任务结果；`Task<void>` 成功时返回 `std::expected<void, RuntimeError>{}`；
+     *         失败时返回 RuntimeError
      *
      * @note 若 runtime 尚未启动，会在内部自动启动
      */
     template <typename T>
-    auto blockOn(Task<T> task) -> T
+    auto blockOn(Task<T> task) -> std::expected<T, RuntimeError>
     {
         Scheduler* scheduler = acquireDefaultScheduler();
         if (scheduler == nullptr) {
-            throw std::runtime_error("runtime has no scheduler available for blockOn");
+            return std::unexpected(RuntimeError(RuntimeErrorCode::kNoSchedulerAvailable));
         }
 
         const TaskRef& taskRef = detail::TaskAccess::taskRef(task);
         bindTaskToRuntime(taskRef, scheduler);
         if (!submitTask(taskRef)) {
-            throw std::runtime_error("failed to submit root task to runtime");
+            return std::unexpected(RuntimeError(RuntimeErrorCode::kSubmitFailed));
         }
 
-        return detail::TaskAccess::takeResult(task);
+        auto result = detail::TaskAccess::tryTakeResult(task);
+        if (!result.has_value()) {
+            return std::unexpected(mapTaskResultError(result.error()));
+        }
+        if constexpr (std::is_void_v<T>) {
+            return {};
+        } else {
+            return std::move(*result);
+        }
     }
 
     /**
      * @brief 异步提交一个任务并返回可 `join()` 的句柄。
      * @param task 要提交的任务；所有权转移到 runtime
-     * @return 与任务结果绑定的 `JoinHandle<T>`
-     *
-     * @throws std::runtime_error 当 runtime 无可用 scheduler 或任务提交失败
+     * @return 成功时返回与任务结果绑定的 `JoinHandle<T>`，失败时返回 RuntimeError
      *
      * @note 若 runtime 尚未启动，会在内部自动启动
      */
     template <typename T>
-    JoinHandle<T> spawn(Task<T> task)
+    auto spawn(Task<T> task) -> std::expected<JoinHandle<T>, RuntimeError>
     {
         Scheduler* scheduler = acquireDefaultScheduler();
         if (scheduler == nullptr) {
-            throw std::runtime_error("runtime has no scheduler available for spawn");
+            return std::unexpected(RuntimeError(RuntimeErrorCode::kNoSchedulerAvailable));
         }
 
         const TaskRef& taskRef = detail::TaskAccess::taskRef(task);
         bindTaskToRuntime(taskRef, scheduler);
         if (!submitTask(taskRef)) {
-            throw std::runtime_error("failed to submit task to runtime");
+            return std::unexpected(RuntimeError(RuntimeErrorCode::kSubmitFailed));
         }
         return JoinHandle<T>(detail::TaskAccess::detachTask(std::move(task)));
     }
@@ -171,33 +228,32 @@ public:
     /**
      * @brief 在线程池上执行一个阻塞 callable，并返回 join handle。
      * @param func 可调用对象；会被 move/copy 进阻塞线程池
-     * @return `JoinHandle<Result>`
+     * @return 成功时返回 `JoinHandle<Result>`；提交阻塞任务失败时返回 RuntimeError
      *
      * @note
      * - 适合文件阻塞 IO、第三方同步库调用等不可协程化路径
      * - callable 内部会继承当前 runtime 上下文，因此可安全调用 `RuntimeHandle::tryCurrent()`
-     * - 结果或异常会被捕获并在 `join()` 时交付
+     * - callable 需要通过返回值表达业务失败；提交失败由 `RuntimeError` 返回
      */
     template <typename F>
-    auto spawnBlocking(F&& func) -> JoinHandle<std::invoke_result_t<std::decay_t<F>&>>
+    auto spawnBlocking(F&& func) -> std::expected<JoinHandle<std::invoke_result_t<std::decay_t<F>&>>, RuntimeError>
     {
         using Fn = std::decay_t<F>;
         using Result = std::invoke_result_t<Fn&>;
 
         auto completion = std::make_shared<TaskCompletionState<Result>>();
-        m_blockingExecutor.submit([runtime = this, completion, function = Fn(std::forward<F>(func))]() mutable {
+        auto submitted = m_blockingExecutor.submit([runtime = this, completion, function = Fn(std::forward<F>(func))]() mutable {
             detail::CurrentRuntimeScope runtimeScope(runtime);
-            try {
-                if constexpr (std::is_void_v<Result>) {
-                    std::invoke(function);
-                    completion->setValue();
-                } else {
-                    completion->setValue(std::invoke(function));
-                }
-            } catch (...) {
-                completion->setException(std::current_exception());
+            if constexpr (std::is_void_v<Result>) {
+                std::invoke(function);
+                completion->setValue();
+            } else {
+                completion->setValue(std::invoke(function));
             }
         });
+        if (!submitted.has_value()) {
+            return std::unexpected(RuntimeError(RuntimeErrorCode::kBlockingSubmitFailed));
+        }
 
         return JoinHandle<Result>(std::move(completion));
     }
@@ -225,6 +281,7 @@ private:
     void bindTaskToRuntime(const TaskRef& task, Scheduler* scheduler);  ///< 给根任务绑定 Runtime 与目标调度器
     bool submitTask(const TaskRef& task);  ///< 把根任务提交到其所属调度器
     static size_t getCPUCount();  ///< 返回当前机器可用 CPU 数量
+    static RuntimeError mapTaskResultError(const detail::TaskResultError& error) noexcept;  ///< 把任务消费错误映射为 RuntimeError
     void configureIOSchedulerStealDomains();  ///< 为 Runtime 管理的 IO scheduler 下发 steal-domain 配置
 
     std::vector<std::unique_ptr<IOScheduler>> m_io_schedulers;  ///< Runtime 持有的 IO scheduler 集合
@@ -255,9 +312,9 @@ public:
 
     /**
      * @brief 获取当前线程绑定的 runtime handle。
-     * @throws std::runtime_error 若当前执行路径不在 runtime 上下文中
+     * @return 成功时返回当前 RuntimeHandle；不在 runtime 上下文中时返回 RuntimeError
      */
-    static RuntimeHandle current();
+    static std::expected<RuntimeHandle, RuntimeError> current();
 
     /**
      * @brief 尝试获取当前线程绑定的 runtime handle。
@@ -268,22 +325,30 @@ public:
     bool isValid() const noexcept { return m_runtime != nullptr; }  ///< 当前是否绑定到有效 Runtime
 
     template <typename T>
-    JoinHandle<T> spawn(Task<T> task) const
+    auto spawn(Task<T> task) const -> std::expected<JoinHandle<T>, RuntimeError>
     {
-        return requireRuntime()->spawn(std::move(task));
+        auto runtime = runtimeOrError();
+        if (!runtime.has_value()) {
+            return std::unexpected(runtime.error());
+        }
+        return (*runtime)->spawn(std::move(task));
     }
 
     template <typename F>
-    auto spawnBlocking(F&& func) const -> JoinHandle<std::invoke_result_t<std::decay_t<F>&>>
+    auto spawnBlocking(F&& func) const -> std::expected<JoinHandle<std::invoke_result_t<std::decay_t<F>&>>, RuntimeError>
     {
-        return requireRuntime()->spawnBlocking(std::forward<F>(func));
+        auto runtime = runtimeOrError();
+        if (!runtime.has_value()) {
+            return std::unexpected(runtime.error());
+        }
+        return (*runtime)->spawnBlocking(std::forward<F>(func));
     }
 
 private:
-    Runtime* requireRuntime() const  ///< 返回绑定的 Runtime；未绑定时抛出异常
+    std::expected<Runtime*, RuntimeError> runtimeOrError() const noexcept  ///< 返回绑定的 Runtime；未绑定时返回 RuntimeError
     {
         if (m_runtime == nullptr) {
-            throw std::runtime_error("runtime handle is not bound to a runtime");
+            return std::unexpected(RuntimeError(RuntimeErrorCode::kInvalidHandle));
         }
         return m_runtime;
     }

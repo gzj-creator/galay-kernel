@@ -19,13 +19,16 @@ Task<int> childTask()
 
 Task<int> parentTask()
 {
-    int value = co_await childTask();
-    co_return value + 1;
+    auto value = co_await childTask();
+    assert(value.has_value());
+    co_return *value + 1;
 }
 
 int main()
 {
     Runtime runtime;
-    assert(runtime.blockOn(parentTask()) == 8);
+    auto result = runtime.blockOn(parentTask());
+    assert(result.has_value());
+    assert(*result == 8);
     return 0;
 }

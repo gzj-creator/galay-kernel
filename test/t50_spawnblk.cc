@@ -31,14 +31,18 @@ int main()
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         return 31;
     });
+    assert(first.has_value());
+    assert(second.has_value());
 
-    const int first_result = first.join();
-    const int second_result = second.join();
+    const auto first_result = first->join();
+    const auto second_result = second->join();
     const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start).count();
 
-    assert(first_result == 11);
-    assert(second_result == 31);
+    assert(first_result.has_value());
+    assert(second_result.has_value());
+    assert(*first_result == 11);
+    assert(*second_result == 31);
     assert(elapsed_ms < 190 && "spawnBlocking tasks should execute concurrently");
 
     runtime.stop();

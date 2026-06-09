@@ -32,9 +32,15 @@ Task<int> computeTask(int id, int yields)
 
 Task<void> spawnDetachedTasks()
 {
-    auto handle = RuntimeHandle::current().spawn(computeTask(2, 2));
-    RuntimeHandle::current().spawn(computeTask(3, 3));
+    auto runtime_handle = RuntimeHandle::current();
+    assert(runtime_handle.has_value());
+
+    auto handle = runtime_handle->spawn(computeTask(2, 2));
+    auto detached = runtime_handle->spawn(computeTask(3, 3));
+    assert(handle.has_value());
+    assert(detached.has_value());
     (void)handle;
+    (void)detached;
     co_return;
 }
 
@@ -55,12 +61,19 @@ Task<int> rootValue()
 
 Task<void> spawnBlockingFromHandle()
 {
-    int value = RuntimeHandle::current().spawnBlocking([]() {
+    auto runtime_handle = RuntimeHandle::current();
+    assert(runtime_handle.has_value());
+
+    auto blocking = runtime_handle->spawnBlocking([]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         return 7;
-    }).join();
+    });
+    assert(blocking.has_value());
 
-    assert(value == 7);
+    auto value = blocking->join();
+
+    assert(value.has_value());
+    assert(*value == 7);
     co_return;
 }
 
@@ -73,15 +86,22 @@ int main()
         .computeSchedulerCount(1)
         .build();
 
-    const int value = runtime.blockOn(rootValue());
-    assert(value == 42);
+    const auto value = runtime.blockOn(rootValue());
+    assert(value.has_value());
+    assert(*value == 42);
 
     auto joined = runtime.spawn(computeTask(1, 1));
-    assert(joined.join() == 10);
+    assert(joined.has_value());
+    auto joined_value = joined->join();
+    assert(joined_value.has_value());
+    assert(*joined_value == 10);
 
-    runtime.blockOn(spawnDetachedTasks());
-    runtime.blockOn(waitForFinishedTasks(3));
-    runtime.blockOn(spawnBlockingFromHandle());
+    auto detached = runtime.blockOn(spawnDetachedTasks());
+    assert(detached.has_value());
+    auto finished = runtime.blockOn(waitForFinishedTasks(3));
+    assert(finished.has_value());
+    auto blocking = runtime.blockOn(spawnBlockingFromHandle());
+    assert(blocking.has_value());
 
     std::cout << "T20-RuntimeTaskApiDemo PASS\n";
     return 0;

@@ -8,6 +8,15 @@
 
 ## [Unreleased]
 
+### Changed
+- `Runtime::blockOn()`、`Runtime::spawn()`、`Runtime::spawnBlocking()` 与 `RuntimeHandle` 相关提交接口改为通过 `std::expected` 返回错误，不再在 runtime API 边界使用 `throw` / `try` / `catch` 传播失败。
+- 新增 `RuntimeError`、`TaskResultError` 与 `BlockingExecutorError` 错误对象，保留错误码并通过无分配的 `message()` 将 code 映射为可读错误原因。
+- `JoinHandle::wait()` / `join()` 与 `co_await Task<T>` 的结果消费路径改为返回 `std::expected`，重复消费、结果缺失、调度失败等错误通过返回值继续向外传播。
+
+### Tests
+- 新增 runtime expected 源码边界测试，锁定 `runtime`、`task`、`blocking_executor` 调用链不再引入 `throw`、`try`、`catch`、`@throws` 或 `std::runtime_error`。
+- 更新任务、spawn、join、await、blocking executor 相关测试与 include/import 示例，覆盖新的 expected 返回值 API 与 `message()` 错误原因输出。
+
 ## [v5.1.0] - 2026-06-07
 
 ### Changed
