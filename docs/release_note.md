@@ -74,3 +74,15 @@
   - 移除 `galay-kernel/common/queue_view.h` 本地实现，协议解析示例与测试改为直接包含 `galay-utils/cache/byte_queue_view.hpp`。
   - 移除 `galay-kernel` 本地 `RingBuffer` 实现，`galay-kernel/common/buffer.h` 通过 using 保留 `galay::kernel::RingBuffer` 入口并复用 `galay-utils/cache/ring_buffer.hpp`。
   - `galay-kernel` CMake 与 package config 声明依赖 `galay-utils >= 3.1.0`，优先使用已安装的 `galay::galay-utils` 目标，开发构建仍支持 `GALAY_UTILS_INCLUDE_DIR`。
+
+## v5.1.1 - 2026-06-09
+
+- 版本级别：小版本（patch）
+- Git 提交消息：`chore: 发布 v5.1.1 并同步版本元数据`
+- Git Tag：`v5.1.1`
+- 自述摘要：
+  - 将 `Runtime::blockOn()`、`Runtime::spawn()`、`Runtime::spawnBlocking()` 与 `RuntimeHandle` 提交接口改为通过 `std::expected` 返回错误，runtime API 边界不再使用 `throw` / `try` / `catch` 传播失败。
+  - 新增 `RuntimeError`、`TaskResultError` 与 `BlockingExecutorError`，通过无分配的 `message()` 将错误码映射为可读错误原因。
+  - `JoinHandle::wait()` / `join()` 与 `co_await Task<T>` 结果消费路径改为返回 `std::expected`，重复消费、结果缺失、调度失败等错误继续通过返回值传播。
+  - 新增 runtime expected 源码边界测试，并更新任务、spawn、join、await、blocking executor 相关测试与 include/import 示例。
+  - 将 CMake 与 Bazel 版本元数据提升到 `5.1.1`，与本次 patch tag 对齐。

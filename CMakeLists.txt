@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(galay-kernel VERSION 5.1.0 LANGUAGES CXX)
+project(galay-kernel VERSION 5.1.1 LANGUAGES CXX)
 
 # 设置C++标准
 set(CMAKE_CXX_STANDARD 23)
