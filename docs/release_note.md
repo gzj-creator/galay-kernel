@@ -75,6 +75,15 @@
   - 移除 `galay-kernel` 本地 `RingBuffer` 实现，`galay-kernel/common/buffer.h` 通过 using 保留 `galay::kernel::RingBuffer` 入口并复用 `galay-utils/cache/ring_buffer.hpp`。
   - `galay-kernel` CMake 与 package config 声明依赖 `galay-utils >= 3.1.0`，优先使用已安装的 `galay::galay-utils` 目标，开发构建仍支持 `GALAY_UTILS_INCLUDE_DIR`。
 
+## v5.2.0 - 2026-06-11
+
+- 版本级别：中版本（minor）
+- Git 提交消息：`chore: 发布 v5.2.0 并提升 galay-utils 依赖`
+- Git Tag：`v5.2.0`
+- 自述摘要：
+  - 将 `galay-utils` 最低依赖版本从 `3.1.0` 提升到 `3.2.0`，同步更新 CMake package config 模板中的版本约束与错误提示。
+  - 将 CMake 与 Bazel 版本元数据提升到 `5.2.0`，与本次 minor tag 对齐。
+
 ## v5.1.1 - 2026-06-09
 
 - 版本级别：小版本（patch）

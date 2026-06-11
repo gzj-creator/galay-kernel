@@ -39,11 +39,11 @@ if(NOT TARGET concurrentqueue::concurrentqueue)
     )
 endif()
 
-set(GALAY_KERNEL_MIN_GALAY_UTILS_VERSION "3.1.0")
+set(GALAY_KERNEL_MIN_GALAY_UTILS_VERSION "3.2.0")
 find_package(galay-utils ${GALAY_KERNEL_MIN_GALAY_UTILS_VERSION} CONFIG QUIET)
 
 set(GALAY_UTILS_INCLUDE_DIR "" CACHE PATH
-    "Directory containing galay-utils/cache/bytes.hpp from galay-utils >= 3.1.0")
+    "Directory containing galay-utils/cache/bytes.hpp from galay-utils >= 3.2.0")
 if(NOT TARGET galay::galay-utils AND NOT GALAY_UTILS_INCLUDE_DIR)
     unset(GALAY_UTILS_INCLUDE_DIR CACHE)
     find_path(GALAY_UTILS_INCLUDE_DIR
@@ -58,7 +58,7 @@ endif()
 
 if(NOT TARGET galay::galay-utils AND NOT GALAY_UTILS_INCLUDE_DIR)
     message(FATAL_ERROR
-        "galay-kernel requires galay-utils >= 3.1.0. Install galay-utils "
+        "galay-kernel requires galay-utils >= 3.2.0. Install galay-utils "
         "or set GALAY_UTILS_INCLUDE_DIR to the include prefix containing "
         "galay-utils/cache/bytes.hpp")
 endif()

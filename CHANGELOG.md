@@ -8,6 +8,14 @@
 
 ## [Unreleased]
 
+## [v5.2.0] - 2026-06-11
+
+### Changed
+- 将 `galay-utils` 最低依赖版本从 `3.1.0` 提升到 `3.2.0`，同步更新 CMake package config 模板中的版本约束与错误提示。
+
+### Release
+- 将 CMake 与 Bazel 版本元数据提升到 `v5.2.0`，与本次 minor tag 对齐。
+
 ## [v5.1.1] - 2026-06-09
 
 ### Changed

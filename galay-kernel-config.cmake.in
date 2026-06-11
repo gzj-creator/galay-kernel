@@ -4,7 +4,7 @@ include(CMakeFindDependencyMacro)
 
 set(GALAY_KERNEL_VERSION "@PROJECT_VERSION@")
 set(GALAY_KERNEL_BACKEND "@GALAY_KERNEL_BACKEND@")
-set(GALAY_KERNEL_MIN_GALAY_UTILS_VERSION "3.1.0")
+set(GALAY_KERNEL_MIN_GALAY_UTILS_VERSION "3.2.0")
 
 # 设置包含目录
 set_and_check(GALAY_KERNEL_INCLUDE_DIR "@PACKAGE_CMAKE_INSTALL_PREFIX@/include/galay-kernel")
@@ -57,7 +57,7 @@ endif()
 
 if(NOT TARGET galay::galay-utils AND NOT GALAY_UTILS_INCLUDE_DIR)
     message(FATAL_ERROR
-        "galay-kernel requires galay-utils >= 3.1.0. Install galay-utils "
+        "galay-kernel requires galay-utils >= 3.2.0. Install galay-utils "
         "or set GALAY_UTILS_INCLUDE_DIR to the include prefix containing "
         "galay-utils/cache/bytes.hpp")
 endif()
